@@ -497,8 +497,8 @@ std::string sdrPlayPanelAdvice(bool resolved, float version, const std::string& 
 
 namespace {
 std::mutex& heldSerialsMutex() {
-    static std::mutex m;
-    return m;
+    static auto* const m = new std::mutex();   // leaked on purpose, like the table it guards
+    return *m;
 }
 // (API table, lower-cased serial) -> the object that selected it. Keyed by table
 // so a test's fake is its own world.
@@ -554,8 +554,10 @@ bool sessionAcquire(const abi::Api& api, std::string& error, std::string* servic
     std::unique_lock<std::mutex> lk(api.sessionMutex);
     // A LOST SESSION IS NOT HANDED OUT AGAIN - see markSessionLost. Checked
     // before the count, because the count is exactly what keeps the stale
-    // session "open": an orphaned reference is never released.
-    if (api.sessionLost) {
+    // session "open": an orphaned reference is never released. THE LATCH, AGAIN, AFTER THE MUTEX: an open that was already waiting on it
+    // when a hung Close was abandoned gets the mutex when that Close returns late, and the bool mirror may never have been set
+    // (markSessionLost only try-locks) - review of 3813659b, S1.
+    if (api.sessionLost || api.sessionLostFlag.load(std::memory_order_acquire)) {
         error = sdrPlaySessionLostSentence();
         return false;
     }
@@ -1017,9 +1019,9 @@ const char* sdrPlayStreamStalledSentence() {
                   "the sentence below quotes five seconds");
     // NotInitialised is "Device has not been selected" (API specification 3.15, sections 3.15 and 3.16), so START may fail where a fresh
     // pick works; the order is what costs the user least. Whether the restart of FoxSDR can be skipped after a service restart is UNVERIFIED.
-    return "the SDRplay service stopped delivering samples (nothing for 5 s) - press START to "
-           "try again; if that fails pick the radio again; if it still fails restart the SDRplay "
-           "API service, then FoxSDR";
+    // Kept under ~150 characters so the whole advice survives a prefixed log line (DiagLog::kLineBytes is 192).
+    return "the SDRplay service stopped delivering (nothing for 5 s) - press START; if that fails pick "
+           "the radio again; then restart the SDRplay API service and FoxSDR";
 }
 
 const char* sdrPlaySessionLostSentence() {
@@ -1087,6 +1089,8 @@ SdrPlayAfterRestart sdrPlayApplyServiceRestart(const abi::Api& api, bool service
             lost = api.sessionLost;
             inFlight = api.controlsInFlight;
         }
+        // the lock-free latch is the reliable one (S1): the bool mirror is not set when markSessionLost could not take the mutex
+        if (api.sessionLostFlag.load(std::memory_order_acquire)) { lost = true; known = true; }
     }
     const SdrPlayAfterRestart what =
         sdrPlayAfterServiceRestart(serviceRunning, known, sessions, lost, inFlight);
@@ -2282,8 +2286,14 @@ bool SdrPlaySource::boundedVendorCallLocked(const char* what, std::function<abi:
                                             abi::ErrT& result) {
     auto done = std::make_shared<std::promise<abi::ErrT>>();
     std::future<abi::ErrT> fut = done->get_future();
+    const auto t0 = std::chrono::steady_clock::now();
     std::thread worker([done, call = std::move(call)]() mutable { done->set_value(call()); });
-    if (fut.wait_for(kControlWait) != std::future_status::ready) {
+    const bool answered = fut.wait_for(kControlWait) == std::future_status::ready;
+    // THE MEASURED DURATION, every time: the 1 s bound is a judgement (a healthy Update once took 1.28 s, 0.99.46) and the field log answers it.
+    core::diagLogf("source: SDRplay %s %s after %lld ms (bound %lld ms)", what, answered ? "answered" : "did not answer",
+                   static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()),
+                   static_cast<long long>(kControlWait.count()));
+    if (!answered) {
         worker.detach();
         controlAbandoned_ = true;
         markSessionLost(api(), what);   // hard: a thread of ours is parked in the DLL
@@ -2653,7 +2663,7 @@ bool SdrPlaySource::start() {
     // the sentence it gives is the one that says what to do.
     // A STALL THE LAST STOP DID NOT END CLEANLY (its Uninit answered Fail): the service still holds the old stream, and Init
     // would run with every control refused and the stall watchdog off (review of 885ebd7e, item 3). A clean Uninit lowered the flag.
-    if (streamStalled_.load(std::memory_order_acquire)) {
+    if (streamStalled_.load(std::memory_order_acquire) && !vendorUnreachableLocked() && !sessionIsLost(api())) {
         setError("the SDRplay stream stalled and could not be stopped cleanly - pick the radio again; "
                  "if that fails, restart the SDRplay API service, then FoxSDR");
         core::diagWarnf("source: SDRplay start refused - the stalled stream was not stopped cleanly; pick the radio again");
@@ -3602,6 +3612,11 @@ std::string SdrPlaySource::antenna() const {
 
 bool SdrPlaySource::reselectTunerLocked(abi::TunerSelectT tuner) {
     const abi::Api& a = api();
+    // A STALLED OPEN makes no unbounded vendor call (review of 3813659b, S3): the re-select is a ReleaseDevice and a SelectDevice, so it is refused.
+    if (stalledThisOpen_.load(std::memory_order_acquire)) {
+        setError("the SDRplay stream stalled - pick the radio again before changing the tuner");
+        return false;
+    }
     // Everything we have programmed lives in memory the service owns and will
     // free at ReleaseDevice, so it has to be COPIED OUT before the release and
     // written back after the new select - the reference does exactly this
@@ -4100,8 +4115,8 @@ void SdrPlaySource::checkForStallFromRead() {
     const std::int64_t last = link_->lastCallbackNs.load(std::memory_order_relaxed);
     const std::int64_t since = (last > start) ? last : start;
     if (now - since < limit) { return; }
+    stalledThisOpen_.store(true, std::memory_order_release);   // before streamStalled_, so a close never sees one without the other
     if (streamStalled_.exchange(true, std::memory_order_acq_rel)) { return; }
-    stalledThisOpen_.store(true, std::memory_order_release);
 
     // (Until 0.99.112 a stall was treated like a service that answered 14: the
     // session was latched and nothing of ours entered the vendor DLL again - the

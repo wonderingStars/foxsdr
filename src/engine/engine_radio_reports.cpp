@@ -173,6 +173,7 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     j.args = args;
     j.openedAtS = clockS();
     j.lastMinuteS = j.openedAtS;
+    (*radioRun_)[slot] = RadioRun{};   // the previous radio's running seconds are not this one's (review of 3813659b, S4)
     j.readAtOpen = rx().pipeline_.sourceSamplesRead();
     radioOpenedThisSession_ = true;
     rr::registerSource(rx().device_, rid);   // the drivers' own events (a refused setting, a radio that went away) find their radio through this
@@ -449,6 +450,7 @@ void Engine::radioReportsPass() {
             j.args = rx().deviceArgs_;
             j.openedAtS = now;
             j.lastMinuteS = now;
+            (*radioRun_)[s] = RadioRun{};
             j.readAtOpen = rx().pipeline_.sourceSamplesRead();
             radioOpenedThisSession_ = true;
             rr::registerSource(rx().device_, rid);

@@ -287,6 +287,7 @@ public:
     std::atomic<bool> hangInClose{false};
     std::atomic<bool> releaseCloseHang{false};
     std::atomic<bool> insideClose{false};
+    std::atomic<bool> leftClose{false};
     std::atomic<bool> hangInReleaseDevice{false};
     std::atomic<bool> releaseReleaseDeviceHang{false};
     std::atomic<bool> insideReleaseDevice{false};
@@ -690,6 +691,7 @@ private:
         if (f->hangInClose.load()) {
             f->insideClose.store(true);
             while (!f->releaseCloseHang.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+            f->leftClose.store(true);
         }
         return abi::Success;
     }

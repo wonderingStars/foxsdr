@@ -323,7 +323,8 @@ void checkOpenRefusedAsLost(FakeSdrPlayApi& fake) {
     SdrPlaySource again;
     again.setApiForTest(&fake.table);
     bool opened = true;
-    CHECK(finishesWithin([&] { opened = again.open(""); }, 2000, [] {}));   // refused, never queued behind a parked worker
+    // a regressed latch pre-check would park this open on the session mutex a hung Close holds: free the Close so the test FAILS instead of hanging
+    CHECK(finishesWithin([&] { opened = again.open(""); }, 2000, [&] { fake.releaseCloseHang.store(true); }));   // refused, never queued behind a parked worker
     CHECK(!opened);
     CHECK(std::string(again.lastError()) == std::string(cascade::source::sdrPlaySessionLostSentence()));
 }
@@ -389,6 +390,70 @@ void testAStallThenAHungCloseIsBoundedAndTheNextOpenIsRefused() {
     CHECK(finishesWithin([&] { listed = cascade::source::enumerateSdrPlayWith(fake.table).size(); }, 2000, [] {}));
     CHECK(listed == 0);
     fake.releaseCloseHang.store(true);
+    CHECK(waitFor([&] { return fake.leftClose.load(); }, 3000));   // the abandoned worker is gone before the fake is
+    waitFor([&] { return false; }, 50);
+}
+
+// S1 (review of 3813659b): an open that is ALREADY WAITING on the session mutex when a hung Close is abandoned gets the mutex when that Close
+// returns late. The bool mirror may never have been set (markSessionLost only try-locks), so the latch must be re-checked after the mutex: the
+// waiting open is refused as lost with no vendor call, and a service restart is not answered "reopen in this process".
+void testAnOpenWaitingBehindAHungCloseIsRefusedWhenItReturnsLate() {
+    FakeSdrPlayApi fake;
+    cascade::core::DiagLog::instance().resetForTest();
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource a, waiter;
+    a.setApiForTest(&fake.table);
+    waiter.setApiForTest(&fake.table);
+    CHECK(a.open(""));
+    a.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    CHECK(a.start());
+    {
+        Reader reader(a);
+        CHECK(waitFor([&] { return a.faulted(); }, 3000));
+        reader.stopReading();
+    }
+    a.stop();
+    fake.hangInClose.store(true);
+    std::thread closer([&] { a.closeDevice(); });
+    CHECK(waitFor([&] { return fake.insideClose.load(); }, 2000));   // the Close worker now holds the session mutex
+    const int opensBefore = fake.openCount;
+    const int selectsBefore = fake.selectCount;
+    bool opened = true;
+    std::thread opener([&] { opened = waiter.open(""); });          // passes the (still unset) latch pre-check and waits on the mutex
+    closer.join();                                                   // the 1 s bound: abandoned, latch set
+    CHECK(fake.table.sessionLostFlag.load());
+    fake.releaseCloseHang.store(true);                               // the hung Close returns late and frees the mutex
+    CHECK(waitFor([&] { return fake.leftClose.load(); }, 3000));
+    opener.join();
+    CHECK(!opened);
+    CHECK(std::string(waiter.lastError()) == std::string(cascade::source::sdrPlaySessionLostSentence()));
+    CHECK(fake.openCount == opensBefore);                            // no vendor call at all
+    CHECK(fake.selectCount == selectsBefore);
+    CHECK(cascade::source::sdrPlayApplyServiceRestart(fake.table, true) == cascade::source::SdrPlayAfterRestart::RestartFoxSdr);
+}
+
+// S3: a stalled RSPduo is not re-selected (ReleaseDevice + SelectDevice) while stopped: refused, no vendor call.
+void testAStalledRspDuoRefusesATunerChange() {
+    FakeSdrPlayApi fake;
+    cascade::core::DiagLog::instance().resetForTest();
+    fake.enforceOrdering = true;
+    fake.addRspDuo("2105000001");
+    SdrPlaySource a;
+    a.setApiForTest(&fake.table);
+    CHECK(a.open(""));
+    a.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    CHECK(a.start());
+    {
+        Reader reader(a);
+        CHECK(waitFor([&] { return a.faulted(); }, 3000));
+        reader.stopReading();
+    }
+    a.stop();                                   // clean Uninit: streamStalled_ is lowered, stalledThisOpen_ is not
+    const int releasesBefore = fake.releaseCount;
+    CHECK(!a.setAntenna("Tuner 2"));
+    CHECK(fake.releaseCount == releasesBefore);
+    CHECK(std::string(a.lastError()).find("pick the radio again") != std::string::npos);
+    a.closeDevice();
 }
 
 // ITEM 3: the stall Uninit was REFUSED (Fail): START must not run Init on a stream the service still holds. (A clean Uninit lets START run:
@@ -516,5 +581,7 @@ int main() {
     testAStallThenAHungReleaseDeviceIsBounded();
     testAStallThenAHungUninitIsBounded();
     testAStallThenAHungCloseIsBoundedAndTheNextOpenIsRefused();
+    testAnOpenWaitingBehindAHungCloseIsRefusedWhenItReturnsLate();
+    testAStalledRspDuoRefusesATunerChange();
     return testSummary("test_sdrplay_errpath");
 }
