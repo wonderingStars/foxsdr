@@ -21,7 +21,9 @@ state decodersRunning >= 1
 +1 click "< FITTED"
 +5 state pages contains "Fitted modules"
 +1 click "406 MHz beacon"#1
-+10 state pages == "pages: Fitted modules"
+# epirb-decoder 1.1.0 (foxsdr-plugins-dev 0d940a9, 2026-11-11: "puts beacons that report a position on the map") is also a track source, so START opens a map page, "406 MHz Beacons map", beside the instrument page
+# (openWindowsFor, kit_publish.cpp: a TRACK_SOURCE cap opens a map page); toggling the instrument's row closes the instrument and leaves the map.
++10 state pages == "pages: 406 MHz Beacons map Fitted modules"
 +1 click "406 MHz beacon"#1
 +10 state pages contains "406 MHz beacon"
 +20 state kit.instruments >= 1

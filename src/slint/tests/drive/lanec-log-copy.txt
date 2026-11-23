@@ -5,7 +5,9 @@
 +1 click "START"
 +60 state decodersRunning >= 1
 +400 state list.decoderLines.details contains FOXSDR
-+1 click "Decoder output"
+# cw-decoder 1.3.0 (foxsdr-plugins-dev c1cdba1, 2026-11-12) has a panel (the Skimmer view), so START no longer opens the Decoder output page (openWindowsFor, kit_publish.cpp: only a decoder with no panel, image or track
+# source gets it with its preset); the "+ Window" tab opens it, as plugin-cw-decoder.txt does
++1 click "+ Window"
 +10 expect "Copy" enabled equals "true"
 +1 state lanec.logcopies == 0
 +1 click "Copy"

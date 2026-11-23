@@ -14,7 +14,9 @@ state pages contains "Morse (CW)"
 +5 expect "Keep running" checked equals "false"
 +1 click "Keep running"
 +5 expect "Keep running" checked equals "true"
-+1 state pages contains "Decoder output"
+# cw-decoder 1.3.0 (foxsdr-plugins-dev c1cdba1, 2026-11-12: the CW Skimmer folded in as a second view) has a panel, "Morse (CW) and Skimmer": openWindowsFor (kit_publish.cpp, 987ebf5f) opens the Decoder output page with a
+# preset only for a decoder with no panel, image or track source, so START opens the plugin's own panel page and the Decoder output page is opened below by the "+ Window" tab
++1 state pages contains "Morse (CW) and Skimmer"
 +1 click "< FITTED"
 +3 state pages contains "Fitted modules"
 +1 click "+ Window"

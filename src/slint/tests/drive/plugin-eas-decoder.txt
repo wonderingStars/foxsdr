@@ -13,7 +13,9 @@ state pages contains "EAS / SAME"
 +5 expect "Keep running" checked equals "false"
 +1 click "Keep running"
 +5 expect "Keep running" checked equals "true"
-+1 state pages contains "Decoder output"
+# eas-decoder 1.1.0 (foxsdr-plugins-dev c149333, 2026-11-11) has a settings panel, "EAS settings": openWindowsFor (kit_publish.cpp, 987ebf5f) opens the Decoder output page with a preset only for a decoder with no panel,
+# image or track source, so START opens the plugin's own panel page and the Decoder output page is opened below by the "+ Window" tab
++1 state pages contains "EAS settings"
 +1 click "< FITTED"
 +3 state pages contains "Fitted modules"
 +1 click "+ Window"

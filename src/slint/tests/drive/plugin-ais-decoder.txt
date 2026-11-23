@@ -19,6 +19,8 @@ state kit.mapPages >= 1
 +1 click "< FITTED"
 +5 state pages contains "Fitted modules"
 +1 click "AIS map"#1
-+10 state pages == "pages: Fitted modules"
+# ais-decoder 1.1.1 (caps 0x307a, which has the PANEL bit the 1.0.2 of 2026-11-09 did not) has a window of its own, "AIS ships", which START opens beside the map page (openWindowsFor, kit_publish.cpp: a PANEL cap opens a panel page): toggling the map row
+# closes the map page and leaves the ships page.
++10 state pages == "pages: AIS ships Fitted modules"
 +1 click "AIS map"#1
 +10 state pages contains "AIS map"
