@@ -340,6 +340,18 @@ int main() {
         return n;
     };
 
+    // The text of the (first) ringdrop report on disk, or empty.
+    auto ringdropReportText = [&] {
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(reports, ec)) {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("issue-", 0) != 0 || name.size() < 4 || name.compare(name.size() - 4, 4, ".txt") != 0) { continue; }
+            std::string text = readFile(e.path());
+            if (text.find("reason: issue: ringdrop - ") != std::string::npos) { return text; }
+        }
+        return std::string();
+    };
+
     th::TestWindow app;
     cascade::core::Pipeline& p = Access::pipeline(app);
     auto owned = std::make_unique<BudgetSource>();
@@ -449,6 +461,12 @@ int main() {
         // close, not by the health poll, which now only counts.
         CHECK(cascade::core::ringDropWorthAReport(stalledDropped, read));
         CHECK(ringdropReports() == 1);
+        // THE REPORT CARRIES ITS OWN MINUTE (2026-11-23): the filed report keeps the log tail as it was when it was written, and it
+        // used to be written before the lines above, so 259 of 262 field reports lacked the high-water line that describes them.
+        const std::string filed = ringdropReportText();
+        CHECK(filed.find("dsp: " + std::to_string(stalledDropped) + " " + kNeedle) != std::string::npos);
+        CHECK(filed.find(kRingNeedle) != std::string::npos);
+        CHECK(filed.find("longest DSP block ") != std::string::npos);
     }
 
     // --- 3. THE NEXT CLEAN MINUTE IS SILENT AGAIN ---------------------------------------
@@ -509,7 +527,9 @@ int main() {
         const std::size_t audio = srcText.find("    pollAudioHealth();");
         const std::size_t dsp = srcText.find("    pollDspMinute();");
         CHECK(audio != std::string::npos);
-        CHECK(dsp != std::string::npos && dsp > audio && dsp - audio < 200);
+        // The DSP minute FIRST (2026-11-23): both minutes close in one pass, and a cause they share is described once, by the
+        // lines that name it, before the audiolead report keeps the log's tail.
+        CHECK(dsp != std::string::npos && audio != std::string::npos && dsp < audio && audio - dsp < 600);
         // ...and the poll closes a minute when sixty seconds have passed on its own mark.
         const std::size_t poll = srcText.find("void Engine::pollDspMinute()");
         const std::size_t end = poll == std::string::npos ? poll : srcText.find("\n}\n", poll);
@@ -543,6 +563,9 @@ int main() {
             const std::size_t floor = body.find("if (cascade::core::ringDropWorthAReport(dropped, read))");
             const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
             CHECK(floor != std::string::npos && file != std::string::npos && floor < file);
+            // ...and AFTER the line that describes the minute (the order is also proved by section 2's read of the filed report).
+            const std::size_t described = body.find("dsp: ring high water");
+            CHECK(described != std::string::npos && described < file);
         }
         const std::string health = stripComments(
             readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "core" / "health_events.cpp"));

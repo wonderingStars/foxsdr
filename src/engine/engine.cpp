@@ -1071,15 +1071,6 @@ void Engine::closeDspMinute() {
     cascade::core::diagLogf("dsp: %llu samples dropped between the source and the DSP in the last minute (%s)%s",
                             static_cast<unsigned long long>(dropped),
                             share.empty() ? "share unknown" : share.c_str(), radioTag.c_str());
-    // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
-    // ringDropWorthAReport): a minute that lost a hearable share files the
-    // `ringdrop` issue report, once a session; a start-of-stream blip does
-    // not. The ledger still counts every drop (RecoveryWatch) - a count is
-    // not a row. (Master 0.99.102, bde914f6: AppWindow::closeDspMinute there; the
-    // pass thread here, a healthy thread, so the report may lock.)
-    if (cascade::core::ringDropWorthAReport(dropped, read)) {
-        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
-    }
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the
     // DSP thread. A long block is a stall on the DSP side; a short one beside
@@ -1093,6 +1084,18 @@ void Engine::closeDspMinute() {
                             static_cast<unsigned long long>(capacity),
                             static_cast<unsigned long long>(cut),
                             static_cast<unsigned long long>(blockNs / 1000000u), radioTag.c_str());
+    // THE FEED ROW, behind the severity floor (core/diag_report.hpp,
+    // ringDropWorthAReport): a minute that lost a hearable share files the
+    // `ringdrop` issue report, once a session; a start-of-stream blip does
+    // not. The ledger still counts every drop (RecoveryWatch) - a count is
+    // not a row. (Master 0.99.102, bde914f6: AppWindow::closeDspMinute there; the
+    // pass thread here, a healthy thread, so the report may lock.)
+    // FILED LAST (2026-11-23, the ringdrop diagnosis): the report keeps the log's tail as it is at the moment it is written, and
+    // it used to be written BEFORE the lines above, so 259 of 262 field reports lacked the very lines that describe their own
+    // minute (high water, cut writes, longest block). Everything this minute has to say is logged first.
+    if (cascade::core::ringDropWorthAReport(dropped, read)) {
+        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+    }
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -11514,10 +11517,12 @@ void Engine::pumpAudio() {
     // The diagnostics context a crash or a hang report prints, and the diagnostics bundle carries (window port group 14).
     pumpDiagContext();
     pollAudioOpen();
-    pollAudioHealth();
-    // ...and the samples the pipeline's own ring could not hold, once a minute
-    // (0.99.86) - after the sink, but not gated on it.
+    // THE DSP MINUTE BEFORE THE AUDIO MINUTE (2026-11-23): both close in the same pass, and a cause they share (a thread that did
+    // not get the processor) is then described once, by the lines that name it, BEFORE the audiolead report is filed - which
+    // keeps the log's tail as it is at that moment. The samples the pipeline's own ring could not hold, once a minute (0.99.86),
+    // are not gated on the sink.
     pollDspMinute();
+    pollAudioHealth();
     // The usage record's counts that need a look once a pass (the output's first play, a radio's first samples, the recoveries
     // nothing else may count), and the evidence of how the previous session ended.
     healthPoll();

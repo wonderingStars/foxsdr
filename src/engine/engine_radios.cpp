@@ -342,8 +342,8 @@ void Engine::pumpExtraReceivers() {
         pollStereoSystem();
         endTakesOnFault();
         pollAudioOpen();
+        pollDspMinute();   // (before the audio minute: a cause they share is described first; Engine::pumpAudio)
         pollAudioHealth();
-        pollDspMinute();
         pollSavedRadioRetry();   // (a saved device that was only busy is tried again, as the first radio's is: engine stage 5)
         // A radio whose open failed holds nothing: the ledger is told by the key going (the radio sits on the generator, as the first radio does).
         if (rx().device_ == nullptr && !rx().deviceOpenPending_) { rx().claimedKey_.clear(); }
