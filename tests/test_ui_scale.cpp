@@ -13,8 +13,13 @@
 // might pass.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 #include "gui/theme.hpp"
 #include "gui/ui_scale.hpp"
@@ -484,6 +489,23 @@ void testFirstLaunchWindowGeometryWorkAreaWins() {
     const WindowGeometry noArea = firstLaunchWindowGeometry(0, 0, 0, 0, 0, 0, desiredW, desiredH, minW, minH);
     CHECK(noArea.w == desiredW);
     CHECK(noArea.h == desiredH);
+
+    // USER BUG C: the same clamp now runs at scale exactly 1.0 (it was skipped there). 1280 x 720 against the work area of a 1366 x 768 screen (728 high: fits) and of a
+    // 1280 x 720 screen (about 680 high: the window is cut to the work area, not left 40 pixels past the bottom).
+    const WindowGeometry s1a = firstLaunchWindowGeometry(80, 60, 0, 0, 1366, 728, 1280, 720, 624, 400);
+    CHECK(s1a.w == 1280 && s1a.h == 720);
+    const WindowGeometry s1b = firstLaunchWindowGeometry(0, 40, 0, 0, 1280, 680, 1280, 720, 624, 400);
+    CHECK(s1b.w == 1280 && s1b.h == 680 && s1b.y == 0);
+    // ...and the call site in AppWindow::run no longer has the `factor() != 1.0f` guard that skipped it
+    {
+        const std::filesystem::path src = std::filesystem::path(__FILE__).parent_path().parent_path() / "src" / "gui" / "app_window.cpp";
+        std::ifstream in(src, std::ios::binary);
+        CHECK(in.good());
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        CHECK(text.find("firstLaunchWindowGeometry(") != std::string::npos);
+        CHECK(text.find("if (cascade::gui::uiscale::factor() != 1.0f) {\n        int areaX") == std::string::npos);
+        CHECK(text.find("if (cascade::gui::uiscale::factor() != 1.0f) {\r\n        int areaX") == std::string::npos);
+    }
 }
 
 }  // namespace

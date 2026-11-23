@@ -98,6 +98,40 @@ WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, cons
     return p;
 }
 
+StartFit fitStartWindow(float wantW, float wantH, float minW, float minH, float scale, const WorkRect& work, int curX, int curY) {
+    const double sf = static_cast<double>(std::clamp(scale, kMinScale, kMaxScale));
+    const auto phys = [sf](float logical) { return static_cast<std::uint32_t>(std::max(1.0, std::ceil(static_cast<double>(logical) * sf - 1e-3))); };   // (the 1e-3: a logical size made from a physical one comes back whole)
+    StartFit f;
+    f.minW = minW;
+    f.minH = minH;
+    f.x = curX;
+    f.y = curY;
+    if (work.right <= work.left || work.bottom <= work.top) {   // no work area known: the wanted size, left where it is
+        f.w = phys(wantW);
+        f.h = phys(wantH);
+        return f;
+    }
+    const std::uint32_t areaW = static_cast<std::uint32_t>(work.right - work.left);
+    const std::uint32_t areaH = static_cast<std::uint32_t>(work.bottom - work.top);
+    const WindowFit fit = fitWindowToScreen(phys(wantW), phys(wantH), static_cast<float>(sf), minW, minH, static_cast<int>(areaW), static_cast<int>(areaH));
+    f.maximise = areaW < phys(minW) || areaH < phys(minH);
+    if (f.maximise) {   // the screen cannot hold the smallest window: fill it, and the minimum for this session is what the screen has
+        f.minW = std::min(minW, static_cast<float>(static_cast<double>(areaW) / sf));
+        f.minH = std::min(minH, static_cast<float>(static_cast<double>(areaH) / sf));
+        f.w = areaW;
+        f.h = areaH;
+        f.x = work.left;
+        f.y = work.top;
+        return f;
+    }
+    f.w = fit.w;
+    f.h = fit.h;
+    const WindowPlace at = placeInWorkArea(curX, curY, f.w, f.h, work);
+    f.x = at.x;
+    f.y = at.y;
+    return f;
+}
+
 void EdgeDrag::begin(int edge, float px, float py, std::uint32_t w, std::uint32_t h) {
     active_ = true; edge_ = edge; px_ = px; py_ = py; w_ = w; h_ = h;
 }

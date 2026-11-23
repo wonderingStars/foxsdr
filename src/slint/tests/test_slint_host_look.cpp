@@ -328,6 +328,40 @@ void windowSizeAtEverySize(int screenW, int screenH) {   // the work area of the
         f = fitWindowToScreen(1300, 780, 1.0f, 1024.0f, 640.0f, 1920, 1040);
         CHECK(f.w == 1300 && f.h == 780);    // a window already inside both is left alone
     }
+    // USER BUG C: the window at start, fitted to the work area of the monitor it opens on (taskbar already out of the work area; physical pixels)
+    {
+        const auto fit = [](float scale, int w, int h, int cx, int cy) { return fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, scale, WorkRect{0, 0, w, h}, cx, cy); };
+        StartFit s = fit(1.0f, 1366, 728, 500, 400);   // 1366 x 768 laptop, 100 %
+        CHECK(s.w == 1366 && s.h == 728 && s.x == 0 && s.y == 0 && !s.maximise && s.minW == 1024.0f && s.minH == 640.0f);
+        s = fit(1.0f, 1280, 680, 300, 300);            // 1280 x 720 screen, 100 %
+        CHECK(s.w == 1280 && s.h == 680 && s.x == 0 && s.y == 0 && !s.maximise);
+        s = fit(1.25f, 1920, 1040, 400, 100);          // 1920 x 1080 at 125 % (1536 x 864 logical): 2000 x 1125 was asked of a 1920 x 1040 area
+        CHECK(s.w == 1920 && s.h == 1040 && s.x == 0 && s.y == 0 && !s.maximise);
+        s = fit(1.5f, 1920, 1040, 10, 10);             // 1920 x 1080 at 150 % (1280 x 720 logical): the smallest window, 1536 x 960, still fits
+        CHECK(s.w == 1920 && s.h == 1040 && !s.maximise && s.minW == 1024.0f && s.minH == 640.0f);
+        s = fit(1.0f, 1024, 560, 0, 0);                // 1024 x 600 screen: 560 high is under the 640 minimum - maximised, the minimum lowered to what the screen has
+        CHECK(s.maximise && s.w == 1024 && s.h == 560 && s.x == 0 && s.y == 0 && s.minW == 1024.0f && s.minH == 560.0f);
+        s = fit(1.25f, 1366, 728, 0, 0);               // 1366 x 768 at 125 %: the work area is 1093 x 582 logical, under the 640 minimum height: maximised, minimum 1024 x 582.4
+        CHECK(s.maximise && s.w == 1366 && s.h == 728 && s.minW == 1024.0f && s.minH > 582.3f && s.minH < 582.5f);
+        s = fit(1.0f, 5120, 1392, 1360, 270);          // the 5120 x 1440 desk: 1600 x 900 fits and stays where it is
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 1360 && s.y == 270 && !s.maximise);
+        s = fit(1.0f, 5120, 1392, 4000, 800);          // opened near the right and bottom edges: moved in, never out of the area
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 3520 && s.y == 492);
+        s = fit(2.5f, 5120, 1392, 100, 100);           // 250 %: 4000 x 2250 asked; the area is 1392 high, under the 1600 minimum: maximised, minimum 556.8 logical high
+        CHECK(s.maximise && s.w == 5120 && s.h == 1392 && s.minW == 1024.0f && s.minH > 556.7f && s.minH < 556.9f);
+        s = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{1920, 0, 3840, 1040}, 100, 100);   // a second monitor: placed inside ITS area
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 1920 && s.y == 100);
+        s = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{}, 77, 88);   // no work area known: the wanted size, left where it is
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 77 && s.y == 88 && !s.maximise && s.minW == 1024.0f);
+        for (int w : {1024, 1280, 1366, 1536, 1920, 2560, 5120}) {   // whatever the area: the window is inside it
+            for (int h : {560, 680, 728, 864, 1040, 1392}) {
+                for (float sc : {1.0f, 1.25f, 1.5f, 2.0f, 2.5f}) {
+                    s = fit(sc, w, h, 3000, 3000);
+                    CHECK(s.x >= 0 && s.y >= 0 && s.x + static_cast<int>(s.w) <= w && s.y + static_cast<int>(s.h) <= h);
+                }
+            }
+        }
+    }
 }
 
 // MAP FOCUS: the torn-off page windows follow the main window's rule (look_logic.hpp tornResizeAt / tornMoveAt): the size and the place are a function of the press and of the pointer's

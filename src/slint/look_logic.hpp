@@ -62,6 +62,13 @@ struct WorkRect { int left = 0, top = 0, right = 0, bottom = 0; };   // physical
 struct WindowPlace { int x = 0, y = 0; };
 WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, const WorkRect& r);
 
+// THE WINDOW AT START (user bug C, 2026-11-23). The window opens at the wanted LOGICAL size (`wantW` x `wantH`, 1600 x 900) times `scale`, but never larger than the work area `work` of the
+// monitor it opens on (physical pixels, taskbar already excluded), and sits fully inside that work area (`curX`, `curY` is where the system put it; moved the least that fits). Where the work
+// area is smaller than the smallest window (`minW` x `minH` logical, at `scale`) the window is MAXIMISED (it fills the work area) and `minW` / `minH` come back lowered to the work area's logical
+// size, the minimum for this session. No work area known (an empty `work`): the wanted size, the place left alone, nothing maximised, the minimum unchanged.
+struct StartFit { std::uint32_t w = 0, h = 0; int x = 0, y = 0; bool maximise = false; float minW = 0.0f, minH = 0.0f; };
+StartFit fitStartWindow(float wantW, float wantH, float minW, float minH, float scale, const WorkRect& work, int curX, int curY);
+
 // THE DRAG OF A WINDOW EDGE (the frameless window's three resize edges, ui/main.slint). Until drive fixes 7 an edge reported how far the pointer was from where it was pressed, measured
 // from the EDGE ITSELF, and the host asked for "the size the window has now plus that distance". That is right only if the window has already taken the last size asked for when the
 // next pointer move arrives. It has not: the size is applied a frame or more later, so every move that arrived in between added the same distance again, the window overshot, the

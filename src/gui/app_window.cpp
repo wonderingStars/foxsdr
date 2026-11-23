@@ -1063,14 +1063,15 @@ int AppWindow::run(int frames) {
     // Scaled to 1280*S x 720*S and clamped to the WORK AREA of the monitor the
     // still-hidden window actually landed on, so a saved 200% from a 4K desk
     // does not ask a 1366x768 laptop for a window bigger than its own screen.
-    // S=1: exactly 1280x720, unchanged - the clamp is a no-op on any monitor
-    // with at least that much work area, which is every supported monitor.
+    // S=1: exactly 1280x720 on a monitor with at least that much work area. The
+    // clamp runs at S=1 too (it was skipped there, so a 1366x768 or 1280x720
+    // screen, whose work area is under 720 high, got a window taller than it).
     //
     // THE WORK AREA WINS EVEN OVER THE SCALED MINIMUM: firstLaunchWindowGeometry
     // (gui/ui_scale.hpp) re-clamps to the work area AFTER the floor and keeps the
     // window's whole rectangle on screen (200% on a 1366x768 laptop wants a
     // 1248x800 minimum against a work area of roughly 1366x728).
-    if (cascade::gui::uiscale::factor() != 1.0f) {
+    {
         int areaX = 0, areaY = 0, areaW = 0, areaH = 0;
         cascade::gui::monitorWorkareaForWindow(window, areaX, areaY, areaW, areaH);
         const double s = static_cast<double>(cascade::gui::uiscale::factor());

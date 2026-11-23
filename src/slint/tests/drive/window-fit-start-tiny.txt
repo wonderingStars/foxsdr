@@ -1,0 +1,11 @@
+#! frames=160 FOXSDR_SLINT_WORK_AREA=1024x560
+# window-fit-start-tiny (user bug C): a work area under the smallest window (a 1024 x 600 screen: 560 high, under the 640 minimum): the window is maximised (here: sized to the seam's work area, as the seam's work area
+# is not the real monitor) and the minimum for the session is lowered to what the screen has, 1024 x 560. The drag edges then allow no smaller window than that.
+10 state running == 1
+state look.physw == 1024
+state look.physh == 560
+state look.x == 0
+state look.y == 0
+state look.startmax == 1
+state look.minw == 1024
+state look.minh == 560

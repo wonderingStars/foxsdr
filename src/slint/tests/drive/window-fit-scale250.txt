@@ -1,0 +1,9 @@
+#! frames=200 config=window-fit-scale250.json FOXSDR_SLINT_WORK_AREA=5120x1392
+# window-fit-scale250 (user bug C): Interface size 250 % on the 5120 x 1440 desk (work area 5120 x 1392): the smallest window at 250 % is 2560 x 1600, taller than the work area. The scale change used to clamp the window to
+# 4000 x 1392 (557 logical pixels of height, under the 640 minimum, nothing said); now the window is the work area (maximised on a real screen) and the session's minimum is the 1392 / 2.5 = 556.8 logical pixels the screen has.
+60 state look.scale == 2.50
+state look.startmax == 1
+state look.physw == 5120
+state look.physh == 1392
+state look.minw == 1024
+state look.minh == 557

@@ -1,0 +1,10 @@
+#! frames=120 FOXSDR_SLINT_WORK_AREA=1280x680+40+30
+# window-fit-start-1280x680 (user bug C): a 1280 x 720 screen (work area 1280 x 680) that does not start at the origin (a second monitor, or a taskbar on the left): the window is the work area's size and sits at ITS corner.
+10 state running == 1
+state look.physw == 1280
+state look.physh == 680
+state look.x == 40
+state look.y == 30
+state look.startmax == 0
+state look.minw == 1024
+state look.minh == 640
