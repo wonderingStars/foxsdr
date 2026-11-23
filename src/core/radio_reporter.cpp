@@ -113,14 +113,15 @@ bool appendDurable(const fs::path& p, const std::string& data) {
 // position, or a retry) removed and renamed each other's temporary file. The replace is retried a few times, because on Windows it fails while another thread has the target open (the
 // caller reading a position file the batch thread is replacing); only then the old delete-and-rename. False when the file could not be replaced: the caller must look at it.
 std::atomic<unsigned long long> g_tmpSeq{0};
-bool writeAtomic(const fs::path& p, const std::string& data) {
+// `attempts`: the caller's own thread (the state save, a failure file) holds the reporter's lock across this and keeps to a few milliseconds; the batch thread's position write may wait longer.
+bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12) {
     fs::path tmp = p;
     tmp += "." + std::to_string(g_tmpSeq.fetch_add(1, std::memory_order_relaxed)) + "." +
            std::to_string(static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000ull)) + ".tmp";
     std::error_code ec;
     (void)fs::remove(tmp, ec);
     if (!appendDurable(tmp, data)) { (void)fs::remove(tmp, ec); return false; }
-    for (int attempt = 0; attempt < 40; ++attempt) {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
         if (fileFault("rename", p)) {
             ec = std::make_error_code(std::errc::permission_denied);
         } else {
@@ -308,7 +309,7 @@ struct Reporter::Impl {
             todo = unsavedPos;
         }
         for (const auto& kv : todo) {
-            if (writeAtomic(posPathOf(kv.first), std::to_string(kv.second))) {
+            if (writeAtomic(posPathOf(kv.first), std::to_string(kv.second), 40)) {
                 std::lock_guard<std::mutex> lk(retryMu);
                 const auto it = unsavedPos.find(kv.first);
                 if (it != unsavedPos.end() && it->second <= kv.second) { unsavedPos.erase(it); }
@@ -848,7 +849,7 @@ struct Reporter::Impl {
     bool advance(const Item& it) {
         if (it.isFail) { return removeOrDefer(it.file); }
         const std::size_t next = it.line + 1;
-        if (writeAtomic(posPathOf(it.file), std::to_string(next))) { return true; }
+        if (writeAtomic(posPathOf(it.file), std::to_string(next), 40)) { return true; }
         std::lock_guard<std::mutex> lk(retryMu);
         std::size_t& held = unsavedPos[it.file];
         held = std::max(held, next);
@@ -1324,7 +1325,7 @@ void Reporter::setFileFaultHookForTest(std::function<bool(const char* op, const 
     g_fileFaultHook = std::move(hook);
 }
 
-bool Reporter::writeAtomicForTest(const std::string& path, const std::string& data) { return writeAtomic(pathOf(path), data); }
+bool Reporter::writeAtomicForTest(const std::string& path, const std::string& data) { return writeAtomic(pathOf(path), data, 40); }
 
 void Reporter::poll() {
     Impl& s = *p_;
