@@ -114,7 +114,9 @@ bool appendDurable(const fs::path& p, const std::string& data) {
 // caller reading a position file the batch thread is replacing); only then the old delete-and-rename. False when the file could not be replaced: the caller must look at it.
 std::atomic<unsigned long long> g_tmpSeq{0};
 // `attempts`: the caller's own thread (the state save, a failure file) holds the reporter's lock across this and keeps to a few milliseconds; the batch thread's position write may wait longer.
-bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12) {
+// `deleteFallback` (final review of fix/freezes, R4): false for a REWRITE of a file that already holds a report (the anonymous form of a queued failure, its withheld-text form). If the atomic
+// replace fails the original is left in place and the rewrite is retried later: the delete-then-rename below could lose the report when the rename then failed too.
+bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12, bool deleteFallback = true) {
     fs::path tmp = p;
     tmp += "." + std::to_string(g_tmpSeq.fetch_add(1, std::memory_order_relaxed)) + "." +
            std::to_string(static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000ull)) + ".tmp";
@@ -132,7 +134,7 @@ bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12) 
         std::this_thread::sleep_for(std::chrono::milliseconds(3 + (attempt % 7)));
     }
     std::error_code ec2;
-    if (!fileFault("remove", p) && fs::remove(p, ec2) && !fileFault("rename", p)) {
+    if (deleteFallback && !fileFault("remove", p) && fs::remove(p, ec2) && !fileFault("rename", p)) {
         fs::rename(tmp, p, ec2);
         if (!ec2) { return true; }
     }
@@ -325,7 +327,7 @@ struct Reporter::Impl {
             if (!w.is_object() || !w.contains("msg") || !w["msg"].is_object()) { continue; }
             if (!carriesInstallId(w["msg"])) { continue; }
             anonymize(w["msg"]);
-            if (!writeAtomic(f, dumpJson(w))) {
+            if (!writeAtomic(f, dumpJson(w), 12, false)) {   // (a rewrite: never delete the report to replace it)
                 allRewritten = false;
                 ++st.guardRefused;
                 diagLogf("radio reports: a queued failure report could not be rewritten without the install id; it is sent without it");
@@ -995,7 +997,7 @@ struct Reporter::Impl {
                         lk.unlock();
                         if (it.isFail) {
                             json w = json::parse(readAll(it.file), nullptr, false);
-                            if (w.is_object()) { w["deg"] = 1; writeAtomic(it.file, dumpJson(w)); }
+                            if (w.is_object()) { w["deg"] = 1; writeAtomic(it.file, dumpJson(w), 12, false); }
                         }
                         continue;
                     }

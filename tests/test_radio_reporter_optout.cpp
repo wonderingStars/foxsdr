@@ -411,6 +411,64 @@ void testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart() {
     rep.shutdown();
 }
 
+// G3 (final review of fix/freezes, R4): the anonymous REWRITE of a queued failure file must never delete the failure when the atomic replace fails. Only the RENAME is made to fail
+// (the temporary file is held by a scanner while the target is free): the old delete-then-rename fallback removed the target, found the rename failing and removed the temporary file too,
+// so the report was gone. Now the original stays where it is, carrying the id, the send-time rule posts it without the id, and the next start rewrites it.
+std::size_t failFilesOnDisk(Bench& b) {
+    std::size_t n = 0;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(b.root / "radio-reports", ec)) {
+        if (e.path().filename().string().rfind("fail-", 0) == 0 && e.path().extension() == ".json") { ++n; }
+    }
+    return n;
+}
+
+void testARewriteThatCannotRenameNeverDeletesTheFailure() {
+    std::printf("G3 a rewrite whose rename fails keeps the failure report\n");
+    Bench b("g3");
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.liveSend = false;
+        rep.configure(o);
+        rep.fileFailure(failureOf("00000005"), kNoRing);
+        CHECK(failFilesOnDisk(b) == 1u);
+        rr::Reporter::setFileFaultHookForTest([](const char* op, const std::string& path) { return std::string(op) == "rename" && path.find("fail-") != std::string::npos; });
+        identityOff(rep);
+        CHECK(rep.stats().guardRefused >= 1u);       // the failed rewrite is counted
+        CHECK(failFilesOnDisk(b) == 1u);             // THE REPORT IS STILL THERE (the delete-then-rename fallback made this 0)
+        CHECK(b.anyFileHoldsInstallId());            // as the original, with the id, which the send-time rule strips
+        // a batch while the rename still fails: the failure is posted, anonymously
+        rep.setLiveSend(true);
+        (void)rep.runBatchNow();
+        CHECK(b.sentOfKind("radio_fail") == 1u);
+        CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 1u);
+        CHECK(b.sentWithInstallId() == 0u);
+        rr::Reporter::setFileFaultHookForTest(nullptr);
+        rep.shutdown();
+    }
+    // and a failure that is NOT sent (live sending off) is rewritten at the next start, once the files can be replaced
+    Bench c("g3b");
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = c.options();
+        o.liveSend = false;
+        rep.configure(o);
+        rep.fileFailure(failureOf("00000006"), kNoRing);
+        rr::Reporter::setFileFaultHookForTest([](const char* op, const std::string& path) { return std::string(op) == "rename" && path.find("fail-") != std::string::npos; });
+        identityOff(rep);
+        CHECK(failFilesOnDisk(c) == 1u);
+        rr::Reporter::setFileFaultHookForTest(nullptr);
+    }
+    rr::Reporter rep;
+    rr::Reporter::Options o = c.options();
+    o.identity.installId.clear();
+    rep.configure(o);
+    CHECK(failFilesOnDisk(c) == 1u);
+    CHECK(!c.anyFileHoldsInstallId());               // retried at the next start, now rewritten
+    rep.shutdown();
+}
+
 }  // namespace
 
 int main() {
@@ -423,5 +481,6 @@ int main() {
     testAnIdChangeMakesOlderLinesUnsendable();
     testAFailureReadBeforeTheOptOutIsPostedAnonymously();
     testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart();
+    testARewriteThatCannotRenameNeverDeletesTheFailure();
     return testSummary("test_radio_reporter_optout");
 }
