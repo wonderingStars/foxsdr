@@ -59,6 +59,14 @@ public:
     // biased-low estimate of mean power for fluctuating signals.
     void process(const std::complex<float>* in, float* outDb);
 
+    // THE SAME ESTIMATE IN TWO STEPS (2026-11-23, the demod performance pass): processPower() does everything process() does except the logarithm and
+    // writes the averaged LINEAR power (the value process() takes the log of), fftshifted; powerToDb() is that logarithm, with the same floor, on any
+    // power array. powerToDb(processPower(x)) is bit-for-bit process(x): the same float operations on the same values, the logarithm done later and
+    // possibly on another thread. The pipeline publishes the power and converts where a frame is pulled, so the thousand logarithms a block
+    // (2 million a second at 2 MS/s) are paid for the frames somebody takes and not for every block.
+    void processPower(const std::complex<float>* in, float* outPower);
+    static void powerToDb(const float* power, float* outDb, std::size_t n) noexcept;
+
 private:
     ComplexFFT fft_;
     std::vector<float> window_;

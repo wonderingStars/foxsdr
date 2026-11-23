@@ -178,7 +178,7 @@ public:
         friend class SpectrumBlock;
         struct Slot {
             std::uint64_t seq = 0;
-            std::vector<float> db;
+            std::vector<float> db;   // the reduced LINEAR POWER of the frame (named for what latest() hands out: dB)
         };
 
         void setModeFlags(SpecMode m, float alpha, float decay) {
@@ -265,7 +265,10 @@ public:
             } else {
                 specReduceMax(out, n_, red_.data(), outCols_);
             }
-            for (std::size_t c = 0; c < outCols_; ++c) { s.db[c] = 10.0f * std::log10(std::max(red_[c], 1e-20f)); }
+            // THE SLOT HOLDS THE REDUCED LINEAR POWER, not dB (the demod performance pass): latest() takes the logarithm on the thread that pulls the frame, so
+            // this thread no longer takes one per column per frame (at 524288 columns and tens of frames a second that was millions a second), and a frame nobody
+            // pulls costs none. The same expression on the same float, so the values pulled are bit-for-bit what they were.
+            for (std::size_t c = 0; c < outCols_; ++c) { s.db[c] = red_[c]; }
             s.seq = ++seq_;
             const int old = ready_.exchange(wr_ | kNew, std::memory_order_acq_rel);
             wr_ = old & 3;
@@ -353,7 +356,7 @@ public:
         const Engine::Slot& s = e->slot_[static_cast<std::size_t>(e->rd_)];
         if (s.seq == 0 || s.seq == e->readSeq_) { return 0; }
         const std::size_t c = std::min(cap, e->outCols_);
-        std::memcpy(out, s.db.data(), c * sizeof(float));
+        for (std::size_t i = 0; i < c; ++i) { out[i] = 10.0f * std::log10(std::max(s.db[i], 1e-20f)); }   // (s.db is the power: see frame())
         e->readSeq_ = s.seq;
         if (seq != nullptr) { *seq = s.seq; }
         return c;

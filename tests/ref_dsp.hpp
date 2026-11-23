@@ -20,6 +20,9 @@
 #include <limits>
 #include <vector>
 
+#include "dsp/fft.hpp"
+#include "dsp/window.hpp"
+
 namespace refdsp {
 
 class RefFirDecimator {
@@ -98,6 +101,39 @@ private:
     }
     double freq_ = 0.0;
     double phaseCycles_ = 0.0;
+};
+
+// The legacy spectrum estimator as it was at cebfddb5: window, FFT, the per-block exponential average in the linear power domain, and the logarithm
+// taken HERE, once per bin per block (src/dsp/spectrum.cpp SpectrumEstimator::process).
+class RefSpectrumEstimator {
+public:
+    RefSpectrumEstimator(std::size_t fftSize, cascade::dsp::WindowType window)
+        : fft_(fftSize), window_(cascade::dsp::makeWindow(window, fftSize)), windowed_(fftSize), spectrum_(fftSize), avgPower_(fftSize, 0.0f) {}
+    void setAlpha(float alpha) { alpha_ = alpha >= 1.0f ? 1.0f : (alpha > 1e-4f ? alpha : 1e-4f); }
+    void process(const std::complex<float>* in, float* outDb) {
+        constexpr float kPowerFloor = 1e-20f;
+        const std::size_t n = fft_.size();
+        for (std::size_t i = 0; i < n; ++i) { windowed_[i] = in[i] * window_[i]; }
+        fft_.forward(windowed_.data(), spectrum_.data());
+        const float invN2 = 1.0f / (static_cast<float>(n) * static_cast<float>(n));
+        const std::size_t half = n / 2;
+        for (std::size_t i = 0; i < n; ++i) {
+            std::size_t k = i + half;
+            if (k >= n) { k -= n; }
+            const float p = std::norm(spectrum_[k]) * invN2;
+            avgPower_[i] = primed_ ? alpha_ * p + (1.0f - alpha_) * avgPower_[i] : p;
+            outDb[i] = 10.0f * std::log10(avgPower_[i] > kPowerFloor ? avgPower_[i] : kPowerFloor);
+        }
+        primed_ = true;
+    }
+
+private:
+    cascade::dsp::ComplexFFT fft_;
+    std::vector<float> window_;
+    std::vector<std::complex<float>> windowed_, spectrum_;
+    std::vector<float> avgPower_;
+    float alpha_ = 1.0f;
+    bool primed_ = false;
 };
 
 // ---- comparison helpers ---------------------------------------------------------------------------------------------------------------------

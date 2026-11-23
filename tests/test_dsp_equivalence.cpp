@@ -7,6 +7,8 @@
 //
 //   E1k  FirDecimator against RefFirDecimator, memcmp, for every tap set the chain uses, with the input cut into blocks of 1, 3, 7, 1008, 1024 and
 //        8192 so every remainder of the several-outputs-at-once grouping and every decimation-grid phase occurs, from an unaligned start;
+//   E3   the spectrum's dB conversion moved to the pull (P3): the estimator's two steps against the estimator as it was, bit for bit; the Pipeline's
+//        frames pulled at random block counts against a reference estimator fed the same samples; two consumers of one frame; the block path's frames.
 //   E1c  the whole receive chain (tests/demod_chain.hpp, the pipeline's classes in the pipeline's order) for each of the eight modes over 10 s:
 //        the four feeds the pipeline produces (the audio, the audio decoder plugins' tap, the IF recorder's, the multiplex recorder's) are
 //        hashed, printed and compared bit for bit with the same chain run with the optimised kernels switched back to their reference paths
@@ -16,20 +18,27 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "core/pipeline.hpp"
 #include "demod_chain.hpp"
 #include "dsp_signals.hpp"
 #include "dsp/demod.hpp"
 #include "dsp/dsp_reference.hpp"
 #include "dsp/fir.hpp"
+#include "dsp/spectrum.hpp"
+#include "dsp/spectrum_block.hpp"
+#include "source/iq_source.hpp"
 #include "ref_dsp.hpp"
 #include "test_check.hpp"
 
@@ -146,6 +155,35 @@ const char* modeWord(DemodMode m) {
     return "?";
 }
 
+// Hands over exactly what the test grants, one deterministic xorshift block at a time (the same stream as `grantedSample`).
+class GrantSource final : public cascade::source::IqSource {
+public:
+    bool start() override { return true; }
+    void stop() override {}
+    bool running() const override { return true; }
+    bool selfPaced() const override { return true; }
+    double sampleRateHz() const override { return 2000000.0; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return 100.0e6; }
+    bool setCenterFrequencyHz(double) override { return true; }
+    const char* name() const override { return "Granted test source"; }
+    const char* lastError() const override { return ""; }
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        const std::size_t give = std::min<std::size_t>(granted_.load(std::memory_order_acquire), n);
+        for (std::size_t i = 0; i < give; ++i) { dst[i] = next(); }
+        granted_.fetch_sub(give, std::memory_order_acq_rel);
+        return give;
+    }
+    void grant(std::size_t n) { granted_.fetch_add(n, std::memory_order_acq_rel); }
+    // the same sequence, for the reference
+    static std::complex<float> sampleAt(Rng& rng) { return {0.3f * rng.uni(), 0.3f * rng.uni()}; }
+
+private:
+    std::complex<float> next() { return sampleAt(rng_); }
+    std::atomic<std::size_t> granted_{0};
+    Rng rng_{0xABCDEFull};
+};
+
 }  // namespace
 
 int main() {
@@ -169,6 +207,112 @@ int main() {
                 CHECK(same);
             }
             std::printf("E1k: %-26s %s over %zu outputs in 6 block splits\n", ts.name, all ? "bit-identical" : "DIFFERENT", outputs);
+        }
+    }
+
+    // --- E3. THE SPECTRUM'S dB CONVERSION AT THE PULL (P3) -----------------------------------------------------------------------------------
+    {
+        // (a) the estimator: process() and powerToDb(processPower()) against the estimator as it was, 300 blocks, two averaging settings, memcmp.
+        for (const float alpha : {1.0f, 0.5f}) {
+            cascade::dsp::SpectrumEstimator now(1024, WindowType::BlackmanHarris), now2(1024, WindowType::BlackmanHarris);
+            refdsp::RefSpectrumEstimator ref(1024, WindowType::BlackmanHarris);
+            now.setAlpha(alpha);
+            now2.setAlpha(alpha);
+            ref.setAlpha(alpha);
+            Rng rng(99);
+            std::vector<std::complex<float>> in(1024);
+            std::vector<float> a(1024), b(1024), r(1024), pw(1024);
+            std::size_t same = 0;
+            for (int blk = 0; blk < 300; ++blk) {
+                for (auto& s : in) { s = {0.4f * rng.uni(), 0.4f * rng.uni()}; }
+                if (blk % 50 == 7) { std::fill(in.begin(), in.end(), std::complex<float>(0.0f, 0.0f)); }   // an all-zero block: the floor
+                ref.process(in.data(), r.data());
+                now.process(in.data(), a.data());
+                now2.processPower(in.data(), pw.data());
+                cascade::dsp::SpectrumEstimator::powerToDb(pw.data(), b.data(), 1024);
+                if (std::memcmp(r.data(), a.data(), sizeof(float) * 1024) == 0 && std::memcmp(r.data(), b.data(), sizeof(float) * 1024) == 0) { ++same; }
+            }
+            std::printf("E3a: estimator alpha %.1f: %zu of 300 frames bit-identical (process and processPower+powerToDb against the old estimator)\n", alpha, same);
+            CHECK(same == 300u);
+        }
+
+        // (b) the Pipeline: frames pulled after random numbers of blocks (the window, the scanners and the rest pull when they like), each against
+        // the reference estimator fed the very same samples. The averaging is the application's (alpha 0.5), so every block matters.
+        {
+            cascade::core::Pipeline::Config cfg;
+            cfg.sampleRateHz = 2000000.0;
+            cfg.fftSize = 1024;
+            cfg.averagingAlpha = 0.5f;
+            cfg.audioEnabled = false;
+            cascade::core::Pipeline p(cfg);
+            auto owned = std::make_unique<GrantSource>();
+            GrantSource* src = owned.get();
+            p.setSource(std::move(owned));
+            p.start();
+            refdsp::RefSpectrumEstimator ref(1024, WindowType::BlackmanHarris);
+            ref.setAlpha(0.5f);
+            Rng genRng(0xABCDEFull);   // the source's stream
+            Rng pick(5);
+            std::vector<std::vector<float>> refFrames;   // one per block
+            std::vector<std::complex<float>> blockIn(1024);
+            std::vector<float> db(1024);
+            cascade::core::SpectrumFrame frame, frame2;
+            std::uint64_t blocksGranted = 0;
+            std::size_t matched = 0, pulls = 0, consumersAgree = 0, secondPullEmpty = 0;
+            for (int pull = 0; pull < 200; ++pull) {
+                const std::size_t k = 1 + static_cast<std::size_t>(pick.next() % 4);   // 1 to 4 blocks between pulls
+                for (std::size_t j = 0; j < k; ++j) {
+                    for (auto& s : blockIn) { s = GrantSource::sampleAt(genRng); }
+                    ref.process(blockIn.data(), db.data());
+                    refFrames.push_back(db);
+                }
+                src->grant(k * 1024);
+                blocksGranted += k;
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                while (p.dspBlocks() < blocksGranted && std::chrono::steady_clock::now() < deadline) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+                CHECK(p.dspBlocks() >= blocksGranted);
+                ++pulls;
+                if (p.getLatestFrame(frame)) {
+                    // the frame is the newest block's: its sequence number is the block count (one frame per block, counting from 1)
+                    const std::size_t idx = static_cast<std::size_t>(frame.seq) - 1u;
+                    if (idx < refFrames.size() && frame.dbBins.size() == 1024 && std::memcmp(frame.dbBins.data(), refFrames[idx].data(), 1024 * sizeof(float)) == 0) { ++matched; }
+                    // a second consumer of the same frame gets the same dB (the first one's conversion is shared, not redone)
+                    cascade::core::SpectrumFrame other;
+                    if (p.getLatestFrame(other) && other.seq == frame.seq && other.dbBins == frame.dbBins) { ++consumersAgree; }
+                    if (!p.getLatestFrame(frame)) { ++secondPullEmpty; }   // nothing newer: false, and frame untouched
+                }
+            }
+            p.stop();
+            std::printf("E3b: pipeline: %zu of %zu pulled frames bit-identical to the reference estimator; second consumer agreed %zu times; no-new-frame pull false %zu times\n",
+                        matched, pulls, consumersAgree, secondPullEmpty);
+            CHECK(matched == pulls);
+        }
+
+        // (c) the SpectrumBlock path: print a hash of the dB frames it hands out for a fixed input (compared by hand across the commit that moved its
+        // logarithm to the pull: the same line before and after must read the same).
+        {
+            cascade::dsp::SpecConfig sc;
+            sc.fftSize = 4096;
+            sc.sampleRateHz = 2.0e6;
+            sc.frameRateHz = 400.0;
+            cascade::dsp::SpectrumBlock blk(sc);
+            Rng rng(321);
+            std::vector<std::complex<float>> in(1024);
+            std::vector<float> out(4096);
+            std::uint64_t h = 1469598103934665603ull;
+            std::size_t frames = 0;
+            for (int b = 0; b < 200; ++b) {
+                for (auto& s : in) { s = {0.4f * rng.uni(), 0.4f * rng.uni()}; }
+                blk.process(in.data(), in.size());
+                std::uint64_t seq = 0;
+                const std::size_t got = blk.latest(out.data(), out.size(), &seq);
+                if (got > 0) {
+                    h = demodchain::hashBits(out.data(), got, h);
+                    ++frames;
+                }
+            }
+            std::printf("E3c: spectrum block: %zu frames, hash %016llx\n", frames, static_cast<unsigned long long>(h));
+            CHECK(frames > 20u);
         }
     }
 

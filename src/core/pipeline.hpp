@@ -1293,6 +1293,13 @@ private:
     // "nothing published yet".
     mutable std::mutex frameMutex_;
     SpectrumFrame latest_;
+    // true while latest_.dbBins holds the averaged LINEAR POWER of the legacy estimator and not yet dB (the demod performance pass): the logarithm is
+    // taken in getLatestFrame, on the thread that pulls the frame, so the DSP thread no longer takes a thousand of them every block. Under frameMutex_.
+    bool latestIsPower_ = false;
+    // The last frame converted to dB, so that a second consumer of the same frame does not convert it again (its own mutex: never held with frameMutex_).
+    std::mutex dbCacheMutex_;
+    std::uint64_t dbCacheSeq_ = 0;
+    std::vector<float> dbCache_;
 
     // Worker-thread fault state. faulted() latches until the next start(),
     // which is what lets the GUI say "the device went away" instead of
@@ -1440,6 +1447,7 @@ private:
     int specWindow_ = 3;
     double specFps_ = 0.0;
     std::vector<float> specScratch_;   // getLatestFrame's read buffer
+    void convertPowerFrameToDb(SpectrumFrame& out);   // see getLatestFrame
     void rebuildSpectrumBlock();   // the choice -> the block (any control thread; takes frameMutex_ for the hand-over only)
     std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
     bool noiseSqOn_ = false;

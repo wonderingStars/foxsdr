@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/spectrum.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace cascade::dsp {
@@ -35,6 +36,11 @@ void SpectrumEstimator::setAlpha(float alpha) noexcept {
 }
 
 void SpectrumEstimator::process(const std::complex<float>* in, float* outDb) {
+    processPower(in, nullptr);
+    powerToDb(avgPower_.data(), outDb, fft_.size());
+}
+
+void SpectrumEstimator::processPower(const std::complex<float>* in, float* outPower) {
     const std::size_t n = fft_.size();
     for (std::size_t i = 0; i < n; ++i) {
         windowed_[i] = in[i] * window_[i];
@@ -52,10 +58,15 @@ void SpectrumEstimator::process(const std::complex<float>* in, float* outDb) {
         if (k >= n) { k -= n; }
         const float p = std::norm(spectrum_[k]) * invN2;
         avgPower_[i] = primed_ ? alpha_ * p + (1.0f - alpha_) * avgPower_[i] : p;
-        outDb[i] = 10.0f * std::log10(avgPower_[i] > kPowerFloor ? avgPower_[i]
-                                                                 : kPowerFloor);
     }
     primed_ = true;
+    if (outPower != nullptr) { std::copy(avgPower_.begin(), avgPower_.end(), outPower); }
+}
+
+void SpectrumEstimator::powerToDb(const float* power, float* outDb, std::size_t n) noexcept {
+    for (std::size_t i = 0; i < n; ++i) {
+        outDb[i] = 10.0f * std::log10(power[i] > kPowerFloor ? power[i] : kPowerFloor);
+    }
 }
 
 }  // namespace cascade::dsp

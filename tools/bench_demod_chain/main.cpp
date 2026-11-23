@@ -232,18 +232,23 @@ void kernelRows(double seconds) {
 void spectrumRow(const Input& in, int slices) {
     cascade::dsp::SpectrumEstimator est(kBlock, cascade::dsp::WindowType::BlackmanHarris);
     est.setAlpha(0.5f);
-    std::vector<float> db(kBlock);
+    std::vector<float> db(kBlock), power(kBlock);
     const std::size_t totalBlocks = in.samples.size() / kBlock;
-    std::vector<double> us;
+    std::vector<double> usFull, usPower, usDb;
     for (int s = 0; s < slices; ++s) {
-        const double t0 = nowNs();
+        double t0 = nowNs();
         for (std::size_t b = 0; b < totalBlocks; ++b) { est.process(in.samples.data() + b * kBlock, db.data()); }
-        us.push_back((nowNs() - t0) / 1000.0 / static_cast<double>(totalBlocks));
+        usFull.push_back((nowNs() - t0) / 1000.0 / static_cast<double>(totalBlocks));
+        t0 = nowNs();
+        for (std::size_t b = 0; b < totalBlocks; ++b) { est.processPower(in.samples.data() + b * kBlock, power.data()); }
+        usPower.push_back((nowNs() - t0) / 1000.0 / static_cast<double>(totalBlocks));
+        t0 = nowNs();
+        for (std::size_t b = 0; b < totalBlocks; ++b) { cascade::dsp::SpectrumEstimator::powerToDb(power.data(), db.data(), kBlock); }
+        usDb.push_back((nowNs() - t0) / 1000.0 / static_cast<double>(totalBlocks));
     }
-    std::printf("\n== legacy spectrum estimator (1024-point, window + FFT + average + dB), per block: median %.2f us, best %.2f us\n", median(us),
-                *std::min_element(us.begin(), us.end()));
-    const auto it = cascade::dsp::bench::g_substeps;
-    (void)it;
+    std::printf("\n== legacy spectrum estimator (1024-point), per block, median: process() = power + dB %.2f us; processPower() (what the DSP thread runs "
+                "now) %.2f us; powerToDb() (paid where a frame is pulled) %.2f us\n",
+                median(usFull), median(usPower), median(usDb));
 }
 
 }  // namespace
