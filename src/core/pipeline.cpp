@@ -1335,20 +1335,24 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
         }
     }
     if (latest_.seq <= out.seq) {
-        noteFrameLockHold(lockedAt);
+        noteFrameLockHold(lockedAt, false);
         return false;
     }
     out = latest_;
     const bool power = latestIsPower_;
     const bool blockPower = latestIsBlockPower_;
-    noteFrameLockHold(lockedAt);
+    noteFrameLockHold(lockedAt, true);
     lk.unlock();   // (the logarithms below are taken without the frame lock: the DSP thread publishes under it)
     if (power) { convertPowerFrameToDb(out, blockPower); }
     return true;
 }
 
-void Pipeline::noteFrameLockHold(std::chrono::steady_clock::time_point lockedAt) {
+void Pipeline::noteFrameLockHold(std::chrono::steady_clock::time_point lockedAt, bool tookFrame) {
     const std::uint64_t ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - lockedAt).count());
+    if (tookFrame) {   // (the mean is over the pulls that took a frame: the others hold the lock for a few instructions)
+        frameLockHoldSumNs_.fetch_add(ns, std::memory_order_relaxed);
+        frameLockHoldCount_.fetch_add(1, std::memory_order_relaxed);
+    }
     std::uint64_t seen = frameLockHoldMaxNs_.load(std::memory_order_relaxed);
     while (ns > seen && !frameLockHoldMaxNs_.compare_exchange_weak(seen, ns, std::memory_order_relaxed)) {}
 }

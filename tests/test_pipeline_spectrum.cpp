@@ -182,18 +182,27 @@ int main() {
     {
         CHECK(p.setSpectrum(131072, 3, 0.0));
         CHECK(frameOf(p, 131072, f));
-        p.resetFrameLockHoldMax();
+        // Three rounds; the best round counts, so that one preemption of the thread holding the lock (this PC runs other work) cannot fail the test:
+        // a hold that includes the logarithms is long in EVERY round.
+        double bestMaxUs = 1e9, bestMeanUs = 1e9;
         std::size_t pulled = 0;
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(4);
         SpectrumFrame g;
-        while (std::chrono::steady_clock::now() < until) {
-            if (p.getLatestFrame(g) && g.dbBins.size() == 131072) { ++pulled; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        for (int round = 0; round < 3; ++round) {
+            p.resetFrameLockHoldMax();
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+            while (std::chrono::steady_clock::now() < until) {
+                if (p.getLatestFrame(g) && g.dbBins.size() == 131072) { ++pulled; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            bestMaxUs = std::min(bestMaxUs, static_cast<double>(p.frameLockHoldMaxNs()) / 1000.0);
+            bestMeanUs = std::min(bestMeanUs, static_cast<double>(p.frameLockHoldMeanNs()) / 1000.0);
         }
-        const double holdUs = static_cast<double>(p.frameLockHoldMaxNs()) / 1000.0;
-        std::printf("  G 131072-bin frames pulled and converted: %zu; longest hold of the frame lock %.0f us\n", pulled, holdUs);
+        std::printf("  G 131072-bin frames pulled and converted: %zu; frame lock held at most %.0f us, on average %.0f us (best of three rounds)\n", pulled, bestMaxUs, bestMeanUs);
         CHECK(pulled >= 5u);
-        CHECK(holdUs < 1000.0);
+        CHECK(bestMaxUs < 1000.0);
+        // The mean is the sharper check at this size: the copies hold the lock about 200 us on this PC; the logarithms of 131,072 bins (about 600 us more)
+        // under the lock took the mean to about 800 us.
+        CHECK(bestMeanUs < 500.0);
         CHECK(std::fabs(static_cast<double>(peakOf(g)) - wantedBin(131072)) <= 3.0);   // converted to dB: the tone is the maximum, at its bin
     }
     p.stop();
