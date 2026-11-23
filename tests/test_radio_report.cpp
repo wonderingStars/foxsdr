@@ -292,5 +292,17 @@ int main() {
         CHECK(kRadioReportsLiveSend);   // THE ONE SWITCH IS ON in this build (0.99.109 sends; was: pinned false)
     }
 
+    // --- 2026-11-23: THE VENDOR'S OWN WORDS REACH THE LOG LINE OF A FAILED OPEN (field: "(vendor)" with no text) -------------------------------------------
+    {
+        const std::string args = "driver=uhd, label=B200, serial=ABC12345, type=b200";
+        const std::string said = "open failed: LookupError: KeyError: No devices found for -----> Device Address: driver: uhd serial: ABC12345 (args: " + args + ")";
+        const std::string words = openFailureWords("soapy", args, said);
+        CHECK(words.find("No devices found") != std::string::npos);      // the vendor's sentence is there ...
+        CHECK(words.find("ABC12345") == std::string::npos);              // ... with the serial scrubbed out
+        CHECK(words.size() <= 160);
+        CHECK(openFailureWords("soapy", args, "") == "the driver gave no reason");
+        CHECK(openFailureWords("soapy", args, "  \r\n") == "the driver gave no reason");
+    }
+
     return testSummary("test_radio_report");
 }

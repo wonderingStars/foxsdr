@@ -7779,12 +7779,20 @@ void AppWindow::drawSourceSection() {
     // shorter with nothing to say why. fact.source.faultedDrivers is the
     // engine's list of them (the child that died is the engine's).
     if (!c.faultedDrivers.empty()) {
-        std::string note;
-        cascade::core::formatUtf8(
-            note, tr("Not scanned again this session: %s (it crashed the device scan)"),
-            c.faultedDrivers.c_str());
+        std::string again, left;
+        cascade::gui::splitCrashedSearch(c.faultedDrivers, c.faultedNoRetry, again, left);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
-        ImGui::TextWrapped("%s", note.c_str());
+        if (!again.empty()) {
+            std::string note;
+            cascade::core::formatUtf8(note, tr("The search for %s radios crashed; press Refresh to try again"), cascade::gui::friendlyDriverList(again).c_str());
+            ImGui::TextWrapped("%s", note.c_str());
+        }
+        if (!left.empty()) {
+            std::string note;
+            cascade::core::formatUtf8(note, tr("The search for %s radios crashed again; it is left out until FoxSDR is restarted"),
+                                      cascade::gui::friendlyDriverList(left).c_str());
+            ImGui::TextWrapped("%s", note.c_str());
+        }
         ImGui::PopStyleColor();
     }
     ImGui::BeginDisabled(soapyBusy);
@@ -8636,6 +8644,7 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
     readFactText("fact.source.scanGate", c.scanGate);
     readFactText("fact.source.scanSkip", c.scanSkip);
     readFactText("fact.source.faultedDrivers", c.faultedDrivers);
+    readFactText("fact.source.faultedNoRetry", c.faultedNoRetry);
     {
         std::string flag;
         readFactText("fact.source.uhdNoImages", flag);

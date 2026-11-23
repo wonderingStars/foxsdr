@@ -592,7 +592,8 @@ private:
     // device is given a row if it has none, one diag line says why, and
     // soapyScanned_ is left false so the next draw after the radio closes
     // scans as before. The decision itself is gui::deviceScanAllowed.
-    void scanSoapy();
+    // userRefresh: the explicit Refresh (FOXAPI_OP_SCAN_DEVICES) - the only caller that lets a driver whose scan child crashed earlier be asked again.
+    void scanSoapy(bool userRefresh = false);
     // True while scanSoapy() is refusing to run (see deviceScanAllowed): the
     // Refresh key is disabled with the reason as its caption. Read every
     // frame the Source section draws, so it is never stale.
@@ -1374,6 +1375,7 @@ private:
     // nothing found, and cleared when one finds something. scanEvidenceSeq_ moves with every write of either, and
     // is what the list fingerprint hashes (the texts are not hashed one by one).
     std::vector<std::string> faultedDrivers_;
+    std::vector<std::string> faultedNoRetry_;   // the ones of those a Refresh will no longer ask (soapy_enum_proc.hpp: kRefreshRetriesPerSession)
     ScanDiagnostics scanEvidence_;
     std::uint64_t scanEvidenceSeq_ = 0;
     // Takes the diagnostics a landed scan reads (the hook's, the runtime's, or - with soapyScan hooked and no

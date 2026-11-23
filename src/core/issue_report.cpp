@@ -79,7 +79,7 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     "the SDRplay driver was still delivering samples after it was told to stop, and its link was "
     "left behind rather than torn down under it",
     // StreamRestart
-    "the Airspy's sample stream halted and was restarted by itself",
+    "a radio's sample stream halted or went silent and was restarted by itself",
     // TunerRetry
     "the RTL-SDR's tuner refused a command and accepted it on a retry",
     // LateCall

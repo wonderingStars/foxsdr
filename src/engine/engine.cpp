@@ -1383,7 +1383,7 @@ std::string Engine::soapyScanGateDevice() const {
     return "a radio this session could not release";
 }
 
-void Engine::scanSoapy() {
+void Engine::scanSoapy(bool userRefresh) {
     // Kick the enumeration onto a worker and return immediately - see the
     // header for why this may not run inline. One at a time: a second scan
     // while one is in flight would race the result into soapyDevices_.
@@ -1494,7 +1494,7 @@ void Engine::scanSoapy() {
     // promises a list and nothing more, and this caller also needs the scan's
     // uhdImagesMissing answer for the hint under the Source list.
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
-    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
+    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps, userRefresh,
                                                        absentOut, uhdNoImagesOut, usrpOnUsbOut, helperMissingOut, scanHook] {
         // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life; pumpWorkers collects it, and a scan that
         // never comes back is named here after the Open kind's budget.
@@ -1516,6 +1516,7 @@ void Engine::scanSoapy() {
         cascade::source::EnumOptions options;
         options.skipDrivers = skip;
         options.absentDrivers = absent;
+        options.userRefresh = userRefresh;   // only the explicit Refresh asks a crashed driver again (soapy_enum_proc.hpp)
         if (cascade::gui::soapyUhdUsbOnly(absent, namedSoapyArgs, lookForNetworkUsrps)) { options.usbOnlyDrivers = {"uhd"}; }
         cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
         *uhdNoImagesOut = r.uhdImagesMissing;
@@ -3056,6 +3057,12 @@ void Engine::takeScanDiagnostics(bool wholeAndEmpty) {
         asked = true;
     }
     faultedDrivers_ = asked ? std::move(d.faultedDrivers) : std::vector<std::string>();
+    faultedNoRetry_.clear();
+    if (testHooks_.scanDiagnostics == nullptr && testHooks_.soapyScan == nullptr) {
+        for (const std::string& f : faultedDrivers_) {
+            if (cascade::source::refreshRetriesLeft(f) == 0) { faultedNoRetry_.push_back(f); }
+        }
+    }
     ScanDiagnostics next;
     if (asked && wholeAndEmpty) {
         next.modules = std::move(d.modules);
@@ -8320,7 +8327,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // SoapySDR scan goes through its own gate, which defers while a
             // radio is open and says why once.
             scanNative();
-            scanSoapy();
+            scanSoapy(/*userRefresh=*/true);
             return res;
         case FOXAPP_OP_SCAN_DEVICES_ON_OPEN:
             // The Source list opening: the lazy first SoapySDR scan, or the
@@ -10504,8 +10511,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             cascade::core::health::noteRadioFail(kind, rx().sourceError_);
             // ...AND AS ITS OWN REPORT (radio reports, D4): the reason is the driver's sentence before it is wrapped in the radio's name below.
             reportFailedOpen(kind, args, rx().sourceError_, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, cfg.sampleRateHz, restoreOpenMs);
-            // WHY, AS ONE WORD (0.99.92): the same reason class the count above files it under, and the only part of the driver's message that
-            // may go in the log - the message itself quotes the device arguments back (below). Taken HERE, before the sentence at the end of this
+            // WHY, AS ONE WORD (0.99.92): the same reason class the count above files it under; the driver's own message quotes the device arguments back
+            // (below), so it enters the log only for a SoapySDR radio, scrubbed (openFailureWords), and never for a native one. Taken HERE, before the sentence at the end of this
             // branch wraps sourceError_ in the radio's name. The 0.99.91 field report had to be read off the anonymous counts to learn that the
             // saved radio was merely busy; the log said only that it "did not reopen".
             const std::string whyClass = cascade::core::health::radioFailWhy(kind, rx().sourceError_);
@@ -10529,9 +10536,12 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                                          : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (triedModel.empty() || triedModel == args) { triedModel = kind; }
             cascade::core::diagWarnf(
-                "source: the saved radio (%s, %s) did not reopen (%s) - the receiver is on the "
+                "source: the saved radio (%s, %s) did not reopen (%s)%s - the receiver is on the "
                 "signal generator and the radio stays saved",
-                triedModel.c_str(), kind.c_str(), whyClass.c_str());
+                triedModel.c_str(), kind.c_str(), whyClass.c_str(),
+                // THE VENDOR'S OWN WORDS, for a SoapySDR radio only (a log line that said just "(vendor)" left a failed B200 reopen unexplained). A native
+                // radio's sentence stays out of the ring: it is the usb layer's own and quotes the device.
+                kind == "soapy" ? (", the driver said: " + cascade::core::radioreport::openFailureWords(kind, args, rx().sourceError_)).c_str() : "");
 
             // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
             // generator above, which is right - it has to run on something -
