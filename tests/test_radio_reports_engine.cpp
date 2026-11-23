@@ -1005,6 +1005,10 @@ int main(int argc, char** argv) {
         Access::restore(app, savedRadio());
         CHECK(Access::deviceOpen(app));
         Access::pass(app);
+        // FAULT E (field data 2026-11-23): a minute in which the receiver was STOPPED (nothing read, the pipeline not running) is not a silent stream
+        // and is not said; the minute that follows is its own window
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
         Access::ageOpenRadio(app, 60.0);
         Access::minute(app, 144000000, 0);   // a minute's samples at 2.4 MS/s
         Access::selectGenerator(app);

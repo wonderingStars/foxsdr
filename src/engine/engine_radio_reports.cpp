@@ -265,6 +265,14 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     // A FAULTED RADIO IS OVER (field data 2026-11-19: 38 windows after a close): its slot stays open until the pass sees it leave, but no window is said for it
     if (!j.open || j.faulted) { return; }
     const double now = clockS();
+    // FAULT E (field data 2026-11-23: one RSP1B "open" with 61 zero-sample minutes of 69, an RSPduo 31 of 105): a radio
+    // that is open while the receiver is STOPPED is not delivering anything, by the user's own choice, and the
+    // source thread's 5 s stall watchdog (which runs only on reads) rightly says nothing. Those minutes were counted
+    // as silent streams. A stopped receiver says no stream window; the clock moves on so the next running window is its own.
+    if (samplesRead == 0 && !rx().pipeline_.running()) {
+        j.lastMinuteS = now;
+        return;
+    }
     const double dt = std::max(1.0, now - j.lastMinuteS);
     j.lastMinuteS = now;
     j.accRead += samplesRead;
