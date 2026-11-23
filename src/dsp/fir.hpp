@@ -35,6 +35,11 @@ std::vector<float> windowedSincLowpass(std::size_t numTaps, double cutoffNorm,
 // the last numTaps-1 input samples and the grid phase across process() calls,
 // so any split of the input into blocks — including blocks shorter than M —
 // produces bit-for-bit the same outputs as one big call.
+//
+// THE KERNEL (2026-11-23, the demod performance pass): on x86 the dot products of up to eight outputs are computed together with SSE2, in double,
+// each output with its own accumulator and the SAME tap order as the scalar loop (tap 0 first, one multiply and one add per tap per component), so
+// every output is BIT-IDENTICAL to the scalar loop's; the scalar loop stays for the tail and for other processors, and is the reference path
+// (dsp/dsp_reference.hpp) the equivalence tests compare against. No instruction set beyond SSE2 is used, and no fused multiply-add can appear there.
 class FirDecimator {
 public:
     // taps: FIR coefficients (e.g. from windowedSincLowpass). Must be non-empty.
@@ -65,6 +70,9 @@ public:
 
 private:
     std::vector<float> taps_;
+    // The taps as doubles, each stored twice (h, h), so the several-outputs-at-once kernel loads a tap as one register that multiplies the real and
+    // the imaginary part together (the conversion float -> double is exact, so these are the very values the scalar loop converts one at a time).
+    std::vector<double> tapsDup_;
     std::size_t decim_;
     // Position of the next input sample on the decimation grid, in [0, decim_).
     // An output is produced exactly when a sample lands on phase 0.

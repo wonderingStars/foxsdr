@@ -9,7 +9,8 @@
 //        8192 so every remainder of the several-outputs-at-once grouping and every decimation-grid phase occurs, from an unaligned start;
 //   E1c  the whole receive chain (tests/demod_chain.hpp, the pipeline's classes in the pipeline's order) for each of the eight modes over 10 s:
 //        the four feeds the pipeline produces (the audio, the audio decoder plugins' tap, the IF recorder's, the multiplex recorder's) are
-//        hashed, printed and (where a reference switch exists) compared bit for bit with the reference kernels.
+//        hashed, printed and compared bit for bit with the same chain run with the optimised kernels switched back to their reference paths
+//        (dsp/dsp_reference.hpp: one bit per kernel, so each step proves only its own).
 //
 // Steps are added to this file with the commit that makes each optimisation; each says in its own section what it proves and what breaking it does.
 //
@@ -27,6 +28,7 @@
 #include "demod_chain.hpp"
 #include "dsp_signals.hpp"
 #include "dsp/demod.hpp"
+#include "dsp/dsp_reference.hpp"
 #include "dsp/fir.hpp"
 #include "ref_dsp.hpp"
 #include "test_check.hpp"
@@ -109,8 +111,9 @@ struct ChainRun {
     std::uint64_t hAudio = 0, hDecoder = 0, hIf = 0, hMpx = 0;
 };
 
-ChainRun runChain(DemodMode mode, Signal::Kind kind, double seconds, int pilotToggleMs = 0, double rate = 2.0e6) {
+ChainRun runChain(DemodMode mode, Signal::Kind kind, double seconds, unsigned referenceMask, int pilotToggleMs = 0, double rate = 2.0e6) {
     constexpr std::size_t kBlock = 1024;
+    cascade::dsp::setReferenceKernels(referenceMask);
     demodchain::Chain chain(rate, mode, 300000.0, /*keep=*/true);
     Signal sig(kind, rate, pilotToggleMs);
     std::vector<std::complex<float>> in(kBlock);
@@ -119,6 +122,7 @@ ChainRun runChain(DemodMode mode, Signal::Kind kind, double seconds, int pilotTo
         sig.fill(in.data(), kBlock);
         chain.process(in.data(), kBlock);
     }
+    cascade::dsp::setReferenceKernels(0u);
     ChainRun r;
     r.feeds = std::move(chain.feeds());
     r.hAudio = demodchain::hashBits(r.feeds.audioR.data(), r.feeds.audioR.size(), demodchain::hashBits(r.feeds.audioL.data(), r.feeds.audioL.size()));
@@ -168,18 +172,29 @@ int main() {
         }
     }
 
-    // --- E1c. THE WHOLE CHAIN, every mode, 10 s: determinism and the four feeds' hashes -------------------------------------------------------
+    // --- E1c. THE WHOLE CHAIN, every mode, 10 s: the four feeds, optimised against reference, bit for bit ----------------------------------------
+    // The same samples through the same chain twice in one process: once with the FIR kernel on its scalar reference path, once on the vector kernel.
+    // Every output the pipeline produces from this phase - the audio, the audio decoder plugins' tap, the IF recorder's feed and the multiplex
+    // recorder's - must match in every bit.
     {
         const DemodMode modes[] = {DemodMode::WFM, DemodMode::NFM, DemodMode::AM, DemodMode::DSB, DemodMode::USB, DemodMode::LSB, DemodMode::CW, DemodMode::RAW};
         for (const DemodMode mode : modes) {
             const Signal::Kind kind = mode == DemodMode::WFM ? Signal::kStereoFm : Signal::kGenerator;
-            const ChainRun a = runChain(mode, kind, 10.0);
-            const ChainRun b = runChain(mode, kind, 10.0);
-            std::printf("E1c: %-3s audio %016llx decoder %016llx if %016llx mpx %016llx (%zu audio frames)\n", modeWord(mode),
-                        static_cast<unsigned long long>(a.hAudio), static_cast<unsigned long long>(a.hDecoder), static_cast<unsigned long long>(a.hIf),
-                        static_cast<unsigned long long>(a.hMpx), a.feeds.audioL.size());
-            CHECK(a.feeds.audioL.size() > 400000u);
-            CHECK(a.hAudio == b.hAudio && a.hDecoder == b.hDecoder && a.hIf == b.hIf && a.hMpx == b.hMpx);   // the run is deterministic
+            const ChainRun ref = runChain(mode, kind, 10.0, cascade::dsp::kRefFir);
+            const ChainRun now = runChain(mode, kind, 10.0, 0u);
+            const refdsp::Diff dl = refdsp::compareFloats(ref.feeds.audioL, now.feeds.audioL);
+            const refdsp::Diff dr = refdsp::compareFloats(ref.feeds.audioR, now.feeds.audioR);
+            const refdsp::Diff dd = refdsp::compareFloats(ref.feeds.decoder48, now.feeds.decoder48);
+            const refdsp::Diff di = refdsp::compareComplex(ref.feeds.ifIq, now.feeds.ifIq);
+            const refdsp::Diff dm = refdsp::compareFloats(ref.feeds.mpx192, now.feeds.mpx192);
+            std::printf("E1c: %-3s audio %016llx decoder %016llx if %016llx mpx %016llx (%zu audio frames); reference-vs-new bit-identical: audio %s decoder %s if %s mpx %s\n",
+                        modeName(mode), static_cast<unsigned long long>(now.hAudio), static_cast<unsigned long long>(now.hDecoder),
+                        static_cast<unsigned long long>(now.hIf), static_cast<unsigned long long>(now.hMpx), now.feeds.audioL.size(),
+                        dl.sameBits && dr.sameBits ? "yes" : "NO", dd.sameBits ? "yes" : "NO", di.sameBits ? "yes" : "NO", dm.sameBits ? "yes" : "NO");
+            CHECK(now.feeds.audioL.size() > 400000u);
+            CHECK(ref.hAudio == now.hAudio && ref.hDecoder == now.hDecoder && ref.hIf == now.hIf && ref.hMpx == now.hMpx);
+            CHECK(dl.sameBits && dr.sameBits && dd.sameBits && di.sameBits && dm.sameBits);
+            if (mode == DemodMode::WFM) { CHECK(!now.feeds.mpx192.empty()); }
         }
     }
 
