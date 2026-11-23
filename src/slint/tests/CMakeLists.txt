@@ -123,7 +123,7 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/serial_port.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
+                )
         endif()
         if(unit STREQUAL "tools")
             # The TOOLS bank's logic (docs 6.40) quotes the core's pure units: the SIGNAL family's commands and grants, the airport table (airband_data, with its compiled-in
@@ -350,7 +350,7 @@ foreach(src ${_foxsdr_slint_test_sources})
         add_executable(${name} ${name}.cpp "${_lc}/host_logic.cpp" "${_lc}/lanec_logic.cpp" "${_lc}/system_logic.cpp" "${_lc}/signal_logic.cpp" "${_lc}/key_dispatch.cpp" "${_lc}/look_logic.cpp"
                        "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp" "${FOXSDR_REPO_ROOT}/src/core/countries.cpp" "${FOXSDR_REPO_ROOT}/src/core/feature_request.cpp" "${FOXSDR_REPO_ROOT}/src/core/problem_report.cpp"
                        "${FOXSDR_REPO_ROOT}/src/core/pasted_report.cpp" "${FOXSDR_REPO_ROOT}/src/core/tester_usage.cpp" "${FOXSDR_REPO_ROOT}/src/core/serial_port.cpp" "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
-                       "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
+                       "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp" )
         target_compile_features(${name} PRIVATE cxx_std_20)
         target_link_libraries(${name} PRIVATE slint_i18n)
         target_include_directories(${name} PRIVATE "${_lc}" "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/tests" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api" "${FOXSDR_REPO_ROOT}/third_party/imgui")
@@ -606,6 +606,11 @@ foreach(src ${_foxsdr_slint_test_sources})
         foxsdr_slint_ui_test(${name} "${FOXSDR_SLINT_UI_DIR}/specimens/${family}_specimen.slint")
     else()
         message(STATUS "foxsdr-slint tests: ${name} has no specimens/${family}_specimen.slint yet - not registered")
+    endif()
+    # diag_log.cpp (listed by name in these five tests) has called radioreport::pathsToToken since eae6cefc; radio_report.cpp pulls in the telemetry, the health ledger and the issue-report writer,
+    # so, as tester_host does, the engine library supplies them instead of listing the chain by hand.
+    if(name MATCHES "^test_slint_(host_keydispatch|lanec_host|host_patch|host_system|host_sdrplaydiag)$" AND TARGET cascade_engine)
+        target_link_libraries(${name} PRIVATE cascade_engine)
     endif()
 endforeach()
 
