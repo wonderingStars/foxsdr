@@ -54,6 +54,27 @@ bool isLeadByte(unsigned codePage, unsigned char b) {
 
 }  // namespace
 
+unsigned systemAnsiCodePage() {
+#if defined(_WIN32)
+    return ::GetACP();
+#else
+    return 0;
+#endif
+}
+
+bool isDoubleByteCodePage(unsigned codePage) {
+#if defined(_WIN32)
+    if (codePage == kUtf8CodePage) { return false; }
+    CPINFO info{};
+    return ::GetCPInfo(codePage, &info) != FALSE && info.MaxCharSize == 2 && info.LeadByte[0] != 0;
+#else
+    (void)codePage;
+    return false;
+#endif
+}
+
+bool isDbcsLeadByte(unsigned codePage, unsigned char b) { return isLeadByte(codePage, b); }
+
 std::string codePageToUtf8(std::string_view s, unsigned codePage) {
     if (s.empty()) { return std::string(); }
     if (codePage == kUtf8CodePage) { return sanitizeUtf8(s); }
@@ -76,25 +97,68 @@ std::string ansiToUtf8(std::string_view s) {
 // valid UTF-8 on its own, so a run is extended over every lead byte and the byte after it: a Japanese word in Shift-JIS is
 // converted as one piece, not as lead bytes among stray Latin letters. A run the code page refuses becomes U+FFFD per byte.
 // With the UTF-8 code page itself (65001) there is nothing to read: U+FFFD straight away.
+//
+// DOUBLE-BYTE PAGES, WHICH READING IS RIGHT. Text that is not valid UTF-8 is either machine text in the code page (a Chinese
+// Windows sentence) or real UTF-8 with a damaged byte. Many two-byte letters of a double-byte page are, by accident, a valid
+// two-byte UTF-8 sequence (CF B5 CD B3, the Chinese word 系统, reads as two Greek-looking letters), so keeping every valid
+// UTF-8 sequence would leave those letters wrong. The two are told apart by counting: when the bytes that are part of valid
+// multi-byte UTF-8 sequences are at least three times the stray non-ASCII bytes, the text is UTF-8 with damage and every valid
+// sequence is kept (a lead byte then does NOT take a following byte that starts a valid UTF-8 letter); otherwise the whole text
+// is read in the code page, and only when the code page refuses a byte somewhere is it read run by run. Single-byte pages
+// (1252, 1251) always take the run-by-run reading: there a valid UTF-8 letter between code-page letters is far more likely
+// UTF-8 than a coincidence. Never invalid output, whatever the input.
 std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage) {
     const std::size_t ok = utf8ValidUpTo(s);
     if (ok == s.size()) { return std::string(s); }
     if (codePage == kUtf8CodePage) { return sanitizeUtf8(s); }
-    std::string out(s.substr(0, ok));
-    std::size_t i = ok;
+    bool keepValidSequences = true;   // false: do not let a lead byte swallow a byte that starts a valid UTF-8 letter
+    if (isDoubleByteCodePage(codePage)) {
+        std::size_t validBytes = 0;
+        std::size_t strayBytes = 0;
+        for (std::size_t i = 0; i < s.size();) {
+            const std::size_t n = utf8SeqLen(s, i);
+            if (n == 0) {
+                ++strayBytes;
+                ++i;
+            } else {
+                if (n > 1) { validBytes += n; }
+                i += n;
+            }
+        }
+        if (validBytes < 3 * strayBytes) {
+            std::string whole;
+            if (convertRun(s, codePage, whole)) { return whole; }   // every byte is a letter of the code page
+            keepValidSequences = false;                              // the page refuses one somewhere: the run-by-run reading below, pairs first
+        }
+    }
+    // A byte that starts a run to be read in the code page: one that is not valid UTF-8, and, when the text is read as the code page's
+    // (keepValidSequences false), the valid multi-byte UTF-8 sequences too (they are letters of the page that look like UTF-8).
+    const auto startsRun = [&](std::size_t k) {
+        const std::size_t n = utf8SeqLen(s, k);
+        return n == 0 || (!keepValidSequences && n > 1);
+    };
+    std::string out;
+    out.reserve(s.size() + 8);
+    std::size_t i = 0;
     while (i < s.size()) {
-        const std::size_t n = utf8SeqLen(s, i);
-        if (n != 0) {
+        if (!startsRun(i)) {
+            const std::size_t n = utf8SeqLen(s, i);
             out.append(s.data() + i, n);
             i += n;
             continue;
         }
         std::size_t j = i;
         while (j < s.size()) {
+            const std::size_t n = utf8SeqLen(s, j);
+            if (keepValidSequences && n > 1) { break; }       // damaged UTF-8: a valid letter ends the run, whatever the page says of its first byte
             if (isLeadByte(codePage, static_cast<unsigned char>(s[j]))) {
+                if (keepValidSequences && j + 1 < s.size() && utf8SeqLen(s, j + 1) > 1) {
+                    ++j;                                      // the next byte starts a valid letter: it is not this lead byte's trail
+                    break;
+                }
                 j = (j + 2 <= s.size()) ? j + 2 : s.size();   // the lead byte and its trail byte, whatever the trail looks like
-            } else if (utf8SeqLen(s, j) == 0) {
-                ++j;
+            } else if (startsRun(j)) {
+                j += (n > 1) ? n : 1;
             } else {
                 break;
             }

@@ -200,6 +200,12 @@ std::string ansiToUtf8(std::string_view s);
 // The result is always valid UTF-8.
 std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage);
 std::string utf8OrAnsiToUtf8(std::string_view s);
+// The machine's ANSI code page number (CP_ACP; 0 off Windows).
+unsigned systemAnsiCodePage();
+// True when `codePage` is a double-byte one (932, 936, 949, 950): some bytes are the first half of a two-byte letter. False off Windows.
+bool isDoubleByteCodePage(unsigned codePage);
+// True when `b` is the first byte of a two-byte letter in `codePage`. False off Windows.
+bool isDbcsLeadByte(unsigned codePage, unsigned char b);
 
 // The character after the one at `p`.
 inline const char* utf8Next(const char* p) { return p + utf8CharLen(p); }
