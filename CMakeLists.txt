@@ -854,6 +854,9 @@ if(WIN32)
     # ...and the live sample-rate-change measurement on a real B200 (receive only, 98.0 MHz): a tool, not a test.
     add_executable(uhd_rate_hw EXCLUDE_FROM_ALL tools/uhd_rate_hw/main.cpp)
     target_link_libraries(uhd_rate_hw PRIVATE cascade_engine psapi)
+    # ...and the RTL-SDR re-open on a real dongle (receive only, 98.0 MHz; makes the handle invalid three times and times the recovery): a tool, not a test, not shipped.
+    add_executable(rtl_reopen_hw EXCLUDE_FROM_ALL tools/rtl_reopen_hw/main.cpp)
+    target_link_libraries(rtl_reopen_hw PRIVATE cascade_engine psapi)
 endif()
 
 # nb_real_noise - measures the noise blanker on a REAL I/Q recording of power-line impulse noise through the real Vfo, and
