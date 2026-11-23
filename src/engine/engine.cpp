@@ -52,6 +52,7 @@
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/machine_state.hpp"
+#include "core/audio_probe_backoff.hpp"
 #include "core/dsp_baseline.hpp"
 #include "core/issue_report.hpp"
 #include "core/i18n.hpp"
@@ -1437,7 +1438,7 @@ void Engine::pollAudioHealth() {
     // slow enough that a genuinely absent device is not hammered with open
     // attempts. ImGui's clock is the frame clock, which is what "once per
     // second of running UI" should mean here.
-    if (now - rx().lastAudioProbeSec_ < rx().audioProbeIntervalS_) { return; }
+    if (now - rx().lastAudioProbeSec_ < rx().audioProbeBackoff_.intervalS) { return; }
     rx().lastAudioProbeSec_ = now;
 
     // AN OPEN IN FLIGHT ALREADY OWNS THE SINK. Asking a sink that a worker is
@@ -1448,12 +1449,13 @@ void Engine::pollAudioHealth() {
     if (rx().audioOpen_.inFlight()) { return; }
 
     if (out.streamAlive()) {
-        rx().audioProbeIntervalS_ = 1.0;   // alive: the next death is retried within a second again
+        rx().audioProbeBackoff_.onAlive();   // alive: the next death is noticed within a second again
         return;
     }
     // BACK OFF BETWEEN ATTEMPTS (2026-11-23, the ringdrop diagnosis, item 7): a device that keeps refusing was asked once a second for ever; each
-    // failed attempt doubles the wait to a ceiling of 30 s.
-    rx().audioProbeIntervalS_ = std::min(30.0, rx().audioProbeIntervalS_ * 2.0);
+    // failed attempt doubles the wait, to a ceiling of FIVE seconds (core/audio_probe_backoff.hpp; it was 30 s, which left a returned device silent for
+    // up to 30 s). A re-open that SUCCEEDS puts it back to one second at once, in applyAudioOpenResult.
+    rx().audioProbeBackoff_.onProbeDead();
 
     // The stream is dead. Re-enumerate before choosing a target: the device
     // list is how recoveryDeviceIndex() resolves the remembered NAME to a
@@ -1482,7 +1484,10 @@ bool Engine::requestAudioOpen(int deviceIndex, bool recovery, bool wait) {
         // like nothing happened — "I picked the device and nothing changed" is
         // how a silent wait reads, and it is the reading that sends the next
         // report to the wrong end of the chain.
-        rx().audioHealthNote_ = tr(kAudioBusyNote);
+        // NOT for the watchdog's own no-wait re-open: it is retried every few seconds while a device is gone, and the row used to alternate between
+        // this line and "could not be reopened" on every attempt (review of the ringdrop branch, section 5). The watchdog's note stays as its last
+        // outcome set it.
+        if (wait || !recovery) { rx().audioHealthNote_ = tr(kAudioBusyNote); }
         return false;
     }
     applyAudioOpenResult();
@@ -1524,6 +1529,9 @@ void Engine::applyAudioOpenResult() {
         deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
         return;
     }
+    // THE RE-OPEN WORKED: the retry schedule starts over, so the next death is noticed within a second and not after a leftover long wait (it was
+    // reset only inside the gated probe, which runs once per interval: after a long outage the next death waited up to 30 s).
+    rx().audioProbeBackoff_.onAlive();
 
     // Keep the Sinks combo honest about what is actually open. Without this
     // the panel would name the old device while audio came out of another.

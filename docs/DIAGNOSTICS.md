@@ -2674,9 +2674,15 @@ to `ring`, which is not work, so a session losing samples to it read as an idle 
 **The audio watchdog's re-open no longer holds the pass (item 7 of the diagnosis).** A dead output's re-open used
 `AudioOpen::request`, which waits up to 1.5 s for the worker; a device whose open always outlasted that held the engine's pass
 thread (commands, publishes, the digests) for 1.5 s in every cycle. It uses `AudioOpen::requestNoWait` now - the worker starts,
-the call returns, `poll()` takes the answer on a later pass - and the retry backs off: 1, 2, 4 ... 30 s between attempts while
-the output stays dead, back to 1 s once it lives. (`tests/test_audio_open.cpp`: the call returns in well under the 700 ms the
-open takes; a second request is queued, never raced.)
+the call returns, `poll()` takes the answer on a later pass - and the retry backs off (`core/audio_probe_backoff.hpp`): 1, 2, 4 and
+then 5 s between attempts while the output stays dead (the ceiling was 30 s, which left a device that came back silent for up to
+30 s; it is 5 s), and back to 1 s THE MOMENT A RE-OPEN SUCCEEDS (`Engine::applyAudioOpenResult`) as well as when a probe finds the
+stream alive - it used to be reset only inside the gated probe, which runs once per interval, so after a long outage the next
+death waited up to 30 s to be noticed. The watchdog's own re-open no longer writes "audio device busy - still opening" on every
+attempt (the row used to alternate between that and "could not be reopened"); a user's own pick still does.
+(`tests/test_audio_open.cpp`: the call returns in well under the 700 ms the open takes; a second request is queued, never raced.
+`tests/test_audio_probe_backoff.cpp`: the schedule step by step, and that the engine uses it - read off its source, since a real
+dying device cannot be staged in a unit test.)
 
 **What the baseline measured on the bench PC (2026-11-23; i9-14900K, 32 logical processors, the real programs on the generator at
 2 MS/s, volume 0, hidden desktop).** Cost per 1024-sample block, budget 512 microseconds:
@@ -2703,7 +2709,7 @@ the DSP accounting under a held mutex, `cpu_ms` both ways, the host-audio word, 
 the widest lines WITH the log's stamp through the upload scrub), `tests/test_dsp_drop_minute_app.cpp` (the order, an
 event minute IS filed, arming, the ten-second arm, a 5 s late DSP thread files a ringdrop),
 `tests/test_audio_lead_app.cpp` (no new excuses on the audio minute), `tests/test_radio_reports_engine.cpp` (the
-first stream window's rate), `tests/test_dsp_denormal_cost.cpp`, `tests/test_dsp_phase_time.cpp` (the baseline text, the per-phase time against a real-time source, the idle generator's cost at three rates), `tests/test_dsp_phase_time_app.cpp` (the engine's loss-minute lines, the baseline, the machine and memory lines, the widest forms), `tests/test_audio_open.cpp` (the no-wait re-open).
+first stream window's rate), `tests/test_dsp_denormal_cost.cpp`, `tests/test_dsp_phase_time.cpp` (the baseline text, the per-phase time against a real-time source, the idle generator's cost at three rates), `tests/test_dsp_phase_time_app.cpp` (the engine's loss-minute lines, the baseline, the machine and memory lines, the widest forms), `tests/test_audio_open.cpp` (the no-wait re-open), `tests/test_audio_probe_backoff.cpp` (the retry schedule and its use).
 
 ### What a "no audio" report carries (0.99.61)
 

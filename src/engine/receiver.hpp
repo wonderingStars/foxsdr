@@ -32,6 +32,7 @@
 
 #include "core/airspy_settings.hpp"
 #include "core/audio_open.hpp"
+#include "core/audio_probe_backoff.hpp"
 #include "core/bias_tee.hpp"
 #include "core/minute_events.hpp"
 #include "core/noise_floor_tracker.hpp"
@@ -569,8 +570,9 @@ struct Receiver {
     // say the line, 3 = said (for this rate). baselineRate_ is the input rate the line was armed for; a different rate arms it again.
     std::uint64_t dspPhaseAtMinute_[cascade::core::Pipeline::kDspPhases] = {};
     unsigned long long pageFaultsAtMinute_ = 0;
-    // THE AUDIO WATCHDOG'S BACK-OFF (item 7): seconds between re-open attempts while the output stays dead: 1, 2, 4 ... 30; back to 1 when it lives.
-    double audioProbeIntervalS_ = 1.0;
+    // THE AUDIO WATCHDOG'S BACK-OFF (item 7): seconds between re-open attempts while the output stays dead: 1, 2, 4, 5 (the ceiling); back to 1 when it
+    // lives and when a re-open succeeds (core/audio_probe_backoff.hpp).
+    cascade::core::AudioProbeBackoff audioProbeBackoff_;
     double firstBaselineCostUs_ = 0.0;     // the first baseline line's cost per block (0 = none said yet)
     bool baselineRelogged_ = false;        // the baseline has been said again in a loss minute (once per session)
     int baselineStage_ = 0;
