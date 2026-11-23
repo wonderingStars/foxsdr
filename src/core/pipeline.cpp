@@ -44,6 +44,9 @@ constexpr double kTwoPi = 6.283185307179586476925286766559;
 // See Pipeline::setDspStartDelayForTest.
 std::atomic<int> g_dspStartDelayMs{0};
 
+// The program's age, from this translation unit's static initialisation (see Pipeline::processMsAtFirstDrain).
+const std::chrono::steady_clock::time_point g_processStart = std::chrono::steady_clock::now();
+
 // THE DSP THREAD'S HEARTBEAT (core/thread_beats.hpp, docs/engine-stage4.md 6.27). dspThreadMain registers the thread and points
 // this at its registration for as long as the loop runs; processAudioBlock - which only ever runs on that thread - says where in
 // the block it is, so a report names the step ("plugin-iq", "audio-lock", "plugin-audio") and not just "the DSP thread". A
@@ -2572,6 +2575,11 @@ void Pipeline::dspThreadBody() {
     }
     // FROM HERE THE DSP THREAD READS THE RING: what the source cannot write from now on is a consumer that fell behind.
     dspAbsent_.store(false, std::memory_order_relaxed);
+    // THE FIRST DRAIN, once per pipeline: the engine's digest minutes start from here (never 0: 0 means "not yet").
+    if (firstDrainProcessMs_.load(std::memory_order_relaxed) == 0) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_processStart).count();
+        firstDrainProcessMs_.store(ms > 0 ? static_cast<std::uint64_t>(ms) : 1u, std::memory_order_release);
+    }
 
     // dspRun_ additionally gates this loop so setInputRateHz can quiesce the
     // DSP thread alone (the source keeps feeding the ring), mirroring how

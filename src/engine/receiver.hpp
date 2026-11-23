@@ -545,6 +545,13 @@ struct Receiver {
     // source switch, a rate change, a plugin reload or wake, an output open) so each minute's mask is its own; and its count of consecutive
     // loss minutes, which overrides the discount at three. ringDroppedAbsent_ mark: the samples discarded while the DSP thread was
     // deliberately absent (Pipeline::ringDroppedAbsent), as they stood when the DSP minute last closed.
+    // THE DIGEST MINUTES START WITH THE STREAM (2026-11-23): firstDrainSeenS_ is the engine's clock when the pass first saw the DSP thread read
+    // the ring (negative until then); both digests take their marks and start their first minute kDigestGraceS after it, and close no minute
+    // before. The first minute used to start at the engine's construction and held the plugin scan, the saved radio's open and the window's
+    // creation: 117 of the field's ringdrop reports and 72 of its audiolead reports are a session's FIRST minute.
+    double firstDrainSeenS_ = -1.0;
+    bool dspMinuteArmed_ = false;
+    bool audioMinuteArmed_ = false;
     cascade::core::MinuteEventCounts dspEventMark_;
     cascade::core::MinuteEventCounts audioEventMark_;
     int dspLossRun_ = 0;

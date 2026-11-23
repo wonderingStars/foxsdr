@@ -4076,6 +4076,10 @@ private:
     std::uint64_t pluginLifeEvents_ = 0;
     // The monotonic event counts the two digests take their minute's mask from (minuteEventsSince), for the slot being worked on.
     cascade::core::MinuteEventCounts minuteEventCounts();
+    // THE DIGESTS' CLOCK (2026-11-23): false until the DSP thread has read the ring and kDigestGraceS seconds have passed since the pass
+    // first saw it do so; says the time from the program's start to that first drain once (a log line). Both digests' polls ask it.
+    static constexpr double kDigestGraceS = 10.0;
+    bool digestClockStarted(double now);
     // FOXAPI_OP_SCAN_SERIAL_PORTS (API 0.3): the ports the last scan found.
     std::vector<std::string> serialPorts_;
     std::uint64_t serialPortsScans_ = 0;

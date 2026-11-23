@@ -924,6 +924,11 @@ int main() {
         const std::size_t minute = body.find("now - rx().lastAudioLogSec_ >= 60.0");
         const std::size_t close = body.find("closeAudioMinute(", minute);
         CHECK(minute != std::string::npos && close != std::string::npos);
+        // THE MINUTE STARTS WITH THE STREAM (2026-11-23): the poll takes the marks and starts its first minute only once the DSP thread has
+        // drained and the grace has passed (the behaviour is pinned through the DSP minute, which asks the same Engine::digestClockStarted).
+        const std::size_t gate = body.find("digestClockStarted(now)");
+        CHECK(gate != std::string::npos && gate < minute);
+        CHECK(body.find("audioMinuteArmed_ = true") != std::string::npos);
         // ...inside that block, before the next statement of the poll (the 1 Hz probe).
         CHECK(minute != std::string::npos && close < body.find("now - rx().lastAudioProbeSec_ < 1.0"));
         // The card and the rail both ask for the sentence.

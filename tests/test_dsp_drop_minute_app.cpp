@@ -252,6 +252,20 @@ struct AppWindowTestAccess {
     static std::string bundle(AppWindow& a) { return a.currentDiagnosticsBundle(); }
     // A deliberate event for the digests' mask (the engine's own plugin-rescan counter, bumped as test_audio_lead_app does).
     static void noteRescan(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginScans_; }); }
+    // The engine's clock moved FORWARD by `seconds` (as test_radio_reports_engine.cpp ages a session), and the digest clock put back to "the stream
+    // has not yet been seen to start".
+    static void ageSession(AppWindow& a, double seconds) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).clockOrigin_ -= std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
+        });
+    }
+    static void unarm(AppWindow& a) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).rx().dspMinuteArmed_ = false;
+            th::engine(a).rx().firstDrainSeenS_ = -1.0;
+        });
+    }
+    static bool armed(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).rx().dspMinuteArmed_; }); }
 };
 
 }  // namespace cascade::gui
@@ -498,7 +512,7 @@ int main() {
     // (core/minute_events.hpp); three consecutive LOSS minutes are filed whatever they held. A plugin rescan is the event used here: it
     // is the engine's own counter, bumped as the audio test does.
     {
-        auto stallMinute = [&] {
+        auto stallMinute = [&](bool close = true) {
             CHECK(drained(p));
             const std::uint64_t readBefore = p.sourceSamplesRead();
             std::atomic<bool> acquired{false};
@@ -509,7 +523,7 @@ int main() {
             CHECK(waitFor([&] { return p.sourceSamplesRead() - readBefore >= grant; }));
             holder.join();
             CHECK(waitFor([&] { return p.dspBlockLongestNs() >= 1000000000ULL; }));
-            Access::closeDspMinute(app);
+            if (close) { Access::closeDspMinute(app); }
         };
         auto countLines = [&](const char* needle) {
             std::size_t n = 0;
@@ -547,6 +561,41 @@ int main() {
         Access::noteRescan(app);
         stallMinute();
         CHECK(ringdropReports() == base3 + 1);             // the third in a row
+        CHECK(drained(p));
+        Access::closeDspMinute(app);
+
+        // --- 3c. THE FIRST MINUTE STARTS WITH THE STREAM, NOT WITH THE ENGINE (2026-11-23) --------------------------------------------
+        // The engine's minute clock used to start at its construction, so the first minute held the plugin scan, the saved radio's open and the
+        // window's creation (117 of the field's ringdrop reports and 72 of its audiolead reports are a session's first minute). Now no minute
+        // closes before the DSP thread has read the ring AND ten seconds have passed, the marks are taken then, and the first minute is the
+        // sixty seconds after. The engine's clock is aged here instead of waited for.
+        cascade::core::issue::resetIssueReportsForTest();
+        Access::unarm(app);
+        const std::size_t rep0 = ringdropReports();
+        const std::size_t drops0 = dropLines().size();
+        const std::size_t drains0 = countLines("dsp: first drain ");
+        Access::ageSession(app, 100.0);                     // an old engine: the old rule would close the first minute at the next poll
+        Access::pollDspMinute(app);                         // the pass sees the stream: the time to first drain is said, once
+        CHECK(countLines("dsp: first drain ") == drains0 + 1);
+        CHECK(!Access::armed(app));
+        stallMinute(false);                                 // the set-up window loses samples
+        Access::ageSession(app, 5.0);
+        Access::pollDspMinute(app);
+        CHECK(!Access::armed(app));                         // inside the grace: no minute, no marks
+        CHECK(dropLines().size() == drops0);
+        Access::ageSession(app, 6.0);
+        Access::pollDspMinute(app);
+        CHECK(Access::armed(app));                          // the grace is over: the marks are taken HERE, after the loss
+        Access::ageSession(app, 61.0);
+        Access::pollDspMinute(app);                         // the first minute: clean
+        CHECK(dropLines().size() == drops0);                // what the set-up window lost is nobody's minute
+        CHECK(ringdropReports() == rep0);
+        CHECK(countLines("dsp: first drain ") == drains0 + 1);   // said once
+        stallMinute(false);                                 // a loss INSIDE the first judged minute
+        Access::ageSession(app, 61.0);
+        Access::pollDspMinute(app);
+        CHECK(dropLines().size() == drops0 + 1);
+        CHECK(ringdropReports() == rep0 + 1);
         CHECK(drained(p));
         Access::closeDspMinute(app);
     }

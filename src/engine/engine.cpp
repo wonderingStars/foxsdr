@@ -1046,10 +1046,39 @@ void Engine::pollDspMinute() {
         }
     }
     const double now = clockS();
+    if (!rx().dspMinuteArmed_) {
+        // THE FIRST MINUTE STARTS WITH THE STREAM: nothing is judged before the DSP thread has read the ring and the grace has passed, and
+        // the marks are taken HERE - what the ring dropped or the sink starved while the program was still setting itself up is not a minute.
+        if (!digestClockStarted(now)) { return; }
+        rx().dspMinuteArmed_ = true;
+        rx().lastDspLogSec_ = now;
+        rx().dspDroppedAtMinute_ = rx().pipeline_.ringDroppedSamples();
+        rx().dspReadAtMinute_ = rx().pipeline_.sourceSamplesRead();
+        rx().dspCutAtMinute_ = rx().pipeline_.ringCutWrites();
+        rx().dspAbsentAtMinute_ = rx().pipeline_.ringDroppedAbsent();
+        rx().dspEventMark_ = minuteEventCounts();
+        rx().dspLossRun_ = 0;
+        // (the minute's two maxima are taken into the session's, so the bundle keeps what the set-up window held)
+        rx().dspRingHighWaterSession_ = std::max(rx().dspRingHighWaterSession_, rx().pipeline_.takeRingHighWaterSamples());
+        rx().dspBlockLongestNsSession_ = std::max(rx().dspBlockLongestNsSession_, rx().pipeline_.takeDspBlockLongestNs());
+        return;
+    }
     if (now - rx().lastDspLogSec_ >= 60.0) {
         rx().lastDspLogSec_ = now;
         closeDspMinute();
     }
+}
+
+bool Engine::digestClockStarted(double now) {
+    if (rx().firstDrainSeenS_ < 0.0) {
+        if (!rx().pipeline_.dspHasDrained()) { return false; }
+        rx().firstDrainSeenS_ = now;
+        // ONCE: how long the program had been running when the stream first reached the DSP thread (no radio, no frequency, no path).
+        const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+        cascade::core::diagLogf("dsp: first drain %llu ms after the program started; digest minutes start in %.0f s%s",
+                                static_cast<unsigned long long>(rx().pipeline_.processMsAtFirstDrain()), kDigestGraceS, radioTag.c_str());
+    }
+    return now - rx().firstDrainSeenS_ >= kDigestGraceS;
 }
 
 // THE RING ITSELF, FOR THE BUNDLE'S dsp-ring LINE (GitHub issue 6, the 0.99.90 report; master 0.99.101, d776bc58, where the window read these
@@ -1225,7 +1254,22 @@ void Engine::pollAudioHealth() {
     // posture as the recorder's own status lines, and the only way a number
     // nobody watches (this goes to the log, not the screen) stays worth
     // reading when it does fire.
-    if (now - rx().lastAudioLogSec_ >= 60.0) {
+    // THE FIRST MINUTE STARTS WITH THE STREAM (2026-11-23, see pollDspMinute): no minute closes before the DSP thread has read the ring and the
+    // grace has passed, and the marks are taken when it has - the starvation of the set-up window is the program's own.
+    if (!rx().audioMinuteArmed_) {
+        if (digestClockStarted(now)) {
+            rx().audioMinuteArmed_ = true;
+            rx().lastAudioLogSec_ = now;
+            rx().audioUnderrunsAtLogStart_ = out.underruns();
+            rx().audioPrimingAtLogStart_ = out.primingCallbacks();
+            rx().audioRingLowWaterFrames_ = ringFrames;
+            rx().audioRescansAtLogStart_ = pluginScans_;
+            rx().audioStopsAtLogStart_ = rx().receiverStops_;
+            rx().audioOpensAtLogStart_ = out.opens();
+            rx().audioEventMark_ = minuteEventCounts();
+            rx().audioLossRun_ = 0;
+        }
+    } else if (now - rx().lastAudioLogSec_ >= 60.0) {
         rx().lastAudioLogSec_ = now;
         closeAudioMinute(ringFrames);
     }

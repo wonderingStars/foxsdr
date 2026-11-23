@@ -324,6 +324,12 @@ public:
     std::size_t takeRingHighWaterSamples();
     std::uint64_t dspBlockLongestNs() const;
     std::uint64_t takeDspBlockLongestNs();
+    // THE FIRST TIME THE DSP THREAD READ THE RING (2026-11-23): the engine starts its digest minutes from here (with a grace), not from its
+    // own construction - the first minute used to hold the plugin scan, the saved radio's open and the window's creation, which the stream
+    // never saw. processMsAtFirstDrain() is how long the program had been running then, in milliseconds from its static initialisation
+    // (the loader's own time before that is not counted); 0 until the thread has drained once. Sticky: a later stop and start do not clear it.
+    bool dspHasDrained() const { return firstDrainProcessMs_.load(std::memory_order_acquire) != 0; }
+    std::uint64_t processMsAtFirstDrain() const { return firstDrainProcessMs_.load(std::memory_order_acquire); }
     // SAMPLES DISCARDED WHILE THE DSP THREAD WAS DELIBERATELY ABSENT (2026-11-23, the ringdrop diagnosis): a live sample-rate change
     // joins the DSP thread and respawns it while the source thread keeps writing ("a full ring drops overflow by design"), and
     // every DSP (re)spawn has a start delay with the source already running. What the ring could not hold in those windows is
@@ -1643,6 +1649,7 @@ private:
     // ring-resizing setSource, a live setInputRateHz) and cleared by the DSP thread when it begins to read; ringDroppedAbsent_ is
     // written by the source thread in noteRingWrite. The two switch counts are the controlling thread's.
     std::atomic<bool> dspAbsent_{false};
+    std::atomic<std::uint64_t> firstDrainProcessMs_{0};   // see dspHasDrained(); written once, by the DSP thread
     std::atomic<std::uint64_t> ringDroppedAbsent_{0};
     std::atomic<std::uint64_t> sourceSwitches_{0};
     std::atomic<std::uint64_t> rateChanges_{0};
