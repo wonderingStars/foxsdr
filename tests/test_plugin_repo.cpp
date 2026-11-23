@@ -44,6 +44,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/plugin_repo.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>

@@ -87,11 +87,70 @@ jobs:
           test -f "$sdk/lib/libslint_cpp.so"
           echo "SLINT_SDK=$sdk" >> "$GITHUB_ENV"
 
+      # THE x64 BUILD MAKES ABOUT 3300 TARGETS (every Slint test is its own executable) and the job has died partway through it on every push from 0.99.110
+      # to 0.99.112 ("The hosted runner lost communication with the server" / "received a shutdown signal", at target 987 to 1066 of 3300 or after 75 minutes),
+      # with no compiler error in the log. Run 45272697461 shows the cost of the death: the job's whole log was lost (the API answers "log not found"), so a
+      # monitor that only PRINTS is lost with it. THE CAUSE IS NOT PROVEN. Disk, memory and plain elapsed time are all candidates; the job has no
+      # timeout-minutes, so GitHub's default of 360 minutes is far off (the job died after 77).
+      #   - "Free disk space" removes tool chains this job never uses (nothing the build needs).
+      #   - Configure caps concurrent LINKS at two (a Ninja job pool): a mitigation for memory, not a proven fix.
+      #   - Build watches disk and memory every 20 seconds, prints a "resources:" line every two minutes with the target counter, and when free disk falls
+      #     under 1500 MB or available memory under 400 MB it prints the evidence (df, free, the biggest processes, the biggest build files) and stops ninja
+      #     itself, so the job FAILS WITH A LOG instead of dying without one.
+      #   - ninja runs with -k 0 (keep going): one run lists every compile error, not only the first.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_SLINT=ON "-DCMAKE_PREFIX_PATH=$SLINT_SDK"
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_SLINT=ON "-DCMAKE_PREFIX_PATH=$SLINT_SDK" -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link
 
       - name: Build
-        run: cmake --build build -j"$(nproc)"
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/build-progress.log"
+          : > "$log"
+          (
+            # the watcher must never die of its own pipes (grep finding nothing, head closing early): no -e, no pipefail in here
+            set +e +o pipefail
+            n=0
+            while true; do
+              sleep 20
+              n=$((n + 1))
+              avail_mb=$(df -Pm / | awk 'NR==2 {print $4}')
+              mem_mb=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
+              target=$(grep -o '\[[0-9]*/[0-9]*\]' "$log" | tail -n 1)
+              if [ $((n % 6)) -eq 0 ]; then
+                echo "resources: $(date +%T) target $target disk-free-MB=$avail_mb mem-available-MB=$mem_mb | $(free -m | sed -n 2p | tr -s ' ')"
+              fi
+              if [ "$avail_mb" -lt 1500 ] || [ "$mem_mb" -lt 400 ]; then
+                echo "WATCHDOG: $(date +%T) disk-free-MB=$avail_mb mem-available-MB=$mem_mb at target $target: stopping ninja so this job fails WITH a log"
+                df -h / /mnt || true
+                free -m
+                ps -eo pid,rss,etime,args --sort=-rss | head -n 15 | cut -c1-200
+                du -sh build || true
+                find build -type f -size +30M -printf '%s %p\n' 2>/dev/null | sort -rn | head -n 15
+                pkill -INT -x ninja || true
+                exit 0
+              fi
+            done
+          ) &
+          monitor=$!
+          trap 'kill "$monitor" 2>/dev/null || true' EXIT
+          cmake --build build -j"$(nproc)" -- -k 0 2>&1 | tee -a "$log"
+
+      # Runs after a failed or stopped Build (it cannot run if the runner itself dies): was the kernel's out-of-memory killer involved, and where did the disk go.
+      - name: Build diagnosis
+        if: failure() || cancelled()
+        run: |
+          df -h / /mnt || true
+          free -m
+          sudo dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process' | tail -n 20 || true
+          du -sh build || true
+          find build -type f -size +30M -printf '%s %p\n' 2>/dev/null | sort -rn | head -n 15 || true
 
       # The runner has no audio device at all. Rather than let that fail the
       # job, a dummy ALSA device is provided so the audio path is still
@@ -262,8 +321,9 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
+      # -k 0: ninja keeps going past a failed target, so ONE run lists every compile error (it still exits nonzero).
       - name: Build
-        run: cmake --build build -j"$(nproc)"
+        run: cmake --build build -j"$(nproc)" -- -k 0
 
       - name: Provide a null audio device
         run: |

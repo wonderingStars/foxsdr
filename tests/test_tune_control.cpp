@@ -12,6 +12,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>

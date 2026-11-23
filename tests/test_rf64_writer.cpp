@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>

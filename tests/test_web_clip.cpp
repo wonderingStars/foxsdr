@@ -1,5 +1,6 @@
 // Tests for the browser clip request model (net/web_clip.hpp).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <cstdint>

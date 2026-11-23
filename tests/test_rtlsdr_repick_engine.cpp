@@ -213,7 +213,12 @@ using Access = cascade::gui::AppWindowTestAccess;
 int main() {
     std::printf("test_rtlsdr_repick_engine\n");
     setEnv("CASCADE_CONFIG_TEST", "1");
-    setEnv("FOXSDR_INSTANCE_SCOPE", "rpe" + std::to_string(static_cast<unsigned long>(GetCurrentProcessId())));
+#if defined(_WIN32)
+    const unsigned long ownPid = static_cast<unsigned long>(GetCurrentProcessId());
+#else
+    const unsigned long ownPid = static_cast<unsigned long>(getpid());
+#endif
+    setEnv("FOXSDR_INSTANCE_SCOPE", "rpe" + std::to_string(ownPid));
     isolate();
     Access::installHooks();
 

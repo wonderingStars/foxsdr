@@ -46,6 +46,8 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #else
+#include <unistd.h>
+
 #include <condition_variable>
 
 // Must match every other TU in the program that includes httplib.h on
@@ -607,6 +609,15 @@ void writeConfigWithUsage(const fs::path& p, bool usageOn, const std::string& in
     out << "}\n";
 }
 
+// This process's id, either platform (the pending-report tests name files after it).
+unsigned long thisProcessId() {
+#if defined(_WIN32)
+    return static_cast<unsigned long>(::GetCurrentProcessId());
+#else
+    return static_cast<unsigned long>(::getpid());
+#endif
+}
+
 // One environment variable, either platform (an empty value removes it).
 void setEnvVar(const char* name, const std::string& value) {
 #if defined(_WIN32)
@@ -764,8 +775,8 @@ static void pendingFreezeSweepBlock() {
         "--- context ---\nversion: 0.99.112\ncommit: abc123def456\nos: Windows 10.0.22631\narch: x64\n"
         "--- modules ---\n  cascade.exe base=0x00007FF700000000 size=0x2C8000 pdb=cascade.pdb build=651FD5EB776649E7B91461B1EB1EB8C525\n"
         "--- thread 100 (gui, stalled) ---\n  cascade.exe+0x9999\n--- log (last 1 of 1 lines) ---\nwatchdog armed\n";
-    const unsigned long myPid = static_cast<unsigned long>(::GetCurrentProcessId());
-    writeFile(dir / ("hang-" + std::to_string(myPid) + "-1.txt"), body);                    // this process's, still pending
+    const unsigned long myPid = thisProcessId();
+    writeFile(dir / ("hang-" + std::to_string(myPid) + "-1.txt"), body);                   // this process's, still pending
     std::string other = body;
     other.replace(other.find("FEDCBA9876543210"), 16, "0123456789ABCDEF");                  // (another signature: not a duplicate of the first)
     writeFile(dir / ("hang-" + std::to_string(myPid + 1000u) + "-1.txt"), other);           // an earlier process's, never recovered
@@ -817,7 +828,7 @@ static void pendingFilesDoNotUseTheCapBlock() {
         "--- context ---\nversion: 0.99.112\ncommit: abc123def456\nos: Windows 10.0.22631\narch: x64\n"
         "--- modules ---\n  cascade.exe base=0x00007FF700000000 size=0x2C8000 pdb=cascade.pdb build=651FD5EB776649E7B91461B1EB1EB8C525\n"
         "--- thread 100 (disk-job, stalled) ---\n  cascade.exe+0x9999\n--- log (last 1 of 1 lines) ---\nwatchdog armed\n";
-    const unsigned long myPid = static_cast<unsigned long>(::GetCurrentProcessId());
+    const unsigned long myPid = thisProcessId();
     writeFile(dir / ("hang-" + std::to_string(myPid) + "-w1.txt"), body);
     writeFile(dir / ("hang-" + std::to_string(myPid) + "-w2.txt"), body);
     std::string other = body;

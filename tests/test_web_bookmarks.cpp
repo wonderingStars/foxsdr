@@ -1,5 +1,6 @@
 // Tests for the browser's personal bookmark sets (net/web_bookmarks.hpp).
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <fstream>
