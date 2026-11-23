@@ -158,7 +158,7 @@ public:
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
-        addr.sin_port = 0;
+        addr.sin_port = ::htons(static_cast<std::uint16_t>(bindPort.load()));
         if (::bind(listener_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
             return false;
         }
@@ -193,6 +193,10 @@ public:
     std::atomic<std::uint32_t> tunerType{5};
     std::atomic<std::uint32_t> gainCount{29};
     std::atomic<Header> header{Header::Normal};
+    // The header is sent this long after the accept (a real rtl_tcp needs ~3.6 s after a previous client leaves).
+    std::atomic<int> headerDelayMs{0};
+    // 0: an ephemeral port; else the port to bind (a server that appears LATER on an address that refused before).
+    std::atomic<int> bindPort{0};
     // The stream waits for this: a test that wants to watch bytes arrive in
     // small pieces opens the gate only AFTER the client's reader is running.
     std::atomic<bool> streamEnabled{true};
@@ -278,6 +282,10 @@ private:
             // Keep the socket open: it is the client that must decide this is
             // not rtl_tcp, not a close that tells it so.
         } else if (h == Header::Normal) {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(headerDelayMs.load());
+            while (std::chrono::steady_clock::now() < until && run_.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
             Bytes hdr = {'R', 'T', 'L', '0'};
             const std::uint32_t t = tunerType.load();
             const std::uint32_t g = gainCount.load();
@@ -617,6 +625,16 @@ int main() {
         // A bare IPv6 literal has no room for a port, so it is all host.
         CHECK(cascade::source::parseRtlTcpAddress("rtltcp=fe80::2", host, port, error));
         CHECK(host == "fe80::2" && port == 1234);
+        // PASTED FORMS: a URL-style prefix, a trailing slash, stray spaces. Each used to be read as part of the host name (the
+        // scheme made two colons, so the whole text was taken for an IPv6 literal) and reported as "host not found".
+        CHECK(cascade::source::parseRtlTcpAddress("rtltcp=rtl_tcp://192.168.1.20:1235/", host, port, error));
+        CHECK(host == "192.168.1.20" && port == 1235);
+        CHECK(cascade::source::parseRtlTcpAddress("rtltcp=  tcp://sdr.local  ", host, port, error));
+        CHECK(host == "sdr.local" && port == 1234);
+        CHECK(cascade::source::parseRtlTcpAddress("rtltcp=RTLTCP://[::1]:4321", host, port, error));
+        CHECK(host == "::1" && port == 4321);
+        CHECK(cascade::source::parseRtlTcpAddress("rtltcp=sdr.local:1234/", host, port, error));
+        CHECK(host == "sdr.local" && port == 1234);
         // Nothing typed: the server's own default place.
         CHECK(cascade::source::parseRtlTcpAddress("", host, port, error));
         CHECK(host == "127.0.0.1" && port == 1234);
@@ -959,20 +977,26 @@ int main() {
         CHECK(daemon.start());
         RtlTcpSource src;
         CHECK(src.open(daemon.args()));
-        CHECK(src.setSampleRateHz(2.0e6));  // nearest menu entry to 2 MS/s
+        // 2.0 MS/s IS ON THE RTL-SDR MENU since 0.99.110 (commit c6f56991: the chip's ratio gives 2000000.03 S/s and a real rtl_tcp
+        // serves it, measured 2026-11-23 at 1.994 MS/s delivered). The old expectation (snapped to 2.048) pinned the premise that
+        // 2 MS/s is unsupported; a rate NOT on the menu still snaps to its nearest entry.
+        CHECK(src.setSampleRateHz(2.1e6));
         CHECK_NEAR(src.sampleRateHz(), 2048000.0, 1e-9);
+        CHECK(src.setSampleRateHz(2.0e6));
+        CHECK_NEAR(src.sampleRateHz(), 2000000.0, 1e-9);
         CHECK(src.setAutoGain(false));      // adoptDeviceMirrors
         CHECK(src.start());
         CHECK(src.running());
         const auto got = readN(src, 2000, std::chrono::milliseconds(3000));
         CHECK(got.size() == 2000);
         // The sample-rate command after open() reached the server.
-        CHECK(waitForCommands(daemon, 0, 9));
+        CHECK(waitForCommands(daemon, 0, 10));
         const std::vector<Bytes> cmds = daemon.commands(0);
-        CHECK(cmds.size() >= 9);
-        if (cmds.size() >= 9) {
-            CHECK(cmds[7] == (Bytes{0x02, 0x00, 0x1F, 0x40, 0x00}));
-            CHECK(cmds[8] == (Bytes{0x03, 0x00, 0x00, 0x00, 0x01}));
+        CHECK(cmds.size() >= 10);
+        if (cmds.size() >= 10) {
+            CHECK(cmds[7] == (Bytes{0x02, 0x00, 0x1F, 0x40, 0x00}));  // 2.1 MS/s snapped to 2,048,000
+            CHECK(cmds[8] == (Bytes{0x02, 0x00, 0x1E, 0x84, 0x80}));  // 2,000,000 as asked
+            CHECK(cmds[9] == (Bytes{0x03, 0x00, 0x00, 0x00, 0x01}));
         }
         CHECK(!src.faulted());
         // The stream-health line is the one the other drivers write.
@@ -1082,6 +1106,7 @@ int main() {
         CHECK(holder.start());
         const std::string args = holder.args();
         holder.stop();
+        RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, std::chrono::milliseconds(300));
         RtlTcpSource src;
         const auto t0 = std::chrono::steady_clock::now();
         CHECK(!src.open(args));
@@ -1101,6 +1126,7 @@ int main() {
         if (!hasWord(err, "did not answer")) { CHECK(why == health::RadioReason::Absent); }
         CHECK(!src.start());
         CHECK(!src.setCenterFrequencyHz(100e6));  // nothing is open
+        RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, RtlTcpSource::kRefusedRetryDefault);
     }
     {
         // Something that answers, but not with an rtl_tcp header.
@@ -1140,6 +1166,7 @@ int main() {
         FakeRtlTcp daemon;
         CHECK(daemon.start());
         daemon.header.store(FakeRtlTcp::Header::Silent);
+        RtlTcpSource::setWaitsForTest(std::chrono::milliseconds(2500), std::chrono::milliseconds(0));
         RtlTcpSource src;
         const auto t0 = std::chrono::steady_clock::now();
         CHECK(!src.open(daemon.args()));
@@ -1147,9 +1174,65 @@ int main() {
                             std::chrono::steady_clock::now() - t0)
                             .count();
         const std::string err = src.lastError();
+        std::printf("     silent server: %lld ms, \"%s\"\n", static_cast<long long>(ms), err.c_str());
         CHECK(hasWord(err, "timed out"));
+        CHECK(hasWord(err, "connected to 127.0.0.1:" + std::to_string(daemon.port())));  // says it CONNECTED, and to what
+        CHECK(hasWord(err, "busy with another program"));
         CHECK(health::classifyRadioOpen("rtltcp", err) == health::RadioReason::Timeout);
-        CHECK(ms >= 1500 && ms < 6000);  // the 2000 ms receive bound, measured
+        CHECK(ms >= 2400 && ms < 8000);  // the configured header wait, measured
+        RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, RtlTcpSource::kRefusedRetryDefault);
+    }
+    {
+        // A SERVER THAT TAKES 5 s TO SEND ITS HEADER (the real rtl_tcp took 3.6 s right after a client left, measured
+        // 2026-11-23): opens with the default wait. With the old 2 s wait (two receives, 4 s at most) this failed.
+        FakeRtlTcp daemon;
+        CHECK(daemon.start());
+        daemon.headerDelayMs.store(5000);
+        daemon.streamEnabled.store(false);
+        RtlTcpSource src;
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(src.open(daemon.args()));
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("     slow header: opened after %lld ms\n", static_cast<long long>(ms));
+        CHECK(ms >= 4800 && ms < 11000);
+        CHECK(src.isOpen());
+        src.closeDevice();
+    }
+    {
+        // A SERVER THAT APPEARS WHILE THE OPEN IS STILL TRYING: the address refuses first (the real rtl_tcp refuses while it tears
+        // down the previous client) and is listening 3 s later (past the ~2 s a Windows connect keeps trying by itself). The open succeeds instead of reporting "refused".
+        FakeRtlTcp probe;
+        CHECK(probe.start());
+        const int port = probe.port();
+        probe.stop();  // the port now refuses
+        FakeRtlTcp late;
+        late.bindPort.store(port);
+        late.streamEnabled.store(false);
+        std::thread starter([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+            late.start();
+        });
+        RtlTcpSource src;
+        const bool ok = src.open("rtltcp=127.0.0.1:" + std::to_string(port));
+        starter.join();
+        CHECK(ok);
+        if (!ok) { std::printf("     late server: %s\n", src.lastError()); }
+        src.closeDevice();
+    }
+    {
+        // A refusal that never clears is still reported as one, once the retry window is spent.
+        FakeRtlTcp probe;
+        CHECK(probe.start());
+        const std::string args = probe.args();
+        probe.stop();
+        RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, std::chrono::milliseconds(800));
+        RtlTcpSource src;
+        CHECK(!src.open(args));
+        const std::string err = src.lastError();
+        CHECK(hasWord(err, "accepted the connection"));
+        CHECK(hasWord(err, "one client at a time"));
+        CHECK(health::classifyRadioOpen("rtltcp", err) == health::RadioReason::Absent);
+        RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, RtlTcpSource::kRefusedRetryDefault);
     }
     {
         // An address that is not one.

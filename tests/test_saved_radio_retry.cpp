@@ -49,6 +49,14 @@ struct Q {
 int main() {
     std::printf("saved radio retry\n");
 
+    // --- which failures are worth waiting out (2026-11-23) -----------------
+    {
+        std::printf("  busy, and an rtl_tcp server that is not there yet, are retried; nothing else is\n");
+        CHECK(gui::savedRadioFailureWorthRetry(true, false));    // a held USB radio (the original case)
+        CHECK(gui::savedRadioFailureWorthRetry(false, true));    // rtltcp absent or silent: refused / not found / timed out
+        CHECK(!gui::savedRadioFailureWorthRetry(false, false));  // an unplugged dongle, a missing driver, a refused rate
+    }
+
     // --- the schedule --------------------------------------------------------
     {
         std::printf("  four tries, 2, 4, 8 and 16 s after the last failure\n");

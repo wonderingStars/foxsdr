@@ -53,6 +53,13 @@ namespace cascade::gui {
 //     "never".
 inline constexpr double kSavedRadioRetryDelaysSec[4] = {2.0, 4.0, 8.0, 16.0};
 
+// WHICH FAILURES ARE WORTH WAITING OUT. A BUSY radio (the original case, above), and - added 2026-11-23 - an rtl_tcp server that is not
+// there yet: not found by name (the network is not up at log-in), refused (the server is not started yet, or is still letting go of its
+// previous client), or silent (it is still starting its dongle). Field data 2026-11-22: a saved rtl_tcp server refused at launch, no retry
+// was made, and the next launch 14 minutes later opened it. Any other class (a wrong driver, a refused rate, an unplugged USB dongle)
+// is not cured by waiting. `networkServerNotThere` is true only for the rtltcp driver with an absent or timeout reason.
+inline bool savedRadioFailureWorthRetry(bool busy, bool networkServerNotThere) { return busy || networkServerNotThere; }
+
 inline bool savedRadioRetryDue(bool keptRadioValid, bool lastFailureBusy, int attemptsMade,
                                bool deviceOpen, bool openPending, bool scanPending,
                                double nowSec, double lastFailureSec) {
