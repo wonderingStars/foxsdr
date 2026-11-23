@@ -74,6 +74,9 @@ struct State {
     std::mutex probe;  // guards keyedProbe and keyedOwner
     std::function<bool()> keyedProbe;
     const void* keyedOwner = nullptr;
+    // The calls poll() has returned as overrun and has not yet seen end (guarded by `poll`).
+    struct ReportedCall { int index; std::uint32_t epoch; std::int64_t startMs; Finding finding; };
+    std::vector<ReportedCall> reportedCalls;
 };
 
 State& state() {
@@ -354,6 +357,20 @@ PollResult Registry::poll() {
         }
     }
 
+    // THE CALLS REPORTED EARLIER THAT HAVE ENDED: the slot is free, or has been entered again since (a different epoch).
+    {
+        auto& rc = state().reportedCalls;
+        for (std::size_t k = 0; k < rc.size();) {
+            const CallSlot& c = g_calls[rc[k].index];
+            const bool still = c.state.load(std::memory_order_acquire) == 2 && c.epoch.load(std::memory_order_relaxed) == rc[k].epoch;
+            if (still) { ++k; continue; }
+            Finding f = rc[k].finding;
+            f.stalledMs = now - rc[k].startMs;
+            out.callsReturned.push_back(std::move(f));
+            rc.erase(rc.begin() + static_cast<std::ptrdiff_t>(k));
+        }
+    }
+
     // THE CALLS IN FLIGHT. A call is accused only on a reading that is unchanged (the slot was not freed and reused between the reads),
     // and each stage of each call is claimed - and so reported - once, by whoever gets there first.
     for (int i = 0; i < kMaxCalls; ++i) {
@@ -383,6 +400,8 @@ PollResult Registry::poll() {
             Finding f2 = f;
             f2.stage = st;
             f2.budgetMs = st == 2 ? wedge : budget;
+            f2.callToken = (static_cast<std::uint64_t>(i) << 32) | epoch;
+            if (st == 1) { state().reportedCalls.push_back({i, epoch, start, f2}); }
             out.calls.push_back(std::move(f2));
         }
     }

@@ -18,6 +18,7 @@
 #include "core/event_trail.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/stall_context.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/frame_timing.hpp"
 #include "core/phase_clock.hpp"
 #include "core/plugin_fault.hpp"
@@ -1133,6 +1134,42 @@ bool debuggerAttachedNow() {
 std::atomic<unsigned> g_wedgeFilesWritten{0};
 std::atomic<unsigned> g_wedgeSeq{0};
 
+// THE OUTCOME OF A THREAD'S OR A CALL'S REPORT (review of fix/freezes, finding 1). Every freeze report is written `outcome: pending`; the frame loop's watchdog closes its own file
+// when the stall ends (HangWatchdog::threadMain). The reports of the thread monitor (`hang-<pid>-w<N>`: a worker that stopped beating, a call into a plugin past its budget) were never
+// closed, so the sweep held them for the whole session and the next start sent them as `not-recovered`, which is false for a call that returned. This book remembers which file belongs
+// to which thread or call; the monitor's poll returns the recovery (`recovered`, `callsReturned`) and the file gets its `--- outcome ---` section. Process-wide because two watchdogs in
+// one process share the monitor and the directory. Leaked on purpose (core/leak_on_purpose.hpp): a poll can run while the process ends.
+struct OutcomeBook {
+    std::mutex mu;
+    std::vector<std::pair<std::string, std::string>> open;  // key, file path
+};
+OutcomeBook& outcomeBook() {
+    static OutcomeBook* const b = cascade::core::leakOnPurpose(new OutcomeBook());
+    return *b;
+}
+std::string wedgeKey(const beats::Finding& f) {
+    return f.stage != 0 ? "call:" + std::to_string(f.callToken) : f.name + ":" + std::to_string(f.tid);
+}
+void rememberOutcome(const beats::Finding& f, const std::string& path) {
+    OutcomeBook& b = outcomeBook();
+    std::lock_guard<std::mutex> lk(b.mu);
+    b.open.emplace_back(wedgeKey(f), path);
+}
+void closeOutcome(const beats::Finding& f) {
+    std::string path;
+    {
+        OutcomeBook& b = outcomeBook();
+        std::lock_guard<std::mutex> lk(b.mu);
+        const std::string key = wedgeKey(f);
+        for (auto it = b.open.begin(); it != b.open.end(); ++it) {
+            if (it->first == key) { path = it->second; b.open.erase(it); break; }
+        }
+    }
+    if (path.empty()) { return; }
+    std::ofstream o(path, std::ios::binary | std::ios::app);
+    if (o) { o << "--- outcome ---\nrecovered-after-ms: " << static_cast<long long>(f.stalledMs) << "\n"; }
+}
+
 // The header lines every freeze report carries about WHICH thread stopped (the GUI's, or a worker named by the registry),
 // and whether the radio was keyed at the time. Always written, so the field inventory (hangReportFieldNames) holds for
 // both kinds of report.
@@ -1251,7 +1288,9 @@ void HangWatchdog::pollThreadBeats(double pollIntervalMs) {
     for (const beats::Finding& f : r.recovered) {
         DiagLog::instance().writef("warn", "thread %s recovered after %lld ms (budget %u ms)", f.name.c_str(),
                                    static_cast<long long>(f.stalledMs), f.budgetMs);
+        closeOutcome(f);
     }
+    for (const beats::Finding& f : r.callsReturned) { closeOutcome(f); }
     for (const beats::Finding& f : r.wedged) { reportThreadWedge(f); }
     // A CALL INTO A PLUGIN that overran its budget (stage 1) or never returned (stage 2): counted per plugin and entry by the
     // containment (core/plugin_fault.hpp: a wedge quarantines the plugin), then reported like any worker wedge - the calling thread's
@@ -1306,7 +1345,11 @@ void HangWatchdog::reportThreadWedge(const beats::Finding& f) {
     if (const unsigned delay = wedgeCaptureDelayMs_.load(std::memory_order_relaxed); delay != 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
-    captureAllThreads(dir + name, static_cast<double>(f.stalledMs), &f);
+    const std::string path = dir + name;
+    captureAllThreads(path, static_cast<double>(f.stalledMs), &f);
+    // Remembered so the recovery can close it. (Stage 2 of a call has no file of its own: it is a log line and a quarantine.)
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) { rememberOutcome(f, path); }
 }
 
 void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, const beats::Finding* wedge) {

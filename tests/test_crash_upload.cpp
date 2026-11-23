@@ -807,6 +807,39 @@ static void pendingFreezeSweepBlock() {
     fs::remove_all(dir, ec);
 }
 
+// PENDING FILES NEVER USE UP THE PER-SWEEP CAP (review of fix/freezes, finding 1). `hang-<pid>-w<N>` (the thread monitor's) sorts ahead of every other name, so with the
+// pending check applied AFTER the cap, `maxReports` pending files of this process took every slot of every sweep and an older, finished report never went.
+static void pendingFilesDoNotUseTheCapBlock() {
+    const fs::path dir = scratchDir("pendingcap");
+    const std::string body =
+        "kind: hang\nstalled-ms: 7213\nthreshold-ms: 5000\nsignature: FEDCBA9876543210\nthreads: 1\nframe-scope: other\nwatchdog: worker\nthread-role: other\n"
+        "pass-phase: none\noutcome: pending\n"
+        "--- context ---\nversion: 0.99.112\ncommit: abc123def456\nos: Windows 10.0.22631\narch: x64\n"
+        "--- modules ---\n  cascade.exe base=0x00007FF700000000 size=0x2C8000 pdb=cascade.pdb build=651FD5EB776649E7B91461B1EB1EB8C525\n"
+        "--- thread 100 (disk-job, stalled) ---\n  cascade.exe+0x9999\n--- log (last 1 of 1 lines) ---\nwatchdog armed\n";
+    const unsigned long myPid = static_cast<unsigned long>(::GetCurrentProcessId());
+    writeFile(dir / ("hang-" + std::to_string(myPid) + "-w1.txt"), body);
+    writeFile(dir / ("hang-" + std::to_string(myPid) + "-w2.txt"), body);
+    std::string other = body;
+    other.replace(other.find("FEDCBA9876543210"), 16, "0123456789ABCDEF");
+    writeFile(dir / "hang-0-1.txt", other);   // an earlier process's, sorts after the two above
+    StubServer srv;
+    CHECK(srv.start(StubServer::Mode::Accept204));
+    SweepParams p;
+    p.crashDir = dir.string();
+    p.url = srv.url();
+    p.enabled = true;
+    p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+    p.nowEpoch = 1'700'000'000ull;
+    p.maxReports = 2;
+    auto cancel = std::make_shared<UploadCancel>();
+    const SweepOutcome out = sweepCrashDir(p, cancel);
+    CHECK(out.sent == 1);          // the finished one went: the two pending ones were not counted against the cap of two
+    CHECK(srv.bodies().size() == 1);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 // A SWEEP STARTED MID-SESSION SEES WHAT THE START-UP SWEEP COULD NOT (0.99.101): running()
 // says when a sweep has finished without a join, stop() then joins at once, and a second
 // start() on the same uploader sweeps the folder again - and finds the issue report filed
@@ -2458,6 +2491,7 @@ int main() {
     sentinelSweepBlock();
     issueSweepBlock();
     pendingFreezeSweepBlock();
+    pendingFilesDoNotUseTheCapBlock();
     uploaderRestartBlock();
 
     return testSummary("test_crash_upload");

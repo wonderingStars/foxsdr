@@ -1572,6 +1572,13 @@ bool reportIsOfThisProcess(const std::string& name) {
     return false;
 #endif
 }
+
+// True for a freeze report whose header says `outcome: pending` and which has no outcome section yet.
+bool freezeStillPending(const fs::path& p) {
+    ParsedReport r;
+    if (!parseReportText(readCapped(p, kMaxReportBytes), r)) { return false; }
+    return r.kind == "hang" && r.outcomePending;
+}
 }  // namespace
 
 SweepOutcome sweepCrashDir(const SweepParams& params,
@@ -1596,6 +1603,9 @@ SweepOutcome sweepCrashDir(const SweepParams& params,
         if (!isReportName(name)) { continue; }
         const Sidecar sc = readSidecar(uploadSidecarPath(e.path().string()));
         if (terminalStatus(sc.status)) { continue; }
+        // A FREEZE THIS PROCESS FILED AND HAS NOT SEEN THE END OF is not a candidate AT ALL, so it can never use up one of the per-sweep slots below (review of
+        // fix/freezes, finding 1: four pending thread-wedge files, which sort ahead of every other name, would otherwise have taken all four slots of every sweep of the session).
+        if (reportIsOfThisProcess(name) && freezeStillPending(e.path())) { continue; }
         candidates.push_back(e.path());
     }
     // Newest first: the report that describes what just happened is worth more

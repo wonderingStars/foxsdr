@@ -30,6 +30,7 @@
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -642,6 +643,74 @@ void testSecondWedgeOfTheSameThread() {
     fs::remove_all(dir, ec);
 }
 
+// EVERY FREEZE REPORT GETS A REAL OUTCOME (review of fix/freezes, finding 1). A worker's report and a plugin call's report said `outcome: pending` for ever (only the frame
+// loop's was ever closed), so the upload sweep held them for the session and the next start sent them as `not-recovered`, which is false for a thread that beat again
+// and a call that returned.
+void testEveryReportGetsItsOutcome() {
+    auto& reg = beats::Registry::instance();
+    const fs::path dir = scratchDir("outcome");
+    HangWatchdog::resetWedgeFileCountForTest();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    HangWatchdog w;
+    w.setSuppressionForTest(HangWatchdog::SuppressionForTest::NeverSuppress);
+    w.start(dir.string(), 600000);
+    reg.setBudgetOverrideForTest(beats::Kind::Disk, kShortBudgetMs);
+    static const char* const kMark = "--- outcome ---\nrecovered-after-ms: ";
+    const auto outcomeMs = [](const std::string& text) -> long long {
+        const std::size_t at = text.find(kMark);
+        return at == std::string::npos ? -1 : std::atoll(text.c_str() + at + std::strlen(kMark));
+    };
+    // (1) A WORKER THAT STOPPED BEATING AND BEAT AGAIN
+    std::string workerPath;
+    {
+        beats::Registration r(beats::kThreadDiskJob);
+        r.beat("write");
+        const auto until = Clock::now() + std::chrono::milliseconds(kShortBudgetMs + 4 * HangWatchdog::kPollMs + 2500);
+        while (Clock::now() < until && w.reportsWritten() < 1u) { sleepMs(10); }
+        CHECK(w.reportsWritten() == 1u);
+        sleepMs(400);   // the capture writes the header first and the stacks after
+        workerPath = w.lastReportPath();
+        CHECK(!workerPath.empty());
+        CHECK(outcomeMs(readFile(fs::path(workerPath))) < 0);          // still open while the thread is late
+        r.beat("done");
+        sleepMs(HangWatchdog::kPollMs * 2 + 200);
+        const std::string text = readFile(fs::path(workerPath));
+        std::printf("worker report outcome: %lld ms\n", outcomeMs(text));
+        CHECK(outcomeMs(text) >= static_cast<long long>(kShortBudgetMs) - 50);
+        CHECK(outcomeMs(text) < 8000);
+        CHECK(text.find("--- outcome ---") == text.rfind("--- outcome ---"));   // once
+    }
+    reg.clearOverridesForTest();
+    // (2) A CALL INTO A PLUGIN THAT OVERRAN ITS BUDGET AND RETURNED
+    const unsigned before = w.reportsWritten();
+    std::vector<fs::path> files;
+    {
+        beats::CallScope call(nullptr, "test-plugin", "create", 300, 600000);
+        const auto until = Clock::now() + std::chrono::milliseconds(300 + 4 * HangWatchdog::kPollMs + 2500);
+        while (Clock::now() < until && w.reportsWritten() < before + 1u) { sleepMs(10); }
+        CHECK(w.reportsWritten() == before + 1u);
+        sleepMs(400);
+        for (const auto& e : fs::directory_iterator(dir)) {
+            const std::string name = e.path().filename().string();
+            if (name.find("-w") != std::string::npos && e.path().filename() != fs::path(workerPath).filename() && readFile(e.path()).find("thread: plugin-call\n") != std::string::npos) { files.push_back(e.path()); }
+        }
+        CHECK(files.size() == 1);
+        if (files.size() == 1) { CHECK(outcomeMs(readFile(files[0])) < 0); }
+    }
+    sleepMs(HangWatchdog::kPollMs * 2 + 200);
+    if (files.size() == 1) {
+        const std::string text = readFile(files[0]);
+        std::printf("call report outcome: %lld ms\n", outcomeMs(text));
+        CHECK(text.find("blamed-plugin: test-plugin") != std::string::npos);
+        CHECK(outcomeMs(text) >= 250);
+        CHECK(outcomeMs(text) < 8000);
+    }
+    w.stop();
+    fs::remove_all(dir, ec);
+}
+
 // Lost time and a debugger never accuse a worker (the two rules the frame loop's watchdog already keeps), and a worker's report is
 // not the frame loop's: the sentinel's "the watchdog filed a freeze report after the last sign of life" match does not see it.
 void testLostTimeAndDebuggerNeverReport() {
@@ -1030,6 +1099,7 @@ int main() {
     testConcurrentRegistryUse();
     testWedgedWorkerOfEachKind();
     testSecondWedgeOfTheSameThread();
+    testEveryReportGetsItsOutcome();
     testWedgeFilesAreCapped();
     testLostTimeAndDebuggerNeverReport();
     testLostTimeRearmsRegistrations();
