@@ -173,6 +173,9 @@ public:
         std::size_t memoryBytes() const {
             return n_ * (sizeof(std::complex<float>) * 3 + sizeof(float) * 3) + outCols_ * sizeof(float) * 4 + n_ * 16;
         }
+        // CONTROL THREAD (the thread that calls SpectrumBlock::latest). A TEST SEAM, read-only: the reduced linear power of the frame latest() handed out last
+        // (the slot's contents; latest() takes the logarithm of exactly these floats), so a test can compute the old expression itself and compare.
+        const std::vector<float>& lastReadPower() const { return slot_[static_cast<std::size_t>(rd_)].db; }
 
     private:
         friend class SpectrumBlock;

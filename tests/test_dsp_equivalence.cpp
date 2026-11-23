@@ -323,31 +323,59 @@ int main() {
             CHECK(matched == pulls);
         }
 
-        // (c) the SpectrumBlock path: print a hash of the dB frames it hands out for a fixed input (compared by hand across the commit that moved its
-        // logarithm to the pull: the same line before and after must read the same).
+        // (c) the SpectrumBlock path against the old expression. Before the pass the engine took the logarithm when it finished a frame (the slot held
+        // 10*log10(max(reduced power, 1e-20)) and latest() copied it); now the slot holds the reduced power and latest() takes the logarithm. The reference
+        // below IS the old expression, computed here on the very power floats the slot holds (Engine::lastReadPower, a read-only seam): every frame
+        // latest() hands out must match it bit for bit, in every mode, with and without column reduction, and at the largest size.
         {
-            cascade::dsp::SpecConfig sc;
-            sc.fftSize = 4096;
-            sc.sampleRateHz = 2.0e6;
-            sc.frameRateHz = 400.0;
-            cascade::dsp::SpectrumBlock blk(sc);
-            Rng rng(321);
-            std::vector<std::complex<float>> in(1024);
-            std::vector<float> out(4096);
-            std::uint64_t h = 1469598103934665603ull;
-            std::size_t frames = 0;
-            for (int b = 0; b < 200; ++b) {
-                for (auto& s : in) { s = {0.4f * rng.uni(), 0.4f * rng.uni()}; }
-                blk.process(in.data(), in.size());
-                std::uint64_t seq = 0;
-                const std::size_t got = blk.latest(out.data(), out.size(), &seq);
-                if (got > 0) {
-                    h = demodchain::hashBits(out.data(), got, h);
-                    ++frames;
+            struct BlockCase {
+                const char* name;
+                std::size_t fft;
+                std::size_t columns;
+                cascade::dsp::SpecMode mode;
+                int blocks;
+            };
+            const BlockCase cases[] = {
+                {"instant 4096", 4096, 0, cascade::dsp::SpecMode::Instant, 200},
+                {"average 4096", 4096, 0, cascade::dsp::SpecMode::Average, 200},
+                {"peak hold 4096", 4096, 0, cascade::dsp::SpecMode::PeakHold, 200},
+                {"min hold 4096", 4096, 0, cascade::dsp::SpecMode::MinHold, 200},
+                {"average 16384 reduced to 1000 columns", 16384, 1000, cascade::dsp::SpecMode::Average, 200},
+                {"peak hold 524288 reduced to 4096 columns", 524288, 4096, cascade::dsp::SpecMode::PeakHold, 1300},
+            };
+            for (const BlockCase& bc : cases) {
+                cascade::dsp::SpecConfig sc;
+                sc.fftSize = bc.fft;
+                sc.columns = bc.columns;
+                sc.mode = bc.mode;
+                sc.sampleRateHz = 2.0e6;
+                sc.frameRateHz = 400.0;
+                cascade::dsp::SpectrumBlock blk(sc);
+                Rng rng(321);
+                std::vector<std::complex<float>> in(1024);
+                std::vector<float> out(blk.columns());
+                std::vector<float> refDb;
+                std::uint64_t h = 1469598103934665603ull;
+                std::size_t frames = 0, same = 0;
+                for (int b = 0; b < bc.blocks; ++b) {
+                    for (auto& s : in) { s = {0.4f * rng.uni(), 0.4f * rng.uni()}; }
+                    blk.process(in.data(), in.size());
+                    std::uint64_t seq = 0;
+                    const std::size_t got = blk.latest(out.data(), out.size(), &seq);
+                    if (got > 0) {
+                        const std::vector<float>& pw = blk.engine().lastReadPower();
+                        refDb.assign(got, 0.0f);
+                        for (std::size_t i = 0; i < got; ++i) { refDb[i] = 10.0f * std::log10(std::max(pw[i], 1e-20f)); }   // the old expression, in the old place's terms
+                        if (std::memcmp(refDb.data(), out.data(), got * sizeof(float)) == 0) { ++same; }
+                        h = demodchain::hashBits(out.data(), got, h);
+                        ++frames;
+                    }
                 }
+                std::printf("E3c: spectrum block, %-42s %zu frames, %zu bit-identical to the old expression, hash %016llx\n", bc.name, frames, same,
+                            static_cast<unsigned long long>(h));
+                CHECK(frames >= (bc.fft >= 524288 ? 1u : 20u));
+                CHECK(same == frames);
             }
-            std::printf("E3c: spectrum block: %zu frames, hash %016llx\n", frames, static_cast<unsigned long long>(h));
-            CHECK(frames > 20u);
         }
     }
 
