@@ -4,9 +4,11 @@
 #include "core/radio_reporter.hpp"
 
 #include "core/radio_message.hpp"
+#include "core/stall_context.hpp"
 #include "core/report_send_guard.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -19,6 +21,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -45,6 +48,29 @@ constexpr std::size_t kMaxFailBytes = 16384;
 constexpr std::size_t kMaxFirstSessionBytes = 8192;
 constexpr std::size_t kMaxJournalBytes = 4096;
 constexpr std::int64_t kMaxT = 2592000;
+
+std::mutex g_hookMu;
+std::function<void()> g_diskHook;   // TEST SEAM (Reporter::setDiskHookForTest)
+void diskHook() {
+    std::function<void()> h;
+    { std::lock_guard<std::mutex> lk(g_hookMu); h = g_diskHook; }
+    if (h) { h(); }
+}
+
+// TEST SEAM (Reporter::setFileFaultHookForTest): a delete or a replace that fails, as one does on Windows while another thread has the file open.
+std::function<bool(const char*, const std::string&)> g_fileFaultHook;
+bool fileFault(const char* op, const fs::path& p) {
+    std::function<bool(const char*, const std::string&)> h;
+    { std::lock_guard<std::mutex> lk(g_hookMu); h = g_fileFaultHook; }
+    return h && h(op, p.string());
+}
+// Deletes a file; true when it is gone (or never was).
+bool removeFile(const fs::path& p, std::error_code& ec) {
+    if (fileFault("remove", p)) { ec = std::make_error_code(std::errc::permission_denied); return false; }
+    ec.clear();
+    (void)fs::remove(p, ec);
+    return !ec;
+}
 
 fs::path pathOf(const std::string& utf8) { return fs::path(std::u8string(utf8.begin(), utf8.end())); }
 std::string utf8Of(const fs::path& p) {
@@ -83,20 +109,35 @@ bool appendDurable(const fs::path& p, const std::string& data) {
 }
 
 // Replaces the file whole: a temporary file, forced to disk, then renamed over it.
-bool writeAtomic(const fs::path& p, const std::string& data) {
+// THE TEMPORARY NAME IS UNIQUE TO THIS CALL (review of fix/freezes, must-fix 3): it used to be `<name>.tmp`, so two writers of one file (the caller's state save and the batch thread's
+// position, or a retry) removed and renamed each other's temporary file. The replace is retried a few times, because on Windows it fails while another thread has the target open (the
+// caller reading a position file the batch thread is replacing); only then the old delete-and-rename. False when the file could not be replaced: the caller must look at it.
+std::atomic<unsigned long long> g_tmpSeq{0};
+// `attempts`: the caller's own thread (the state save, a failure file) holds the reporter's lock across this and keeps to a few milliseconds; the batch thread's position write may wait longer.
+bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12) {
     fs::path tmp = p;
-    tmp += ".tmp";
+    tmp += "." + std::to_string(g_tmpSeq.fetch_add(1, std::memory_order_relaxed)) + "." +
+           std::to_string(static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000ull)) + ".tmp";
     std::error_code ec;
-    fs::remove(tmp, ec);
-    if (!appendDurable(tmp, data)) { return false; }
-    fs::rename(tmp, p, ec);
-    if (ec) {
-        fs::remove(p, ec);
-        std::error_code ec2;
-        fs::rename(tmp, p, ec2);
-        return !ec2;
+    (void)fs::remove(tmp, ec);
+    if (!appendDurable(tmp, data)) { (void)fs::remove(tmp, ec); return false; }
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (fileFault("rename", p)) {
+            ec = std::make_error_code(std::errc::permission_denied);
+        } else {
+            ec.clear();
+            fs::rename(tmp, p, ec);
+        }
+        if (!ec) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(3 + (attempt % 7)));
     }
-    return true;
+    std::error_code ec2;
+    if (!fileFault("remove", p) && fs::remove(p, ec2) && !fileFault("rename", p)) {
+        fs::rename(tmp, p, ec2);
+        if (!ec2) { return true; }
+    }
+    (void)fs::remove(tmp, ec);
+    return false;
 }
 
 std::string dayOf(std::int64_t epoch) {
@@ -225,8 +266,90 @@ struct Reporter::Impl {
     fs::path dir;
     std::shared_ptr<UploadCancel> cancel = std::make_shared<UploadCancel>();
 
-    mutable std::mutex mu;       // all state and all file work
+    mutable stall::TaggedMutex mu{"radio-reporter"};   // all state and all file work; tagged: a freeze report names who holds it (core/stall_context.hpp)
     std::mutex batchMu;          // one batch at a time
+    // DELETES THAT COULD NOT BE DONE and positions that could not be saved (review of fix/freezes, must-fix 3). A file whose delete failed (another thread had it open) is never listed
+    // for sending while it waits here, and the delete is tried again at the start of every batch; a position that could not be written is kept in memory and read before the file.
+    std::mutex retryMu;
+    std::set<fs::path> deferredDeletes;
+    std::map<fs::path, std::size_t> unsavedPos;
+    // Raised when Usage reporting goes OFF: a batch that began before it sends no journal line that was read before it.
+    std::atomic<unsigned long long> optOutGen{0};
+
+    bool isDeferred(const fs::path& p) {
+        std::lock_guard<std::mutex> lk(retryMu);
+        return deferredDeletes.count(p) != 0;
+    }
+    // Deletes `p`, or - when it cannot be deleted now - holds it back from every listing until it can be. True when it is gone.
+    bool removeOrDefer(const fs::path& p) {
+        std::error_code ec;
+        if (removeFile(p, ec)) { return true; }
+        std::lock_guard<std::mutex> lk(retryMu);
+        deferredDeletes.insert(p);
+        return false;
+    }
+    void retryDeferred() {
+        std::vector<fs::path> todo;
+        {
+            std::lock_guard<std::mutex> lk(retryMu);
+            todo.assign(deferredDeletes.begin(), deferredDeletes.end());
+        }
+        for (const fs::path& p : todo) {
+            std::error_code ec;
+            if (removeFile(p, ec)) {
+                std::lock_guard<std::mutex> lk(retryMu);
+                deferredDeletes.erase(p);
+            }
+        }
+    }
+    // THE ANONYMOUS FORM of a stored radio_fail (contract 1.2): installId, sessionId and seq ABSENT, a random messageId present.
+    static void anonymize(json& env) {
+        env.erase("installId");
+        env.erase("sessionId");
+        env.erase("seq");
+        if (!env.contains("messageId")) { env["messageId"] = randomHex(16); }
+    }
+    static bool carriesInstallId(const json& env) { return env.is_object() && env.contains("installId"); }
+
+    // USAGE REPORTING IS OFF (the id is empty): everything queued that carries the install id goes. The journal and first-session lines are deleted (a segment that cannot be deleted
+    // now is held back from every listing, and is deleted again at the next start while Usage reporting is still off: the re-scan rule, so no marker file is kept), and a queued
+    // failure is kept as the anonymous form (the owner's rule of 2026-11-15 is that every failed radio open reaches him, with Diagnostics and Usage reporting off alike).
+    // Called with `mu` held, from setIdentity (the opt-out) and from configure (a start with Usage reporting already off). Returns false when a failure file could not be rewritten:
+    // it still carries the id on disk, and the send-time rule in runBatch strips it from what is posted.
+    bool purgeForOptOut() {
+        for (const Seg& g : listSegments()) { removeOrDefer(g.path); removeOrDefer(posPathOf(g.path)); }
+        segReady = false;
+        bool allRewritten = true;
+        for (const fs::path& f : listFailFiles()) {
+            json w = json::parse(readAll(f), nullptr, false);
+            if (!w.is_object() || !w.contains("msg") || !w["msg"].is_object()) { continue; }
+            if (!carriesInstallId(w["msg"])) { continue; }
+            anonymize(w["msg"]);
+            if (!writeAtomic(f, dumpJson(w))) {
+                allRewritten = false;
+                ++st.guardRefused;
+                diagLogf("radio reports: a queued failure report could not be rewritten without the install id; it is sent without it");
+            }
+        }
+        envSent = false;
+        firstSessionSent = 0;
+        return allRewritten;
+    }
+
+    void retryUnsaved() {
+        std::map<fs::path, std::size_t> todo;
+        {
+            std::lock_guard<std::mutex> lk(retryMu);
+            todo = unsavedPos;
+        }
+        for (const auto& kv : todo) {
+            if (writeAtomic(posPathOf(kv.first), std::to_string(kv.second), 40)) {
+                std::lock_guard<std::mutex> lk(retryMu);
+                const auto it = unsavedPos.find(kv.first);
+                if (it != unsavedPos.end() && it->second <= kv.second) { unsavedPos.erase(it); }
+            }
+        }
+    }
     Identity id;
     std::string sessionId;
     std::int64_t sessionStart = 0;
@@ -269,6 +392,9 @@ struct Reporter::Impl {
     // sender
     std::thread worker;
     std::atomic<bool> running{false};
+    // "Something may be queued", IN MEMORY, so that poll() on the engine's pass needs no directory listing. True at start (the folder may hold what an earlier
+    // session left), set by admit(), cleared by the batch thread under `mu` when its own listing finds nothing.
+    std::atomic<bool> maybeQueued{true};
     std::int64_t nextBatchAt = 0;
     std::int64_t backoffUntil = 0;
     int failStreak = 0;
@@ -396,11 +522,13 @@ struct Reporter::Impl {
     static fs::path posPathOf(const fs::path& seg) { fs::path p = seg; p.replace_extension(".pos"); return p; }
 
     std::vector<Seg> listSegments() {
+        diskHook();
         std::vector<Seg> out;
         std::error_code ec;
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             const std::string name = utf8Of(it->path().filename());
             if (name.rfind("journal-", 0) != 0 || it->path().extension() != ".jsonl") { continue; }
+            if (isDeferred(it->path())) { continue; }   // a delete is waiting for it to be closed: it is not a queue any more
             Seg s;
             s.path = it->path();
             const std::string text = readAll(s.path);
@@ -422,6 +550,11 @@ struct Reporter::Impl {
             s.lines = lines;
             const std::string pos = readAll(posPathOf(s.path));
             s.pos = pos.empty() ? 0 : static_cast<std::size_t>(std::strtoull(pos.c_str(), nullptr, 10));
+            {
+                std::lock_guard<std::mutex> lk(retryMu);
+                const auto u = unsavedPos.find(s.path);
+                if (u != unsavedPos.end() && u->second > s.pos) { s.pos = u->second; }   // a position that could not be written is still taken
+            }
             out.push_back(std::move(s));
         }
         std::sort(out.begin(), out.end(), [](const Seg& a, const Seg& b) {
@@ -433,11 +566,12 @@ struct Reporter::Impl {
     }
 
     std::vector<fs::path> listFailFiles() {
+        diskHook();
         std::vector<fs::path> out;
         std::error_code ec;
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             const std::string name = utf8Of(it->path().filename());
-            if (name.rfind("fail-", 0) == 0 && it->path().extension() == ".json") { out.push_back(it->path()); }
+            if (name.rfind("fail-", 0) == 0 && it->path().extension() == ".json" && !isDeferred(it->path())) { out.push_back(it->path()); }
         }
         std::sort(out.begin(), out.end());
         return out;
@@ -462,9 +596,8 @@ struct Reporter::Impl {
             ++idx;
             nl = next;
         }
-        std::error_code ec;
-        fs::remove(s.path, ec);
-        fs::remove(posPathOf(s.path), ec);
+        removeOrDefer(s.path);
+        removeOrDefer(posPathOf(s.path));
     }
 
     void dropFailFile(const fs::path& f) {
@@ -472,8 +605,7 @@ struct Reporter::Impl {
         std::string key;
         if (w.is_object() && w.contains("msg") && w["msg"].is_object()) { key = w["msg"].value("radioKey", std::string()); }
         countDropped(key);
-        std::error_code ec;
-        fs::remove(f, ec);
+        removeOrDefer(f);
     }
 
     std::string currentSegmentName() const {
@@ -498,9 +630,8 @@ struct Reporter::Impl {
         for (const Seg& s : segs) {
             if (utf8Of(s.path.filename()) == active) { continue; }
             if (s.pos >= s.lines) {   // fully taken
-                std::error_code ec;
-                fs::remove(s.path, ec);
-                fs::remove(posPathOf(s.path), ec);
+                removeOrDefer(s.path);
+                removeOrDefer(posPathOf(s.path));
                 continue;
             }
             if (s.ss > 0 && t - s.ss > o.maxAgeSec + 1) { st.expired += s.lines - s.pos; dropSegment(s); }
@@ -535,12 +666,18 @@ struct Reporter::Impl {
 
     // ------------------------------------------------------------------ writing
     bool writeFailFile(const json& env, std::int64_t atEpoch) {
+        diskHook();   // (the test seam: the durable append of a failure, as slow as a disk can make it)
         json w;
         w["q"] = atEpoch;
         w["deg"] = 0;
         w["msg"] = env;
+        // A NAME NOTHING HOLDS YET: two failures of one second must never share a file (the replace would overwrite the first); a taken name is drawn again.
         char name[96];
-        std::snprintf(name, sizeof(name), "fail-%012lld-%s.json", static_cast<long long>(atEpoch), randomHex(8).c_str());
+        std::error_code ec;
+        for (int draw = 0; draw < 16; ++draw) {
+            std::snprintf(name, sizeof(name), "fail-%012lld-%s.json", static_cast<long long>(atEpoch), randomHex(8).c_str());
+            if (!fs::exists(dir / name, ec)) { break; }
+        }
         return writeAtomic(dir / name, dumpJson(w));
     }
 
@@ -591,6 +728,11 @@ struct Reporter::Impl {
             if (ok) { ++st.journalQueued; }
         }
         (void)text;
+        // "SOMETHING MAY BE QUEUED" IS SET AFTER THE FILE IS WRITTEN (review of fix/freezes, finding 4). It was set before: the batch thread clears the bit and then lists the
+        // folder, and a listing that ran between this store and the write found nothing and left the bit false with a failure report on disk - the next batch five minutes
+        // out, nothing sent until another event came. With the store after the write, every interleaving ends with the bit true or a listing that sees the file: the batch
+        // thread's clear is always BEFORE its listing, and this store is always AFTER the file exists.
+        if (ok) { maybeQueued.store(true, std::memory_order_release); }
         if (!ok) { ++st.guardRefused; }
         if (++appendsSinceSweep >= 64 || isFail) { appendsSinceSweep = 0; sweepBounds(); }
     }
@@ -735,13 +877,17 @@ struct Reporter::Impl {
         return items;
     }
 
-    void advance(const Item& it) {
-        if (it.isFail) {
-            std::error_code ec;
-            fs::remove(it.file, ec);
-            return;
-        }
-        writeAtomic(posPathOf(it.file), std::to_string(it.line + 1));
+    // Marks one item as taken: a failure file is deleted, a journal line's position is written. FALSE when that could not be done now (review of fix/freezes, must-fix 3): a delete that
+    // failed is held back from every listing and retried (removeOrDefer); a position that could not be written is kept in memory, read before the file, and retried at the next batch.
+    // Either way the item is not sent a second time by this process; a batch that cannot save its place stops (see runBatch).
+    bool advance(const Item& it) {
+        if (it.isFail) { return removeOrDefer(it.file); }
+        const std::size_t next = it.line + 1;
+        if (writeAtomic(posPathOf(it.file), std::to_string(next), 40)) { return true; }
+        std::lock_guard<std::mutex> lk(retryMu);
+        std::size_t& held = unsavedPos[it.file];
+        held = std::max(held, next);
+        return false;
     }
 
     void backoff(std::int64_t t) {
@@ -755,7 +901,7 @@ struct Reporter::Impl {
         std::lock_guard<std::mutex> batchLock(batchMu);
         if (!on) { return 0; }
         if (!o.liveSend) {
-            std::lock_guard<std::mutex> lk(mu);
+            std::lock_guard<stall::TaggedMutex> lk(mu);
             ++st.suppressedByBuild;
             return 0;
         }
@@ -763,29 +909,61 @@ struct Reporter::Impl {
         std::vector<Item> items;
         std::int64_t t = 0;
         {
-            std::lock_guard<std::mutex> lk(mu);
+            std::lock_guard<stall::TaggedMutex> lk(mu);
             t = now();
             if (t < backoffUntil) { return 0; }
-            items = collect(t, o.maxBatch);
         }
+        // What an earlier batch could not delete or save is done first (file calls: not under `mu`).
+        retryDeferred();
+        retryUnsaved();
+        const unsigned long long optOutAtStart = optOutGen.load(std::memory_order_acquire);
+        // THE FOLDER IS LISTED AND READ WITHOUT `mu` (review of fix/freezes, finding 4): this is the batch thread, and Reporter::event() on the calling thread (the engine's
+        // pass, once a minute per open radio) waited for `mu` behind its directory listing and file reads - a pass stopped behind a slow disk. Safe without the lock: the
+        // directory and options are fixed once configure() has run (it joins this thread first), a failure file appears whole (written to .tmp and renamed), a journal line
+        // is counted only when its newline is there, and advance() below touches only files.
+        items = collect(t, o.maxBatch);
         const Transport transport = o.transport ? o.transport : makeRealTransport(cancel, o.dir);
         for (Item& it : items) {
             if (cancel->cancelled()) { break; }
             std::int64_t sendNow = 0;
+            bool expired = false;
             {
-                std::lock_guard<std::mutex> lk(mu);
+                std::lock_guard<stall::TaggedMutex> lk(mu);
                 sendNow = now();
-                if (!it.env.is_object()) { advance(it); continue; }
-                if (sendNow - it.eventEpoch > o.maxAgeSec) { ++st.expired; advance(it); continue; }
+                if (it.env.is_object() && sendNow - it.eventEpoch > o.maxAgeSec) { ++st.expired; expired = true; }
             }
+            if (!it.env.is_object() || expired) { if (!advance(it)) { return accepted; } continue; }   // (a file call: not under `mu`)
             bool resent = false;
             for (;;) {
+                // WHAT MAY BE POSTED IS JUDGED AGAINST THE CURRENT INSTALL ID, read under `mu` at this moment (review of fix/freezes part 3, F5 to F7).
+                //  - A journal or first-session line is posted only when it carries the CURRENT id: an opt-out (no id) or an id change makes every older line unsendable. It is consumed without being
+                //    sent (it can never be sent), unless the opt-out has just deleted its segment, when it is left alone.
+                //  - A radio_fail is always sent (the owner's rule), but in the anonymous form (contract 1.2) when the id it carries is not the current one: an item this batch read before an
+                //    opt-out is not posted with the id after it.
+                std::string curId;
+                {
+                    std::lock_guard<stall::TaggedMutex> lk(mu);
+                    curId = id.installId;
+                }
+                if (!it.isFail) {
+                    if (optOutGen.load(std::memory_order_acquire) != optOutAtStart) { break; }   // the segment is being deleted
+                    const std::string itemId = (it.env.contains("installId") && it.env["installId"].is_string()) ? it.env["installId"].get<std::string>() : std::string();
+                    if (curId.empty() || itemId != curId) {
+                        {
+                            std::lock_guard<stall::TaggedMutex> lk(mu);
+                            ++st.unsendable;
+                        }
+                        if (!advance(it)) { return accepted; }
+                        break;
+                    }
+                }
                 json env = it.env;
+                if (it.isFail && carriesInstallId(env) && env.value("installId", std::string()) != curId) { anonymize(env); }
                 if (it.degraded) { env = degrade(env); }
                 env["age"] = std::clamp<std::int64_t>(sendNow - it.eventEpoch, 0, kMaxT);
                 const std::string text = fitSize(env);
                 const PostResult res = transport(o.endpoint, text);
-                std::lock_guard<std::mutex> lk(mu);
+                std::unique_lock<stall::TaggedMutex> lk(mu);
                 ++st.posts;
                 const std::int64_t after = now();
                 if (!res.attempted || res.status == 0 || res.status >= 500) { backoff(after); return accepted; }
@@ -793,7 +971,8 @@ struct Reporter::Impl {
                     ++st.sent;
                     ++accepted;
                     failStreak = 0;
-                    advance(it);
+                    lk.unlock();
+                    if (!advance(it)) { return accepted; }
                     break;
                 }
                 if (res.status == 429) { backoffUntil = after + static_cast<std::int64_t>(std::max<std::uint64_t>(res.retryAfterSec, 1)); return accepted; }
@@ -813,6 +992,7 @@ struct Reporter::Impl {
                         it.degraded = true;
                         resent = true;
                         ++st.degradedResends;
+                        lk.unlock();
                         if (it.isFail) {
                             json w = json::parse(readAll(it.file), nullptr, false);
                             if (w.is_object()) { w["deg"] = 1; writeAtomic(it.file, dumpJson(w)); }
@@ -821,7 +1001,8 @@ struct Reporter::Impl {
                     }
                     ++st.refused;
                     ++refusedTotal;
-                    advance(it);
+                    lk.unlock();
+                    if (!advance(it)) { return accepted; }
                     break;
                 }
                 // any other answer (a 400 that is not ours, a 403, a 404): the route is wrong or the service is not what we think; keep and back off
@@ -977,6 +1158,12 @@ struct Reporter::Impl {
         running.store(true);
         worker = std::thread([self]() {
             self->runBatch();
+            {
+                // THE ONLY LISTING OF THE FOLDER FOR "IS ANYTHING LEFT" (was poll()'s, on the engine's pass), on this thread and not under `mu`. The bit is cleared
+                // BEFORE the listing and set again when the listing finds something, so an admit() that lands in between keeps its bit.
+                self->maybeQueued.store(false, std::memory_order_release);
+                if (!self->queueEmpty()) { self->maybeQueued.store(true, std::memory_order_release); }
+            }
             self->running.store(false);
         });
     }
@@ -989,7 +1176,7 @@ Reporter::~Reporter() { shutdown(); }
 
 void Reporter::configure(const Options& options) {
     shutdown();
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     s.o = options;
     s.id = options.identity;
@@ -1026,6 +1213,9 @@ void Reporter::configure(const Options& options) {
     std::error_code ec;
     fs::create_directories(s.dir, ec);
     if (ec) { s.on = false; s.preFails.clear(); s.preEvents.clear(); return; }
+    // A START WITH USAGE REPORTING ALREADY OFF (review of fix/freezes part 3, F5): whatever an earlier session queued under an install id - a delete that failed at the opt-out, or a crash between
+    // the opt-out and the delete - is purged now, before any batch can run, so a restart cannot send what the opt-out should have removed.
+    if (s.id.installId.empty()) { s.purgeForOptOut(); }
     const bool hadState = fs::exists(s.statePath(), ec);
     s.loadState();
     const std::string dayLoaded = s.day;
@@ -1055,56 +1245,44 @@ void Reporter::configure(const Options& options) {
     }
 }
 
-bool Reporter::active() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->on; }
+bool Reporter::active() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->on; }
 
 void Reporter::setIdentity(const Identity& idn) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     const bool hadId = !s.id.installId.empty();
     s.id = idn;
     if (!s.on) { return; }
     if (hadId && idn.installId.empty()) {
-        // Usage reporting went OFF: the install id is deleted, so everything that carries it goes with it. A queued failure is kept, as the
-        // anonymous form (the owner's rule is that every failure reaches him); the journal and first-session lines are deleted.
-        std::error_code ec;
-        for (const Impl::Seg& g : s.listSegments()) { fs::remove(g.path, ec); fs::remove(Impl::posPathOf(g.path), ec); }
-        s.segReady = false;
-        for (const fs::path& f : s.listFailFiles()) {
-            json w = json::parse(readAll(f), nullptr, false);
-            if (!w.is_object() || !w.contains("msg") || !w["msg"].is_object()) { continue; }
-            json& m = w["msg"];
-            if (!m.contains("installId")) { continue; }
-            m.erase("installId");
-            m.erase("sessionId");
-            m.erase("seq");
-            m["messageId"] = randomHex(16);
-            writeAtomic(f, dumpJson(w));
-        }
-        s.envSent = false;
-        s.firstSessionSent = 0;
+        // Usage reporting went OFF: the install id is deleted, so everything that carries it goes with it (purgeForOptOut). A segment that cannot be deleted now is held back from every
+        // listing and retried (removeOrDefer), and what is posted is judged against the CURRENT id at the moment of the send (runBatch), so a batch that read lines before this point sends
+        // none of them. The generation is raised AFTER the deletes have been requested and the rewrites made (review of fix/freezes part 3, F7): a batch that starts between the two
+        // reads the old generation, lists nothing it can send (the id it reads under `mu` is already empty), and one that began earlier is stopped by the same id rule.
+        s.purgeForOptOut();
+        s.optOutGen.fetch_add(1, std::memory_order_acq_rel);
     }
     if (!hadId && !idn.installId.empty()) { s.envSent = false; }
 }
 
 void Reporter::setLiveSend(bool on) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->o.liveSend = on && kRadioReportsLiveSend;
 }
 
 void Reporter::setNowSource(std::function<std::int64_t()> now) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->o.nowEpoch = std::move(now);
 }
 
 void Reporter::setDiagOn(bool on) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->id.diagOn = on;
 }
 
-Identity Reporter::identity() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->id; }
+Identity Reporter::identity() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->id; }
 
 void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {   // before the queue is opened (the start-up restore runs first): kept in memory and filed at configure
         if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now(), s.preOrder++}); }
@@ -1115,7 +1293,7 @@ void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string
 
 void Reporter::countDropped(const std::string& radioKey, long long n) {
     if (radioKey.empty() || n <= 0) { return; }
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     if (!p_->on || p_->id.installId.empty()) { return; }
     p_->dropped[radioKey] += n;
     ++p_->st.boundDropped;
@@ -1127,7 +1305,7 @@ void Reporter::event(const Event& ev) {
     if ((ev.kind == "radio_found" || ev.kind == "radio_open") && !ev.radio.key.empty()) {
         radiomessage::noteRadio(ev.radio.key, ev.radio.model, ev.radio.serial);
     }
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {
         if (s.preEvents.size() < 64) { s.preEvents.push_back(Impl::PreEvent{ev, s.now(), s.preOrder++}); }
@@ -1137,7 +1315,7 @@ void Reporter::event(const Event& ev) {
 }
 
 void Reporter::firstSession(const std::string& usageJson, const std::string& trigger) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.on || s.id.installId.empty() || s.id.launches != 1) { return; }
     if (trigger != "after-minute" && trigger != "on-failure") { return; }
@@ -1168,28 +1346,43 @@ void Reporter::firstSession(const std::string& usageJson, const std::string& tri
 }
 
 void Reporter::setOpenRadios(const std::vector<std::string>& keys) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->openKeys = keys;
     if (p_->openKeys.size() > 8) { p_->openKeys.resize(8); }
 }
 
-std::vector<std::string> Reporter::openRadios() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->openKeys; }
+std::vector<std::string> Reporter::openRadios() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->openKeys; }
 
 int Reporter::streamWindowSec(const std::string& radioKey) const {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     auto it = p_->streamToday.find(radioKey);
     return (it != p_->streamToday.end() && it->second >= p_->o.streamWidenAfter) ? 300 : 60;
 }
 
+void Reporter::setDiskHookForTest(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lk(g_hookMu);
+    g_diskHook = std::move(hook);
+}
+
+void Reporter::setFileFaultHookForTest(std::function<bool(const char* op, const std::string& path)> hook) {
+    std::lock_guard<std::mutex> lk(g_hookMu);
+    g_fileFaultHook = std::move(hook);
+}
+
+bool Reporter::writeAtomicForTest(const std::string& path, const std::string& data) { return writeAtomic(pathOf(path), data, 40); }
+
 void Reporter::poll() {
     Impl& s = *p_;
-    std::lock_guard<std::mutex> lk(s.mu);
+    // TRY, NEVER WAIT: a pass that waited for the reporter is the freeze this exists to end (A488498B). (The batch thread no longer holds `mu` across a listing or a file
+    // call, review of fix/freezes finding 4; the durable append of an event on another thread still does, and a poll that finds the lock taken is the next pass's.)
+    std::unique_lock<stall::TaggedMutex> lk(s.mu, std::try_to_lock);
+    if (!lk.owns_lock()) { return; }
     if (!s.on) { return; }
     s.reapWorker();
     const std::int64_t t = s.now();
     if (s.running.load() || s.worker.joinable()) { return; }
     if (t < s.nextBatchAt && !s.urgent) { return; }
-    if (s.queueEmpty()) { s.nextBatchAt = t + s.o.batchEverySec; s.urgent = false; return; }
+    if (!s.maybeQueued.load(std::memory_order_acquire)) { s.nextBatchAt = t + s.o.batchEverySec; s.urgent = false; return; }   // memory only: no listing here
     s.nextBatchAt = t + s.o.batchEverySec;
     s.urgent = false;
     if (!s.o.liveSend) { ++s.st.suppressedByBuild; return; }
@@ -1200,8 +1393,9 @@ int Reporter::runBatchNow() { return p_->runBatch(); }
 
 void Reporter::flushAtQuit(int maxMs) {
     {
-        std::lock_guard<std::mutex> lk(p_->mu);
+        std::lock_guard<stall::TaggedMutex> lk(p_->mu);
         if (!p_->on) { return; }
+        p_->retryDeferred();   // a delete that failed earlier (an opt-out's) is tried once more before the process ends
         p_->releaseHeld();
         p_->saveState();
         p_->reapWorker();
@@ -1231,7 +1425,7 @@ void Reporter::shutdown() {
 }
 
 Stats Reporter::stats() const {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Stats st = p_->st;
     if (p_->on) {
         st.failFilesOnDisk = p_->listFailFiles().size();
@@ -1242,10 +1436,10 @@ Stats Reporter::stats() const {
     return st;
 }
 
-std::string Reporter::sessionId() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->sessionId; }
+std::string Reporter::sessionId() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->sessionId; }
 std::int64_t Reporter::nowEpoch() const { return p_->now(); }
-std::string Reporter::dir() const { std::lock_guard<std::mutex> lk(p_->mu); return utf8Of(p_->dir); }
-std::size_t Reporter::heldCount() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->held.size(); }
+std::string Reporter::dir() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return utf8Of(p_->dir); }
+std::size_t Reporter::heldCount() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->held.size(); }
 
 Reporter& global() {
     static Reporter r;

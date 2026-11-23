@@ -1509,6 +1509,11 @@ int AppWindow::run(int frames) {
     watchdog_.setDisplayStallSink([ledger = cascade::core::globalStallLedger()] { ledger->note(); });
     watchdog_.setForceDisplayStallForTest(forceDisplayStall);
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // THE FIRST FRAMES GET THEIR OWN BUDGET (HangWatchdog::beginStartup; 89e251e9). The call was lost from here between 0.99.104 and 0.99.105, so from
+    // 0.99.105 on the first frame (shader compile, font texture, a software renderer) was judged against the 5 s steady threshold: two field freeze
+    // reports. tests/test_watchdog_startup_wired.cpp fails if this line goes again.
+    watchdog_.beginStartup();
+    cascade::core::stall::registerThreadRole(cascade::core::stall::Role::Window);   // (what a freeze report says this thread is: core/stall_context.hpp)
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
     // to "may this run touch the disk at all", which is diagCrashDir_ and is
@@ -1693,6 +1698,8 @@ int AppWindow::run(int frames) {
                 "display: off - Windows says this session's display is off; drawing paused, the "
                 "radio and decoders keep running");
         } else if (displayEdge == cascade::gui::DisplayPause::Edge::Resumed) {
+            // THE AGE OF THIS EDGE IS THE WATCHDOG'S (freeze diagnosis P5): a window thread that then sits in the system's own window code is a display wake, not a freeze.
+            watchdog_.noteDisplayEdge();
             cascade::core::diagLogf(
                 "display: %s - drawing resumed after %.0f s off; %ld frames not drawn",
                 cascade::gui::displayPowerName(cascade::gui::frame::displayPower()),
@@ -2394,6 +2401,7 @@ int AppWindow::run(int frames) {
         } else {
             frameScope.to(cascade::core::FrameScope::Present);
             glfwSwapBuffers(window);
+            watchdog_.notePresented();   // a frame really reached the screen since the last display-on edge: a later stall is not the wake's (HangWatchdog::isDisplayWakeStall)
         }
         frameScope.to(cascade::core::FrameScope::Other);
         if (frameLog_) { frameLog_->frameEnd(); }

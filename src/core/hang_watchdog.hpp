@@ -323,7 +323,11 @@ public:
     // device lock and, when a stall restart is in flight and still holds it, kRestartGiveBack more (1500 ms: one of the restart's bounded
     // steps) for the restart to hand it back instead of condemning a healthy radio. Spent once, on the teardown thread, and only while a restart
     // really is in flight. 23500 -> 25000, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 25000;
+    //
+    // AND THE ISSUE REPORTS' BOUNDED FLUSH IS THE SIXTH (review of fix/freezes, finding 3b): the teardown itself raises issues (CatStop, CloseLeak, ReaderLeak), each filed by
+    // a writer thread, and Engine::shutdownDrain() waits for writers in flight at most issue::kShutdownFlushWait, 250 ms, spent ONCE per process however many places
+    // ask (the engine's destructor asks again; it finds the bound spent). Only while a write really is out. 25000 -> 25250, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 25250;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, queuing the teardown's two config saves (the WRITE is
@@ -348,7 +352,8 @@ public:
     // is the drift this test exists to stop; a stop that does not wait for a held request is the better cure and is not done.)
     // (53000 -> 56000 with the Soapy restart's give-back above: twice (25000 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
     // really wedges is reported 3 s later than it was.)
-    static constexpr unsigned kShutdownThresholdMs = 56000;
+    // (56000 -> 56500 with the issue reports' flush above: twice (25250 + kShutdownReserveMs 3000).)
+    static constexpr unsigned kShutdownThresholdMs = 56500;
 
     HangWatchdog() = default;
     ~HangWatchdog();
@@ -393,6 +398,16 @@ public:
     static constexpr unsigned kStartupFrames = 30;
     void beginStartup(unsigned thresholdMs = kStartupThresholdMs,
                       unsigned frames = kStartupFrames);
+
+    // THE SAME BUDGET FOR A WATCHDOG THAT IS NOT BEATEN ONCE A FRAME, BY TIME AND PASSES (review of fix/freezes, finding 5). The engine's control thread beats twice a pass
+    // (and many times a second even when idle), so "30 beats" ended the budget after about 14 passes - a quarter of a second - and a wedge from pass 15 on was judged at 5 s.
+    // This budget is `thresholdMs` until `passes` complete passes have been counted (notePassCompleted(), called by the pass's loop once a pass has run) or `maxMs` has
+    // passed since this call, whichever comes first; the beats are not counted at all. The drop is made by whichever notices first (the pass, or the watchdog's own poll, so
+    // it ends on time even when no pass completes); a beginShutdown() inside the budget wins, as for beginStartup().
+    static constexpr unsigned kStartupPasses = 30;
+    static constexpr unsigned kStartupMaxMs = 30000;
+    void beginStartupByTime(unsigned thresholdMs = kStartupThresholdMs, unsigned passes = kStartupPasses, unsigned maxMs = kStartupMaxMs);
+    void notePassCompleted();
 
     // Stops the watchdog thread and joins it. The poll wait is interruptible,
     // so this returns in about as long as an in-flight capture takes rather
@@ -447,6 +462,15 @@ public:
     // lastBeatMs_ and are untouched by this. docs/engine-stage4.md 6.31.
     void setSentinelHeartbeat(bool on) { sentinelBeat_.store(on, std::memory_order_relaxed); }
     bool sentinelHeartbeat() const { return sentinelBeat_.load(std::memory_order_relaxed); }
+
+    // WHICH WATCHDOG THIS IS, for the report (freeze diagnosis section 7). Every HangWatchdog used to write "thread: gui", the window's frame scope and "the gui thread
+    // did not complete a frame", whichever thread it watched: the engine's control thread's reports named where the WINDOW was. The role is set once, before start(),
+    // where each is started: the window's (the default), the engine's control thread, the teardown's (engine/shutdown_guard). It selects the `watchdog:` word, whether
+    // the frame scope or the control pass's phase is written, the note's sentence and the recovery line. A closed list: nothing else can be written.
+    enum class Role : std::uint8_t { Window = 0, Control, Shutdown };
+    void setRole(Role r) { role_.store(static_cast<std::uint8_t>(r), std::memory_order_relaxed); }
+    Role role() const { return static_cast<Role>(role_.load(std::memory_order_relaxed)); }
+    static const char* roleWord(Role r);   // "window" | "control" | "shutdown"
 
     bool running() const;
 
@@ -645,6 +669,49 @@ public:
     // drivers. `frameModules` entries may be null; they are skipped.
     static bool isDisplayPresentationStall(const char* const* frameModules, int count);
 
+    // A DISPLAY WAKE (freeze diagnosis P5, report 1338E56F): the display came back after being off and the window thread then sat in the system's own window
+    // and message code (win32u.dll, user32.dll) for 35 to 65 s with nothing of FoxSDR's above the message pump. The program's own pause had done its job while
+    // the display was off, and the present grace (kDisplayGraceMs) covers the first seconds after it comes back; what this covers is the system taking longer
+    // than that to give the thread back, which is the system's stall and not this program's.
+    //
+    // NARROWED BY THE REVIEW OF fix/freezes, part 3 (F4). A stall is a display wake ONLY when ALL of these hold:
+    //   (a) the walk has at least kDisplayWakeMinFrames frames (a one-frame walk never qualifies: it proves nothing about what is above it);
+    //   (b) frame 0 is win32u.dll or user32.dll and every one of the first kDisplayStallScanFrames frames is one of win32u, user32, ntdll, kernel32, kernelbase,
+    //       imm32, msctf (combase and rpcrt4 are NOT on the list: a cross-process call blocked on a hung server has a dozen of them under the wait);
+    //   (c) the stall BEGAN (judged by when it started, not when it was captured) less than kDisplayGraceMs + kDisplayWakeCapMs after the display-on edge, and no
+    //       frame has been presented since that edge (notePresented), so the window thread's first present after the wake is the one that is stuck;
+    //   (d) the stall ENDS: one that has not ended kDisplayWakeCapMs after it began is filed as a freeze after all, with the note saying it began at a display
+    //       wake. A window that never comes back is therefore always reported.
+    // The cap is a judgement and not a measurement: the report that motivated the rule stalled for 35 to 65 s, so 90 s covers it with margin and a stall that
+    // outlives it is not that report.
+    static constexpr unsigned kDisplayWakeCapMs = 90000;
+    // The shortest walk that can show "nothing of FoxSDR's above the pump".
+    static constexpr int kDisplayWakeMinFrames = 4;
+
+    // THE PURE DECISION, over module names (top frame first), the age of the last display-on edge at the capture in milliseconds (negative: there has been none),
+    // how long the stall had lasted at the capture, and the frames presented since the edge. True only when (a), (b) and (c) above all hold. A frame of the
+    // program's own image, of a plugin, of a driver, of an OpenGL stack (that is the older display-stall rule's), or a frame the module table cannot name, means
+    // the stall is NOT excused here and is filed as before. (d) is the watchdog's own loop, not this function.
+    static bool isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs, long long stalledMs, unsigned framesPresentedSinceEdge);
+
+    // The window's loop calls this when the display comes back on (the off-to-on edge, the code that already notes it); the age is read at the capture. It also
+    // zeroes the count of frames presented since.
+    void noteDisplayEdge();
+    // The window's loop calls this after each frame it really presented (the swap returned).
+    void notePresented();
+    // Milliseconds since the last noteDisplayEdge(), or -1 when there has been none.
+    long long displayEdgeAgeMs() const;
+    // Stalls recorded as a display wake since start(), for this watchdog only.
+    unsigned displayWakesRecorded() const;
+    // TESTS ONLY: pretend the last edge was `ageMs` ago (negative: never).
+    void setDisplayEdgeAgeForTest(long long ageMs);
+    // TESTS ONLY: the next capture treats the stall as a display wake whatever its frames say (the frames cannot be staged from ctest); the rest is the real code.
+    void setForceDisplayWakeForTest(bool on) { forceDisplayWake_.store(on, std::memory_order_relaxed); }
+    // TESTS ONLY: how long a wake-excused stall may last before it is filed as a freeze (default kDisplayWakeCapMs).
+    void setDisplayWakeCapMsForTest(unsigned ms) { wakeCapMs_.store(ms > 0 ? ms : kDisplayWakeCapMs, std::memory_order_relaxed); }
+    // Freezes filed after a display wake outlived the cap, since start().
+    unsigned displayWakesRefiled() const { return wakesRefiled_.load(std::memory_order_acquire); }
+
     // Pauses taken by this PROCESS, counted from process start rather than
     // from start(): the first blocking work in a session - the plugin scan -
     // happens while the window is still being built, before the frame loop and
@@ -727,7 +794,16 @@ private:
     std::atomic<bool> reported_{false};
     std::atomic<unsigned> reports_{0};
     std::atomic<unsigned> displayStalls_{0};
+    std::atomic<unsigned> displayWakes_{0};
+    std::atomic<double> displayEdgeAtMs_{-1.0};        // steady-clock ms of the last display-on edge, or -1
+    std::atomic<long long> displayEdgeAgeForTest_{-2}; // -2: not set; otherwise the age the test wants
     std::atomic<bool> forceDisplayStall_{false};  // setForceDisplayStallForTest
+    std::atomic<unsigned> presentedSinceEdge_{0};      // notePresented(), zeroed by noteDisplayEdge()
+    std::atomic<bool> forceDisplayWake_{false};        // setForceDisplayWakeForTest
+    std::atomic<unsigned> wakeCapMs_{kDisplayWakeCapMs};
+    std::atomic<bool> wakePending_{false};             // the open report was excused as a display wake and has not yet ended: it is filed as a freeze if it outlives the cap
+    std::atomic<unsigned> wakesRefiled_{0};
+    bool captureAfterWake_ = false;                    // watchdog thread only: this capture is the freeze filed after a wake outlived the cap
     // Guards the sink's pointer only; the sink itself is called outside it.
     mutable std::mutex sinkMutex_;
     std::function<void()> displayStallSink_;
@@ -737,6 +813,9 @@ private:
     std::atomic<unsigned> wedgeCaptureDelayMs_{0};               // setWedgeCaptureDelayForTest
     // setSentinelHeartbeat: whether heartbeat() is also the breadcrumb's. Set by the owner before start(), and not reset by it.
     std::atomic<bool> sentinelBeat_{true};
+    std::atomic<std::uint8_t> role_{0};
+    // When the stall that was reported began (steady-clock milliseconds), so that the recovery can write how long it lasted into the file that was written for it.
+    std::atomic<double> reportedStallStartMs_{0.0};
     // NOT reset by start(), unlike everything above it: see pausesTaken().
     std::atomic<unsigned> pauses_{0};
 
@@ -758,8 +837,12 @@ private:
     // and the two thresholds the drop swaps between. Only the GUI thread
     // writes them; the watchdog thread only ever reads thresholdMs_.
     std::atomic<unsigned> startupFramesLeft_{0};
-    unsigned startupThresholdMs_ = 0;
-    unsigned steadyThresholdMs_ = kDefaultThresholdMs;
+    std::atomic<unsigned> startupThresholdMs_{0};   // (atomic: beginStartupByTime's drop is also made by the watchdog's own thread)
+    std::atomic<unsigned> steadyThresholdMs_{kDefaultThresholdMs};
+    // beginStartupByTime(): passes still to be counted, and the instant (nowMs()) the budget ends at the latest; 0 = none.
+    std::atomic<unsigned> startupPassesLeft_{0};
+    std::atomic<double> startupDeadlineMs_{0.0};
+    void dropStartupBudget();
 
     // THE POLL WAIT, MADE INTERRUPTIBLE. stop() used to set a flag that was
     // only read at the top of the loop while the loop slept in a plain
@@ -784,6 +867,8 @@ private:
 
     mutable std::mutex pathMutex_;
     std::string lastPath_;
+    // The file written for the stall now reported, so that its recovery can say how long it lasted (guarded by pathMutex_); empty when no file was written.
+    std::string outcomePath_;
 
     // Rule 2c's test injection. Guarded for the same reason reportDir_ is: a
     // test sets it on its own thread and the watchdog thread reads it.

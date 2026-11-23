@@ -295,6 +295,7 @@ Slot* slotFor(const std::string& pluginKeyOrId) {
 
 const char* idOf(const Slot* s) { return s != nullptr ? s->id : ""; }
 const char* publicIdOf(const Slot* s) { return s != nullptr ? s->pub.load(std::memory_order_relaxed) : ""; }
+const char* versionOf(const Slot* s) { return s != nullptr ? s->version : ""; }
 
 void setIdentity(const std::string& pluginKeyOrId, const std::string& version, Origin origin, const void* moduleBase,
                  std::size_t moduleSize) {

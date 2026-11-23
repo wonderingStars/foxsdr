@@ -311,13 +311,20 @@ struct Finding {
     std::string subject;           // the interned public id the call declared
     const void* owner = nullptr;  // the owner pointer the call declared
     int stage = 0;                 // 0 for a thread; 1 overrun; 2 wedged
+    // FOR A CALL: names this one call (its table slot and the slot's entry count), so a report written for it can be matched with its return (PollResult::callsReturned).
+    std::uint64_t callToken = 0;
 };
 
 struct PollResult {
     std::vector<Finding> wedged;     // newly late: each is reported once per episode
     std::vector<Finding> recovered;  // beat again after a report: stalledMs is how long the episode lasted
+    // Registrations REMOVED after a report (the thread's work ended while the report was open): stalledMs is how long the episode lasted until it ended. Each is returned once.
+    std::vector<Finding> ended;
     // Calls in flight past their budget (stage 1) or their wedge limit (stage 2), each reported once per call.
     std::vector<Finding> calls;
+    // Calls that were reported (stage 1) and have since RETURNED (or were abandoned): `stalledMs` is how long the call lasted, `callToken` the one the report's finding carried.
+    // Each is returned once. (A report of a call is closed with this, as a thread's is with `recovered`.)
+    std::vector<Finding> callsReturned;
 };
 
 class Registry {

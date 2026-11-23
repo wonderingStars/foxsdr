@@ -37,6 +37,8 @@
 #ifndef CASCADE_CORE_ISSUE_REPORT_HPP
 #define CASCADE_CORE_ISSUE_REPORT_HPP
 
+#include <chrono>
+#include <functional>
 #include <string>
 
 #include "core/health_events.hpp"
@@ -64,6 +66,29 @@ std::string renderIssueReport(health::Recovered word);
 // the path written, or empty: capture is off (no directory, or Diagnostics off), this word
 // was already filed this session, or the file could not be written. Never throws.
 std::string fileIssueReport(health::Recovered word);
+
+// THE SAME, WITH THE FILE WRITE ON A WORKER, for a caller that must not wait on a disk (the engine's control pass: freeze FA0B39E3 sat in this function's
+// ofstream). The gates and the once-a-session bit are the same and are decided on the caller; the text is rendered on the caller (memory only: the log ring);
+// only the open, write and flush are the worker's. Returns the path the worker will write, or empty when refused (capture off, already filed). The worker logs
+// "issue report written", counts it for takeNewlyFiled(), and when the file could not be written gives the once-a-session bit back, exactly as the synchronous
+// call does. The file is written under a temporary name and renamed, so a sweep never sees a short report. The SHUTDOWN waits for writers in flight, a bounded time
+// (flushWritesAtShutdown below): the teardown itself raises issues (CatStop, CloseLeak, ReaderLeak), and they must be on disk when the process ends. A writer still running
+// after the bound is abandoned and touches nothing that is destroyed at exit.
+std::string fileIssueReportOffThread(health::Recovered word);
+
+// THE BOUNDED FLUSH (review of fix/freezes, finding 3b): waits until every queued write has finished or `boundMs` has passed, whichever is first; true when none is out. The
+// bound is ONE deadline for the process (the first call that finds a write out sets it; every call waits only until that instant), so the teardown pays at most kShutdownFlushWait
+// however many places ask.
+// Charged in HangWatchdog::kShutdownBoundedWaitsMs and tests/test_shutdown_budget.cpp.
+constexpr std::chrono::milliseconds kShutdownFlushWait{250};
+bool flushWritesAtShutdown(unsigned boundMs = static_cast<unsigned>(kShutdownFlushWait.count()));
+
+// TEST SEAMS. The hook is called on the worker immediately before its file call (a test binds one that sleeps: a slow disk). waitForWritesForTest returns true
+// when every queued write has finished within `ms`.
+void setDiskHookForTest(std::function<void()> hook);
+// (also tests only) called on the worker between the write of the temporary file and its rename to the final name.
+void setBeforeRenameHookForTest(std::function<void()> hook);
+bool waitForWritesForTest(unsigned ms);
 
 // Files the reports of the words met BEFORE capture was armed - at start-up, before the
 // settings are read (a watcher that did not start, a display notification refused). Called

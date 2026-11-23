@@ -20,6 +20,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/pipeline.hpp"
+#include "core/stall_context.hpp"
 
 #include "core/diag_log.hpp"
 #include "core/leak_on_purpose.hpp"
@@ -2530,6 +2531,7 @@ void Pipeline::sourceThreadMain(double chainRateHz,
 }
 
 void Pipeline::dspThreadMain() {
+    cascade::core::stall::registerThreadRole(cascade::core::stall::Role::Dsp);   // (what a freeze report says this thread is: core/stall_context.hpp)
     // THE REAL-TIME THREAD, marked for the plugin API: every plugin process()
     // and pull() runs on this thread, and the host functions a plugin must not
     // call from here (the settings store, which allocates) refuse it by this

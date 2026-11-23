@@ -16,16 +16,21 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/event_trail.hpp"
+#include "core/plugin_fault.hpp"
+#include "core/stall_context.hpp"
+#include "core/leak_on_purpose.hpp"
 #include "core/frame_timing.hpp"
 #include "core/phase_clock.hpp"
 #include "core/plugin_fault.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -451,7 +456,11 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     reported_.store(false, std::memory_order_relaxed);
     reports_.store(0, std::memory_order_relaxed);
     displayStalls_.store(0, std::memory_order_relaxed);
+    wakePending_.store(false, std::memory_order_relaxed);
+    wakesRefiled_.store(0, std::memory_order_relaxed);
     startupFramesLeft_.store(0, std::memory_order_relaxed);
+    startupPassesLeft_.store(0, std::memory_order_relaxed);
+    startupDeadlineMs_.store(0.0, std::memory_order_relaxed);
     skipGap_.store(true, std::memory_order_relaxed);
     stop_.store(false, std::memory_order_relaxed);
     {
@@ -460,6 +469,14 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     }
     running_.store(true, std::memory_order_release);
     thread_ = std::thread(&HangWatchdog::threadMain, this);
+}
+
+const char* HangWatchdog::roleWord(Role r) {
+    switch (r) {
+        case Role::Control: return "control";
+        case Role::Shutdown: return "shutdown";
+        default: return "window";
+    }
 }
 
 void HangWatchdog::beginShutdown(unsigned thresholdMs) {
@@ -487,7 +504,34 @@ void HangWatchdog::beginStartup(unsigned thresholdMs, unsigned frames) {
     if (frames == 0 || startupThresholdMs_ <= steadyThresholdMs_) { return; }
     thresholdMs_.store(startupThresholdMs_, std::memory_order_relaxed);
     startupFramesLeft_.store(frames, std::memory_order_relaxed);
-    diagLogf("watchdog: start-up budget %u ms for %u frames", startupThresholdMs_, frames);
+    diagLogf("watchdog: start-up budget %u ms for %u frames", startupThresholdMs_.load(std::memory_order_relaxed), frames);
+}
+
+void HangWatchdog::dropStartupBudget() {
+    startupPassesLeft_.store(0, std::memory_order_relaxed);
+    startupDeadlineMs_.store(0.0, std::memory_order_relaxed);
+    unsigned expect = startupThresholdMs_.load(std::memory_order_relaxed);
+    if (expect != 0 && thresholdMs_.compare_exchange_strong(expect, steadyThresholdMs_.load(std::memory_order_relaxed), std::memory_order_relaxed)) {
+        diagLogf("watchdog: start-up budget over, threshold %u ms", thresholdMs_.load(std::memory_order_relaxed));
+    }
+}
+
+void HangWatchdog::beginStartupByTime(unsigned thresholdMs, unsigned passes, unsigned maxMs) {
+    steadyThresholdMs_.store(thresholdMs_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    const unsigned startup = (thresholdMs > 0) ? thresholdMs : kStartupThresholdMs;
+    startupThresholdMs_.store(startup, std::memory_order_relaxed);
+    if (passes == 0 || maxMs == 0 || startup <= steadyThresholdMs_.load(std::memory_order_relaxed)) { return; }
+    startupPassesLeft_.store(passes, std::memory_order_relaxed);
+    startupDeadlineMs_.store(nowMs() + static_cast<double>(maxMs), std::memory_order_relaxed);
+    thresholdMs_.store(startup, std::memory_order_relaxed);
+    diagLogf("watchdog: start-up budget %u ms for %u passes or %u ms", startup, passes, maxMs);
+}
+
+void HangWatchdog::notePassCompleted() {
+    const unsigned left = startupPassesLeft_.load(std::memory_order_relaxed);
+    if (left == 0) { return; }
+    startupPassesLeft_.store(left - 1, std::memory_order_relaxed);
+    if (left == 1) { dropStartupBudget(); }
 }
 
 unsigned HangWatchdog::thresholdMs() const {
@@ -801,6 +845,49 @@ bool HangWatchdog::isDisplayPresentationStall(const char* const* frameModules, i
     return false;
 }
 
+namespace {
+// Windows' own modules, for the display-wake rule only: a frame in anything else is the program's, a plugin's, a driver's or unknown, and keeps the stall a freeze.
+bool isSystemWindowModule(const char* name) {
+    return equalsNoCase(name, "win32u.dll") || equalsNoCase(name, "user32.dll") || equalsNoCase(name, "ntdll.dll") || equalsNoCase(name, "kernel32.dll") ||
+           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "imm32.dll") || equalsNoCase(name, "msctf.dll");   // (not combase or rpcrt4: review F4)
+}
+}  // namespace
+
+bool HangWatchdog::isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs, long long stalledMs, unsigned framesPresentedSinceEdge) {
+    if (frameModules == nullptr || count < kDisplayWakeMinFrames) { return false; }   // (a) a short walk proves nothing about what is above it
+    if (edgeAgeMs < 0) { return false; }                                               // no display-on edge ever seen
+    if (framesPresentedSinceEdge != 0) { return false; }                               // (c) a frame was presented since the edge: the window had come back
+    // (c) JUDGED BY WHEN THE STALL BEGAN, not when it was captured. The beat that starts a stall is taken at the top of the frame that notes the edge, so a start a little
+    // BEFORE the edge is the same frame; one earlier than the grace is a stall that was already under way and is not the wake's.
+    const long long startAge = edgeAgeMs - (stalledMs > 0 ? stalledMs : 0);
+    if (startAge < -static_cast<long long>(kDisplayGraceMs) || startAge >= static_cast<long long>(kDisplayGraceMs) + static_cast<long long>(kDisplayWakeCapMs)) { return false; }
+    if (!equalsNoCase(frameModules[0], "win32u.dll") && !equalsNoCase(frameModules[0], "user32.dll")) { return false; }
+    const int scan = (count < kDisplayStallScanFrames) ? count : kDisplayStallScanFrames;
+    for (int i = 0; i < scan; ++i) {
+        if (!isSystemWindowModule(frameModules[i])) { return false; }   // an own, plugin, driver or unnamed frame: filed as a freeze
+    }
+    return true;
+}
+
+void HangWatchdog::noteDisplayEdge() {
+    presentedSinceEdge_.store(0, std::memory_order_relaxed);
+    displayEdgeAtMs_.store(nowMs(), std::memory_order_relaxed);
+}
+
+void HangWatchdog::notePresented() { presentedSinceEdge_.fetch_add(1, std::memory_order_relaxed); }
+
+long long HangWatchdog::displayEdgeAgeMs() const {
+    const long long forced = displayEdgeAgeForTest_.load(std::memory_order_relaxed);
+    if (forced != -2) { return forced; }
+    const double at = displayEdgeAtMs_.load(std::memory_order_relaxed);
+    if (at < 0.0) { return -1; }
+    return static_cast<long long>(nowMs() - at);
+}
+
+unsigned HangWatchdog::displayWakesRecorded() const { return displayWakes_.load(std::memory_order_acquire); }
+
+void HangWatchdog::setDisplayEdgeAgeForTest(long long ageMs) { displayEdgeAgeForTest_.store(ageMs < 0 ? -1 : ageMs, std::memory_order_relaxed); }
+
 bool HangWatchdog::guiThreadIsPumping() const {
     {
         std::lock_guard<std::mutex> lk(stalledModuleMutex_);
@@ -958,7 +1045,12 @@ void HangWatchdog::threadMain() {
         // THE WORKERS (thread_beats.hpp), on the same wake and the same clock - before the frame loop's own rules, which have
         // `continue`s of their own that must not skip this.
         pollThreadBeats(pollInterval);
-        const double threshold = static_cast<double>(thresholdMs_.load(std::memory_order_relaxed));
+        // THE START-UP BUDGET'S TIME LIMIT (beginStartupByTime): ends on time even when no pass completes.
+        if (const double dl = startupDeadlineMs_.load(std::memory_order_relaxed); dl > 0.0 && now >= dl) { dropStartupBudget(); }
+        double threshold = static_cast<double>(thresholdMs_.load(std::memory_order_relaxed));
+        // A CONTROL PASS INSIDE A RECEIVER STOP is judged against the stop's own budget (twice its bounded waits plus a reserve; core/stall_context.hpp kStopThresholdMs); every
+        // other pass, and every other watchdog, keeps its threshold. Never lowers one.
+        if (role() == Role::Control && stall::passPhase() == stall::PassPhase::Stop) { threshold = std::max(threshold, static_cast<double>(stall::kStopThresholdMs)); }
 
         // 3. THE WHOLE MACHINE STOPPED. Sleep, hibernate or a paused VM freezes
         //    this thread too. If the watchdog lost as much time as it is about
@@ -1020,12 +1112,36 @@ void HangWatchdog::threadMain() {
             // app is never killed.
             pumpExcusedSinceMs = 0.0;
             if (reported_.exchange(false, std::memory_order_relaxed)) {
-                DiagLog::instance().writef("warn", "gui thread recovered after a stall");
+                wakePending_.store(false, std::memory_order_release);
+                DiagLog::instance().writef("warn", "%s thread recovered after a stall", role() == Role::Control ? "control" : "gui");
+                // THE OUTCOME (freeze diagnosis section 7): how long the stall lasted, appended to the file that was written for it. The report on disk said "pending" until now;
+                // a report with no such section is one whose process ended while it was stalled, and the uploader sends it as `not recovered`.
+                std::string outcome;
+                {
+                    std::lock_guard<std::mutex> lk(pathMutex_);
+                    outcome.swap(outcomePath_);
+                }
+                const double began = reportedStallStartMs_.load(std::memory_order_relaxed);
+                if (!outcome.empty() && began > 0.0) {
+                    std::error_code existsEc;
+                    std::ofstream o;
+                    if (std::filesystem::exists(outcome, existsEc)) { o.open(outcome, std::ios::binary | std::ios::app); }   // (a report the sweep has deleted is not made again by its outcome)
+                    if (o) { o << "--- outcome ---\nrecovered-after-ms: " << static_cast<long long>(now - began) << "\n"; }
+                }
             }
             continue;
         }
-        if (reported_.load(std::memory_order_relaxed)) { continue; }
-        const Excuse why = excuse();
+        // (d) A STALL EXCUSED AS A DISPLAY WAKE MUST END. One that has not ended when the cap has passed is filed as a freeze after all (the capture's note says it
+        // began at a display wake), by the same path as any other: so a window that never comes back is always reported.
+        bool afterWake = false;
+        if (reported_.load(std::memory_order_relaxed)) {
+            if (!wakePending_.load(std::memory_order_acquire) || stalled < static_cast<double>(wakeCapMs_.load(std::memory_order_relaxed))) { continue; }
+            wakePending_.store(false, std::memory_order_release);
+            wakesRefiled_.fetch_add(1, std::memory_order_release);
+            afterWake = true;
+            diagLogf("watchdog: the stall excused as a display wake has lasted %.0f ms and has not ended; filed as a freeze", stalled);
+        }
+        const Excuse why = afterWake ? Excuse::None : excuse();
         if (why == Excuse::Standing) {
             pumpExcusedSinceMs = 0.0;
             continue;
@@ -1055,6 +1171,11 @@ void HangWatchdog::threadMain() {
         // Latched BEFORE the capture: a wedged application must produce one
         // report, not one per poll until the disk is full.
         reported_.store(true, std::memory_order_relaxed);
+        reportedStallStartMs_.store(now - stalled, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(pathMutex_);
+            outcomePath_.clear();
+        }
         // Read HERE, every poll, rather than captured at start(): the user can
         // untick Settings > Diagnostics at any point in the session and "off"
         // has to mean off from that moment, not from the next launch.
@@ -1070,7 +1191,16 @@ void HangWatchdog::threadMain() {
         std::snprintf(name, sizeof(name), "/hang-%lu-%u.txt", pid,
                       reports_.load(std::memory_order_relaxed) + 1u);
         const std::string path = dir + name;
+        captureAfterWake_ = afterWake;
         captureAllThreads(path, stalled);
+        captureAfterWake_ = false;
+        {
+            std::error_code ec;
+            if (std::filesystem::exists(path, ec)) {
+                std::lock_guard<std::mutex> lk(pathMutex_);
+                outcomePath_ = path;
+            }
+        }
     }
 }
 
@@ -1098,20 +1228,114 @@ bool debuggerAttachedNow() {
 std::atomic<unsigned> g_wedgeFilesWritten{0};
 std::atomic<unsigned> g_wedgeSeq{0};
 
+// THE OUTCOME OF A THREAD'S OR A CALL'S REPORT (review of fix/freezes, finding 1). Every freeze report is written `outcome: pending`; the frame loop's watchdog closes its own file
+// when the stall ends (HangWatchdog::threadMain). The reports of the thread monitor (`hang-<pid>-w<N>`: a worker that stopped beating, a call into a plugin past its budget) were never
+// closed, so the sweep held them for the whole session and the next start sent them as `not-recovered`, which is false for a call that returned. This book remembers which file belongs
+// to which thread or call; the monitor's poll returns the recovery (`recovered`, `callsReturned`) and the file gets its `--- outcome ---` section. Process-wide because two watchdogs in
+// one process share the monitor and the directory. Leaked on purpose (core/leak_on_purpose.hpp): a poll can run while the process ends.
+struct OutcomeBook {
+    std::mutex mu;
+    std::vector<std::pair<std::string, std::string>> open;  // key, file path
+};
+OutcomeBook& outcomeBook() {
+    static OutcomeBook* const b = cascade::core::leakOnPurpose(new OutcomeBook());
+    return *b;
+}
+std::string wedgeKey(const beats::Finding& f) {
+    return f.stage != 0 ? "call:" + std::to_string(f.callToken) : f.name + ":" + std::to_string(f.tid);
+}
+void rememberOutcome(const beats::Finding& f, const std::string& path) {
+    OutcomeBook& b = outcomeBook();
+    std::lock_guard<std::mutex> lk(b.mu);
+    b.open.emplace_back(wedgeKey(f), path);
+}
+void closeOutcome(const beats::Finding& f) {
+    std::string path;
+    {
+        OutcomeBook& b = outcomeBook();
+        std::lock_guard<std::mutex> lk(b.mu);
+        const std::string key = wedgeKey(f);
+        for (auto it = b.open.begin(); it != b.open.end(); ++it) {
+            if (it->first == key) { path = it->second; b.open.erase(it); break; }
+        }
+    }
+    if (path.empty()) { return; }
+    // A REPORT THAT IS NOT THERE any more (the sweep sent and deleted it, or the folder was cleared) is not made again by its outcome: appending would create a file holding only this section.
+    std::error_code existsEc;
+    if (!std::filesystem::exists(path, existsEc)) { return; }
+    std::ofstream o(path, std::ios::binary | std::ios::app);
+    if (o) { o << "--- outcome ---\nrecovered-after-ms: " << static_cast<long long>(f.stalledMs) << "\n"; }
+}
+
 // The header lines every freeze report carries about WHICH thread stopped (the GUI's, or a worker named by the registry),
 // and whether the radio was keyed at the time. Always written, so the field inventory (hangReportFieldNames) holds for
 // both kinds of report.
-void writeWorkerHeaderLines(std::ofstream& out, const beats::Finding* wedge) {
+void writeWorkerHeaderLines(std::ofstream& out, const beats::Finding* wedge, unsigned long stalledTid, const char* watchdogWord) {
     out << "thread: " << (wedge != nullptr ? wedge->name : std::string("gui")) << "\n";
     out << "thread-phase: " << ((wedge != nullptr && !wedge->phase.empty()) ? wedge->phase : std::string("none")) << "\n";
     out << "thread-wait: " << ((wedge != nullptr && !wedge->wait.empty()) ? wedge->wait : std::string("none")) << "\n";
     const int keyed = beats::Registry::keyedNow();
     out << "transmitting: " << (keyed == 1 ? "yes" : (keyed == 0 ? "no" : "unknown")) << "\n";
-    // WHICH PLUGIN, AND THROUGH WHICH ENTRY POINT, when the stopped thing is a call into one (plugin containment P1, docs 6.28): the
-    // PUBLIC id (an official plugin's catalogue id, a hash for any other) and the entry's word. `none` for a thread's own report.
-    const bool isCall = wedge != nullptr && wedge->stage != 0;
-    out << "blamed-plugin: " << ((isCall && !wedge->subject.empty()) ? wedge->subject : std::string("none")) << "\n";
-    out << "blamed-plugin-entry: " << ((isCall && !wedge->phase.empty()) ? wedge->phase : std::string("none")) << "\n";
+
+    // WHICH WATCHDOG FILED THIS, and what the stalled thread is (freeze diagnosis section 7): closed words only. `watchdog` is the role the watchdog was given
+    // (window, control, shutdown) or `worker` / `plugin-call` for the thread registry's own reports; `thread-role` is the stalled thread's, from the table every
+    // thread registers itself in (core/stall_context.hpp), `other` for one that never did.
+    out << "watchdog: " << (wedge != nullptr ? (wedge->stage != 0 ? "plugin-call" : "worker") : watchdogWord) << "\n";
+    const stall::Role stalledRole = stall::roleOfThread(stalledTid);
+    out << "thread-role: " << stall::roleWord(stalledRole) << "\n";
+    // THE CONTROL PASS'S PHASE, only for a report about the control thread (the window's reports carry the frame scope instead).
+    const bool control = wedge == nullptr && std::strcmp(watchdogWord, "control") == 0;
+    out << "pass-phase: " << (control ? stall::passPhaseWord(stall::passPhase()) : "none") << "\n";
+    // THE OUTCOME starts as `pending`; the watchdog appends an `--- outcome ---` section to this file if the stall ends (HangWatchdog::threadMain).
+    out << "outcome: pending\n";
+
+    // WHICH PLUGIN, AND THROUGH WHICH ENTRY POINT. For a call report (plugin containment P1, docs 6.28) the call itself: the PUBLIC id (an official plugin's
+    // catalogue id, a hash for any other) and the entry's word. For every other report (freeze diagnosis section 7) the same fields, when the stalled thread is INSIDE a
+    // declared plugin call at the moment (`in-call`: dvb-receiver 0.4.0's create() waiting for cmd.exe) or is waiting for a tagged lock whose holder is (`lock-holder`).
+    std::string blamed = "none", entry = "none", version = "none", how = "none";
+    {
+        const fault::Slot* slot = nullptr;
+        const char* what = nullptr;
+        if (wedge != nullptr && wedge->stage != 0) {
+            if (!wedge->subject.empty()) { blamed = wedge->subject; }
+            if (!wedge->phase.empty()) { entry = wedge->phase; }
+            slot = static_cast<const fault::Slot*>(wedge->owner);
+            how = "in-call";
+        } else {
+            const void* owner = nullptr;
+            if (stalledTid != 0 && beats::callOfThread(stalledTid, &owner, &what) && owner != nullptr) {
+                slot = static_cast<const fault::Slot*>(owner);
+                how = "in-call";
+            }
+        }
+        // WAITING FOR A TAGGED LOCK, and who holds it.
+        stall::LockReading lock;
+        const bool waiting = stall::lockWaitedBy(stalledTid, lock);
+        if (waiting && slot == nullptr && lock.holderTid != 0) {
+            const void* owner = nullptr;
+            if (beats::callOfThread(lock.holderTid, &owner, &what) && owner != nullptr) {
+                slot = static_cast<const fault::Slot*>(owner);
+                how = "lock-holder";
+            }
+        }
+        if (slot != nullptr) {
+            if (wedge == nullptr || wedge->stage == 0) {
+                const char* id = fault::publicIdOf(slot);
+                if (id != nullptr && *id != '\0') { blamed = id; }
+                if (what != nullptr && *what != '\0') { entry = what; }
+            }
+            const char* v = fault::versionOf(slot);
+            if (v != nullptr && *v != '\0') { version = v; }
+        }
+        out << "waiting-lock: " << (waiting && lock.name != nullptr ? lock.name : "none") << "\n";
+        out << "lock-holder-role: " << (waiting ? stall::roleWord(stall::roleOfThread(lock.holderTid)) : "none") << "\n";
+        out << "lock-site: " << (waiting && lock.site != nullptr ? lock.site : "none") << "\n";
+        out << "lock-held-ms: " << (waiting ? lock.heldMs : 0) << "\n";
+    }
+    out << "blamed-plugin: " << blamed << "\n";
+    out << "blamed-plugin-entry: " << entry << "\n";
+    out << "blamed-plugin-version: " << version << "\n";
+    out << "blamed-plugin-how: " << how << "\n";
 }
 
 // What every registered worker was doing when the report was taken: one line each. The stalled one is not the only
@@ -1161,6 +1385,13 @@ void HangWatchdog::pollThreadBeats(double pollIntervalMs) {
     for (const beats::Finding& f : r.recovered) {
         DiagLog::instance().writef("warn", "thread %s recovered after %lld ms (budget %u ms)", f.name.c_str(),
                                    static_cast<long long>(f.stalledMs), f.budgetMs);
+        closeOutcome(f);
+    }
+    for (const beats::Finding& f : r.callsReturned) { closeOutcome(f); }
+    // A THREAD THAT ENDED with its report open (a one-shot worker finishing): the stall is over, so the report is closed as recovered-after-ms, the format's own word (no new word).
+    for (const beats::Finding& f : r.ended) {
+        DiagLog::instance().writef("warn", "thread %s ended after a stall of %lld ms (budget %u ms)", f.name.c_str(), static_cast<long long>(f.stalledMs), f.budgetMs);
+        closeOutcome(f);
     }
     for (const beats::Finding& f : r.wedged) { reportThreadWedge(f); }
     // A CALL INTO A PLUGIN that overran its budget (stage 1) or never returned (stage 2): counted per plugin and entry by the
@@ -1216,7 +1447,11 @@ void HangWatchdog::reportThreadWedge(const beats::Finding& f) {
     if (const unsigned delay = wedgeCaptureDelayMs_.load(std::memory_order_relaxed); delay != 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
-    captureAllThreads(dir + name, static_cast<double>(f.stalledMs), &f);
+    const std::string path = dir + name;
+    captureAllThreads(path, static_cast<double>(f.stalledMs), &f);
+    // Remembered so the recovery can close it. (Stage 2 of a call has no file of its own: it is a log line and a quarantine.)
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) { rememberOutcome(f, path); }
 }
 
 void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, const beats::Finding* wedge) {
@@ -1342,6 +1577,8 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     // always did. Any other frame 0 - a kernel wait, a vendor driver, an address
     // no module claims - is walked here.
     bool displayStall = false;
+    bool displayWake = false;       // the display-wake rule (isDisplayWakeStall) made it a display stall
+    char wakeModule[64] = {};
     bool guiWalked = false;
 #if defined(_WIN32) && defined(_M_X64)
     if (!stacks.empty() && stacks[0].tid == gui && stacks[0].tid != self &&
@@ -1365,6 +1602,12 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
                                : nullptr;
             }
             displayStall = (wedge == nullptr) && HangWatchdog::isDisplayPresentationStall(names, scan);
+            if (!displayStall && wedge == nullptr && !captureAfterWake_ &&
+                HangWatchdog::isDisplayWakeStall(names, n, displayEdgeAgeMs(), static_cast<long long>(stalledMs), presentedSinceEdge_.load(std::memory_order_relaxed))) {
+                displayStall = true;
+                displayWake = true;
+                std::snprintf(wakeModule, sizeof(wakeModule), "%s", names[0] != nullptr ? names[0] : "?");
+            }
         } else {
             // The walk yielded nothing: frame 0 is still the register the
             // signature falls back to, so put it back rather than leaving an
@@ -1375,6 +1618,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     }
 #endif
     if (wedge == nullptr && forceDisplayStall_.load(std::memory_order_relaxed)) { displayStall = true; }  // test hook
+    if (wedge == nullptr && !captureAfterWake_ && !displayStall && forceDisplayWake_.load(std::memory_order_relaxed)) {   // test hook: the wake's own wiring
+        displayStall = true;
+        displayWake = true;
+        std::snprintf(wakeModule, sizeof(wakeModule), "%s", "win32u.dll");
+    }
 
     // 0x48414E47 is 'HANG' - a hang and a crash at the same address are
     // different bugs and must not group together. 0x5354414C is 'STAL', and it
@@ -1398,6 +1646,14 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     // the machine, and the number is the one thing about it that is reported
     // (HangWatchdog::recordFreezeKind). Nothing is suspended at this point.
     if (wedge == nullptr) { recordFreezeKind(displayStall); }
+    if (displayWake) {
+        // ONE LINE, AND COUNTED (displayWakesRecorded): written here, after every thread has been let go, for the reason the count above is.
+        displayWakes_.fetch_add(1, std::memory_order_release);
+        wakePending_.store(true, std::memory_order_release);   // (d): filed as a freeze after all if it is still stalled when the cap has passed
+        diagLogf("watchdog: display wake - the window thread sat in the system's window code (%s) with none of FoxSDR's frames above it, "
+                 "%lld ms after the display came back; recorded as a display stall, and filed as a freeze if it is still stalled after %u ms",
+                 wakeModule, displayEdgeAgeMs(), wakeCapMs_.load(std::memory_order_relaxed));
+    }
 
     // THE IDENTIFYING HALF GOES TO DISK FIRST, and is flushed, exactly as
     // crash_handler.cpp does on the fault path. Phase 1 above can no longer
@@ -1423,16 +1679,23 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "kind: " << (displayStall ? "stall" : "hang") << "\n";
     out << "note: "
         << (displayStall
-                ? "presentation stalled in the display driver - the frames under the wait "
-                  "are the graphics stack, not this application. A monitor switched off, a "
-                  "resolution change, a GPU reset or a remote session will do this."
+                ? (displayWake
+                       ? "the window thread sat in the system's own window code after the display came back - nothing of this application's is above the wait. "
+                         "It is kept on the machine unless it outlasts the display-wake cap, when it is filed as a freeze."
+                       : "presentation stalled in the display driver - the frames under the wait "
+                         "are the graphics stack, not this application. A monitor switched off, a "
+                         "resolution change, a GPU reset or a remote session will do this.")
                 : (wedge != nullptr
                        ? (wedge->stage != 0
                               ? "a call into a plugin did not return within its budget - the plugin and the entry point are named "
                                 "below, and the first stack is the thread that is inside the call"
                               : "a worker thread did not beat within its budget - the thread named below is the first stack, "
                                 "and the frames under it are where it stopped")
-                       : "the gui thread did not complete a frame within the threshold"))
+                       : (captureAfterWake_
+                              ? "the gui thread did not complete a frame within the threshold - it began at a display wake (the display had just come back) "
+                                "and had still not come back when the display-wake cap passed, so it is filed as a freeze"
+                              : (role() == Role::Control ? "the engine's control thread did not complete a pass within the threshold"
+                                                         : "the gui thread did not complete a frame within the threshold"))))
         << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
     // The threshold IN FORCE, which is what tells a reader whether this stall
@@ -1445,7 +1708,9 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     // scope it is in, and it is stalled, so what this thread reads now is where
     // it stopped. A freeze then says "rail" or "plugins-reload" before anyone has
     // found a symbol map. `other` in a process with no frame loop.
-    out << "frame-scope: " << frameScopeName(wedge != nullptr ? FrameScope::Other : currentFrameScope()) << "\n";
+    // ONLY WHEN THE STALLED THREAD IS THE WINDOW'S (freeze diagnosis section 7): currentFrameScope() is one process-wide atomic the WINDOW's frame loop writes, so for the
+    // control thread's report it said where the window was, not where the pass was. `other` for a worker's report and for the control watchdog.
+    out << "frame-scope: " << frameScopeName((wedge != nullptr || role() == Role::Control) ? FrameScope::Other : currentFrameScope()) << "\n";
     // AND WHICH STEP OF A PLUGIN RELOAD, when one is under way (0.99.84), from
     // the publishing PhaseClock the reload keeps (core/phase_clock.hpp,
     // core/plugin_reload_phases.hpp). Field report 7591C65EFB69DD94: a reload
@@ -1460,7 +1725,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
         out << "reload-phase: " << (phase != nullptr ? phase : "none") << "\n";
     }
     // WHICH THREAD STOPPED, and whether the radio was keyed (6.27).
-    writeWorkerHeaderLines(out, wedge);
+    writeWorkerHeaderLines(out, wedge, static_cast<unsigned long>(gui), roleWord(role()));
     out << "--- context ---\n";
     out << diagContextBlock();
     // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
@@ -1514,8 +1779,10 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "--- process ---\n";
     out << "uptime-sec: " << processUptimeSec() << "\n";
     // EVERY REGISTERED WORKER, one line each: the stalled one is rarely the whole story.
-    writeBeatsSection(out);
+    // THE TRAIL BEFORE THE BEATS: the uploader reads `trail:` only inside the process block, and `--- beats ---` is a heading it ignores, so the line
+    // written after it was never uploaded (always empty in the field). tests/test_diag_hang.cpp parses a written report and checks it.
     writeTrailLine(out);
+    writeBeatsSection(out);
     out.flush();
 
     {
@@ -1653,7 +1920,8 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
                                 "below, and the first stack is the thread that is inside the call"
                               : "a worker thread did not beat within its budget - the thread named below is the first stack, "
                                 "and the frames under it are where it stopped")
-                       : "the gui thread did not complete a frame within the threshold"))
+                       : (role() == Role::Control ? "the engine's control thread did not complete a pass within the threshold"
+                                                  : "the gui thread did not complete a frame within the threshold")))
         << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
     out << "threshold-ms: " << ((wedge != nullptr) ? wedge->budgetMs : thresholdMs_.load(std::memory_order_relaxed)) << "\n";
@@ -1661,13 +1929,15 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "threads: " << tids.size() << "\n";
     // As in the Windows writer above: where the stalled frame was, and which
     // step of a plugin reload, when one is under way (0.99.84).
-    out << "frame-scope: " << frameScopeName(wedge != nullptr ? FrameScope::Other : currentFrameScope()) << "\n";
+    // ONLY WHEN THE STALLED THREAD IS THE WINDOW'S (freeze diagnosis section 7): currentFrameScope() is one process-wide atomic the WINDOW's frame loop writes, so for the
+    // control thread's report it said where the window was, not where the pass was. `other` for a worker's report and for the control watchdog.
+    out << "frame-scope: " << frameScopeName((wedge != nullptr || role() == Role::Control) ? FrameScope::Other : currentFrameScope()) << "\n";
     {
         const char* phase = publishedPhaseName();
         out << "reload-phase: " << (phase != nullptr ? phase : "none") << "\n";
     }
     // WHICH THREAD STOPPED, and whether the radio was keyed (6.27).
-    writeWorkerHeaderLines(out, wedge);
+    writeWorkerHeaderLines(out, wedge, static_cast<unsigned long>(gui), roleWord(role()));
     out << "--- context ---\n";
     out << diagContextBlock();
     // THE WINDOW'S LAST-KNOWN STATE, beside the rest of the context: visible or
@@ -1702,8 +1972,10 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "--- process ---\n";
     out << "uptime-sec: " << processUptimeSec() << "\n";
     // EVERY REGISTERED WORKER, one line each: the stalled one is rarely the whole story.
-    writeBeatsSection(out);
+    // THE TRAIL BEFORE THE BEATS: the uploader reads `trail:` only inside the process block, and `--- beats ---` is a heading it ignores, so the line
+    // written after it was never uploaded (always empty in the field). tests/test_diag_hang.cpp parses a written report and checks it.
     writeTrailLine(out);
+    writeBeatsSection(out);
     out.flush();
 
     {

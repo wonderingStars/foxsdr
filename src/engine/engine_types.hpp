@@ -44,6 +44,10 @@ struct ControlThreadOptions {
     // not come back is a hang.
     std::string watchdogReportDir;
     unsigned watchdogThresholdMs = cascade::core::HangWatchdog::kDefaultThresholdMs;
+    // THE START-UP BUDGET FOR THE FIRST PASSES (HangWatchdog::beginStartup): the first kStartupFrames beats are judged against kStartupThresholdMs. The Slint
+    // window has no freeze watchdog of its own (slint/host_duties.hpp), so the control thread's is the one that sees its first moments; EngineService sets this
+    // for every host (the classic window also calls beginStartup on its own watchdog). tests/test_watchdog_startup_wired.cpp.
+    bool startupBudget = false;
     // WHETHER THE CONTROL THREAD'S BEAT IS THE SENTINEL'S HEARTBEAT (core/breadcrumb.hpp; HangWatchdog::setSentinelHeartbeat; docs/engine-stage4.md
     // 6.31). The watcher outside the process judges the host's FRAME LOOP. With a window that is the window's, and the control thread's watchdog -
     // which beats 62 times a second whatever the window is doing - must not stand in for it (it hid a wedged window from the watcher, cleared the

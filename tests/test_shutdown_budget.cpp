@@ -1152,6 +1152,11 @@ const KnownWait kKnownWaits[] = {
      "the cap on how much silence one silent read adds to the stall detector's tally. An arithmetic cap, not a wait"},
     {"src/source/soapy_source.hpp", "kRestartGiveBack", 1,
      "SoapySource::stop() and closeDevice() (lockForEscape): when the first kControlLockWait ran out AND a stall restart is in flight, the stop asks the restart to give the device lock back and waits up to kRestartGiveBack more. It adds to kControlLockWait on the GUI teardown thread, once, and only while a restart really is in flight. 1500 ms (one bounded restart step; kControlLockWait + 1500 + the stop's own kVendorCallWait = 4.5 s stays inside the 5 s hang watchdog). 23500 -> 25000, and kShutdownThresholdMs 53000 -> 56000 with it"},
+    {"src/core/issue_report.hpp", "kShutdownFlushWait", 1,
+     "issue::flushWritesAtShutdown() - the bound on the detached issue-report writers still in flight when Engine::shutdownDrain() runs (review of fix/freezes, finding 3b). "
+     "The teardown itself raises issues (CatStop, CloseLeak, ReaderLeak) and each is filed by a writer thread; the flush waits for them, only while a write really is out, and "
+     "the bound is spent ONCE per process (a second ask - the engine's destructor - finds it spent). 250 ms, on the teardown thread. 25000 -> 25250, and kShutdownThresholdMs "
+     "56000 -> 56500 with it"},
     {"src/engine/engine.cpp", "kNetworkCancelWait", 0,
      "how long the control pass waits for a cancelled network open worker (rtl_tcp) to come back when a person picks another radio; the worker hears the cancel within ~50 ms. Reached only from the pick-a-radio command (Engine::cancelPendingNetworkOpen), never from the shutdown stretch"},
     {"src/core/transmitter.hpp", "kAudioPollWait", 0,
@@ -1282,6 +1287,11 @@ const KnownWait kKnownWaits[] = {
      "zero by construction - poll()'s once-a-frame ready-check on a std::future, not a wait. The "
      "frame loop has ended before beginShutdown() raises the threshold, so poll() is not even "
      "called on the teardown path"},
+    // THE COMPANION SHELF'S STATE CACHE (core/companion_state_cache.hpp, freeze B058596B): two ages, compared against a clock by the pass's tick(); nothing waits on either.
+    {"src/core/companion_state_cache.hpp", "kMaxAge", 0,
+     "not a wait: how old the cached states may get before the pass's tick() starts a refresh on a DiskJob worker. Compared against a clock; the shutdown path never calls tick()"},
+    {"src/core/companion_state_cache.hpp", "kIdle", 0,
+     "not a wait: how long after the last lookup the cache keeps itself fresh. Compared against a clock; nothing blocks for it"},
     {"src/core/disk_job.hpp", "kQuitGrace", 0,
      "DiskJob::reap()'s grace before a job still blocked in the filesystem is abandoned: called "
      "from ~DiskJob, i.e. from ~AppWindow after watchdog_.stop(), outside the budgeted stretch, "

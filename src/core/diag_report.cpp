@@ -1110,13 +1110,21 @@ const std::vector<std::string>& hangReportFieldNames() {
     // that thread beat in and the declared wait it was parked in (`none` for either), and whether the radio was keyed
     // (`yes`, `no`, or `unknown` where no engine has installed the probe). Always written, for the reason `note` is.
     // `blamed-plugin` and `blamed-plugin-entry` (6.28, plugin containment P1) name WHICH plugin a call-budget report is about and through which entry
+    // `watchdog`, `thread-role`, `pass-phase`, `outcome`, `waiting-lock`, `lock-holder-role`, `lock-site`, `lock-held-ms`, `blamed-plugin-version` and
+    // `blamed-plugin-how` (freeze diagnosis section 7) say WHICH watchdog filed the report (window, control, shutdown, worker, plugin-call), what the stalled thread is,
+    // the control pass's phase (`none` for any other report), `pending` until the stall ends, the tagged lock the thread waited for with its holder's role, the site it
+    // was taken at and for how long (`none` / 0 when it waited for none), and the plugin's version and how it was found (`in-call`, `lock-holder`, `none`). All closed
+    // words and numbers (core/stall_context.hpp); always written, for the reason `note` is.
     // point (the plugin's public id - the catalogue id of an official one, a hash for any other - and the entry's word); `none` for the
     // report of a thread. Always written, for the same reason.
     static const std::vector<std::string> names = {"kind",         "note",      "stalled-ms",
                                                    "threshold-ms", "signature", "threads",
                                                    "frame-scope",  "reload-phase", "thread",
                                                    "thread-phase", "thread-wait",  "transmitting",
-                                                   "blamed-plugin", "blamed-plugin-entry"};
+                                                   "blamed-plugin", "blamed-plugin-entry",
+                                                   "watchdog", "thread-role", "pass-phase", "outcome",
+                                                   "waiting-lock", "lock-holder-role", "lock-site", "lock-held-ms",
+                                                   "blamed-plugin-version", "blamed-plugin-how"};
     return names;
 }
 

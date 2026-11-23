@@ -74,6 +74,11 @@ struct State {
     std::mutex probe;  // guards keyedProbe and keyedOwner
     std::function<bool()> keyedProbe;
     const void* keyedOwner = nullptr;
+    // The calls poll() has returned as overrun and has not yet seen end (guarded by `poll`).
+    struct ReportedCall { int index; std::uint32_t epoch; std::int64_t startMs; Finding finding; };
+    std::vector<ReportedCall> reportedCalls;
+    // The registrations that were REMOVED (their thread's work ended) while a freeze report for them was still open: poll() hands them back as `ended`, once (guarded by `poll`).
+    std::vector<Finding> ended;
 };
 
 State& state() {
@@ -303,7 +308,18 @@ void Registry::add(const std::shared_ptr<detail::Slot>& s) {
 }
 
 void Registry::remove(const detail::Slot* s) {
+    // A REGISTRATION THAT ENDS WITH A REPORT STILL OPEN (a one-shot worker: the device open, a scan) leaves nothing for poll() to see recover, and its file would stay `outcome: pending`
+    // for the whole session and be sent next start as `not-recovered`, which is false for a thread that finished (review of fix/freezes, must-fix 2). Taken under the poll lock,
+    // which is what guards `reported`; poll never waits for a worker, so a worker's exit waits at most for one look at the table.
+    std::lock_guard<std::mutex> pollLk(state().poll);
     std::lock_guard<std::mutex> lk(state().reg);
+    for (const auto& sp : state().slots) {
+        if (sp.get() == s && sp->reported) {
+            sp->reported = false;
+            state().ended.push_back(makeFinding(*sp, clockMs() - sp->episodeStartMs, budgetFor(sp->spec->kind), nullptr));
+            break;
+        }
+    }
     state().slots.erase(std::remove_if(state().slots.begin(), state().slots.end(),
                                  [s](const std::shared_ptr<detail::Slot>& p) { return p.get() == s; }),
                   state().slots.end());
@@ -325,6 +341,7 @@ PollResult Registry::poll() {
     }
     PollResult out;
     const std::int64_t now = clockMs();
+    out.ended.swap(state().ended);
     for (const auto& sp : copy) {
         detail::Slot& s = *sp;
         // A generation its owner abandoned and counted is not this table's business.
@@ -365,6 +382,20 @@ PollResult Registry::poll() {
         }
     }
 
+    // THE CALLS REPORTED EARLIER THAT HAVE ENDED: the slot is free, or has been entered again since (a different epoch).
+    {
+        auto& rc = state().reportedCalls;
+        for (std::size_t k = 0; k < rc.size();) {
+            const CallSlot& c = g_calls[rc[k].index];
+            const bool still = c.state.load(std::memory_order_acquire) == 2 && c.epoch.load(std::memory_order_relaxed) == rc[k].epoch;
+            if (still) { ++k; continue; }
+            Finding f = rc[k].finding;
+            f.stalledMs = now - rc[k].startMs;
+            out.callsReturned.push_back(std::move(f));
+            rc.erase(rc.begin() + static_cast<std::ptrdiff_t>(k));
+        }
+    }
+
     // THE CALLS IN FLIGHT. A call is accused only on a reading that is unchanged (the slot was not freed and reused between the reads),
     // and each stage of each call is claimed - and so reported - once, by whoever gets there first.
     for (int i = 0; i < kMaxCalls; ++i) {
@@ -394,6 +425,8 @@ PollResult Registry::poll() {
             Finding f2 = f;
             f2.stage = st;
             f2.budgetMs = st == 2 ? wedge : budget;
+            f2.callToken = (static_cast<std::uint64_t>(i) << 32) | epoch;
+            if (st == 1) { state().reportedCalls.push_back({i, epoch, start, f2}); }
             out.calls.push_back(std::move(f2));
         }
     }

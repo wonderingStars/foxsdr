@@ -63,6 +63,8 @@
 #include <string>
 #include <vector>
 
+#include "core/stall_context.hpp"
+
 namespace cascade::core {
 
 // %LOCALAPPDATA%/FoxSDR on Windows (the same per-user tree the plugin
@@ -154,7 +156,7 @@ public:
     // Exists so a test can prove that a thread which must never wait (a vendor
     // driver's stream callback, tests/test_sdrplay_stall.cpp) does not wait on the
     // log. Never called by the application.
-    std::unique_lock<std::mutex> lockForTest() { return std::unique_lock<std::mutex>(fileMutex_); }
+    std::unique_lock<stall::TaggedMutex> lockForTest() { return std::unique_lock<stall::TaggedMutex>(fileMutex_); }
 
     // Test seam (0.99.65): called with each line the file is about to take, from
     // INSIDE the file append, so a test can park a write exactly where a slow disk
@@ -173,7 +175,7 @@ private:
     // where both are needed (configure, resetForTest): fileMutex_ first, then
     // ringMutex_. write() never holds both.
     mutable std::mutex ringMutex_;
-    mutable std::mutex fileMutex_;
+    mutable stall::TaggedMutex fileMutex_{"diag-log-file"};   // tagged: a freeze report names who holds it (core/stall_context.hpp)
 
     // Under fileMutex_:
     std::string dir_;

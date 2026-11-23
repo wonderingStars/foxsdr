@@ -345,6 +345,7 @@ int main() {
         cascade::core::issue::resetIssueReportsForTest();
     }
     auto ringdropReports = [&] {
+        (void)cascade::core::issue::waitForWritesForTest(3000);   // (the report is written by a worker: freeze FA0B39E3)
         std::size_t n = 0;
         std::error_code ec;
         for (const auto& e : fs::directory_iterator(reports, ec)) {
@@ -360,6 +361,7 @@ int main() {
 
     // The text of the (first) ringdrop report on disk, or empty.
     auto ringdropReportText = [&] {
+        (void)cascade::core::issue::waitForWritesForTest(3000);   // (the report is written by a worker since freeze FA0B39E3; the lambda reads the folder at once)
         std::error_code ec;
         for (const auto& e : fs::directory_iterator(reports, ec)) {
             const std::string name = e.path().filename().string();
@@ -755,7 +757,7 @@ int main() {
             // (the filing is behind `if (lossMinute)` and NOTHING ELSE: `lossMinute` is the floor test and no event, run of minutes or start-up
             // grace is in the decision - review of 70d16f00, finding 3)
             const std::size_t floor = body.find("ringDropWorthAReport(dropped, read)");
-            const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
+            const std::size_t file = body.find("fileIssueReportOffThread(cascade::core::health::Recovered::RingDrop)");   // (the write is a worker's since freeze FA0B39E3)
             const std::size_t gate = body.find("if (lossMinute)");
             CHECK(gate != std::string::npos && file != std::string::npos && gate < file);
             CHECK(body.find("minuteJudged") == std::string::npos);

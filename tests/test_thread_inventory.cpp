@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
         const std::size_t firstContinue = wd.find("continue;", tm);
         CHECK(poll != std::string::npos && firstContinue != std::string::npos && poll < firstContinue);
         // the report is written through the shared capture, with the finding
-        CHECK(wd.find("captureAllThreads(dir + name, static_cast<double>(f.stalledMs), &f)") != std::string::npos);
+        CHECK(wd.find("captureAllThreads(path, static_cast<double>(f.stalledMs), &f)") != std::string::npos);
         // and the poll reads the registry
         CHECK(wd.find("reg.poll()") != std::string::npos);
     }

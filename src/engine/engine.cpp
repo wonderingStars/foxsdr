@@ -281,6 +281,8 @@ Engine::~Engine() {
         stopTransfers();
         wireCShutdown();   // wire-c: the listeners and CAT sessions of wiring lane C are closed while the API host they use still stands (an engine that is destroyed without shutdownQuiesce)
         teardown();
+        cascade::core::health::drainRecovered();   // THE RAISED WORDS BECOME REPORTS FIRST (ReaderLeak, CloseLeak are only a bit until drained; the pass that drains them has stopped)
+        (void)cascade::core::issue::flushWritesAtShutdown();   // (the same bound, spent once per process: a teardown that raised an issue lands it)
     }
 #ifdef _WIN32
     // The control thread is gone (teardown, above or earlier): nothing waits on, or sets, these any more.
@@ -1232,7 +1234,7 @@ void Engine::closeDspMinute() {
     // minute (high water, cut writes, longest block). Everything this minute has to say is logged first.
     // NOTHING ELSE DECIDES IT: no event, no run of minutes, no start-up grace (review of 70d16f00).
     if (lossMinute) {
-        cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
+        cascade::core::issue::fileIssueReportOffThread(cascade::core::health::Recovered::RingDrop);   // (the write is a worker's: freeze FA0B39E3)
     }
 }
 
@@ -4447,8 +4449,11 @@ std::string Engine::pluginInstallBlockedReason(int idx, bool acknowledged) const
     if (catalogEntryInstalled(e)) { return FOX_TR_NOOP("already installed"); }
     // companion applications shelf: a companion whose program this copy cannot obtain has nothing to fit (the website copy: the catalogue publishes no program; the Store
     // copy: the package holds none). Said before the notice gate, so nobody ticks a notice for something that cannot be fitted. No promise of when.
-    if (e.companion.present && e.source.empty() &&
-        cascade::core::companion::stateForEntry(e, pluginDir_) == cascade::core::companion::State::NotAvailable) {
+    // (From the cache, memory only: this runs on the pass, and the file reads moved to the worker - core/companion_state_cache.hpp. A row the worker has not
+    // computed yet does not block; the install path checks the program again before anything is fetched.)
+    cascade::core::companion::State companionState = cascade::core::companion::State::InPackage;
+    if (e.companion.present && e.source.empty() && companionStates_.lookup(e.id, companionState) &&
+        companionState == cascade::core::companion::State::NotAvailable) {
         return FOX_TR_NOOP("the program for this companion is not available in this copy of FoxSDR");
     }
     // THE ACKNOWLEDGEMENT GATE, last so it is the final thing standing between
@@ -5126,8 +5131,13 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // the decoder will say so itself rather than the host guessing.
     if (ps.sampleRateHz > 0.0 && rx().device_ != nullptr &&
         rx().pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
-        const cascade::gui::RateSetOutcome set =
-            cascade::gui::applySourceRate(*rx().device_, ps.sampleRateHz, rx().sourceError_, /*explicitRequest=*/true);
+        // A RATE CHANGE ON A LIVE STREAM stops and restarts it (bounded driver steps: the lock wait and the vendor calls of kStopWaits), so it is judged in the Stop phase (must-fix 4b).
+        const cascade::gui::RateSetOutcome set = [&] {
+            const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
+            cascade::gui::RateSetOutcome o = cascade::gui::applySourceRate(*rx().device_, ps.sampleRateHz, rx().sourceError_, /*explicitRequest=*/true);
+            controlWatchdog_.heartbeat();
+            return o;
+        }();
         if (set.ok) {
             // A rate the driver COERCED is said (the refusal stays advisory,
             // as above).
@@ -6643,6 +6653,9 @@ void Engine::holdAudioLockForTest() {
 }
 
 void Engine::stopReceiver(const char* who) {
+    // THE PASS IS IN A RECEIVER STOP, which is made of bounded waits (core/stall_context.hpp kStopWaits): the control watchdog judges it against kStopThresholdMs, not 5 s
+    // (report C9E6E94B, 0.99.112), and a report written meanwhile says `pass-phase: receiver-stop`.
+    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
     // Play-stop while recording stops the recording cleanly (spec): taps
     // uninstalled and both WAVs finalized BEFORE the DSP threads join, so a
     // take can never outlive the sample flow it was taping. Only when the
@@ -6694,6 +6707,9 @@ void Engine::stopReceiver(const char* who) {
     // receiver starves nobody, and counting it would hide a real starved
     // callback. This is the pass's thread, the one that closes minutes.
     if (running) { ++rx().receiverStops_; }
+    // THE LAST THING THE STOP DOES, INSIDE THE PHASE: the control thread beats, so a watchdog poll that lands between the end of this scope (which puts the 5 s threshold back) and the next
+    // beat at the top of the loop sees a fresh heartbeat, not a pass that has been stopped for 10 s (review of fix/freezes, must-fix 4a).
+    controlWatchdog_.heartbeat();
 }
 
 void Engine::endTakesOnFault() {
@@ -6707,11 +6723,15 @@ void Engine::endTakesOnFault() {
 }
 
 void Engine::installSource(std::unique_ptr<cascade::source::IqSource> src) {
+    // A SOURCE SWITCH STOPS THE OLD SOURCE THE WAY A STOP DOES (Pipeline::setSource: the same bounded quiesce of the source thread, the old source's own stop): the same bounded waits, so the
+    // same phase and threshold as stopReceiver (core/stall_context.hpp kStopWaits), and a beat at the end (review of fix/freezes, must-fix 4b).
+    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
     // BEFORE the swap: setSource keeps the DSP thread running across it, so
     // a take ended afterwards would already hold the first blocks of the new
     // source.
     endTakes(true, false, "the source changed", false);
     rx().pipeline_.setSource(std::move(src));
+    controlWatchdog_.heartbeat();
 }
 
 bool Engine::startAudioRecording() {
@@ -8807,8 +8827,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // The refusal's reason, or a coercion's, lands on the line; the
             // Rate combo follows the READBACK.
             rre::RefusalWatch rateWatch;
-            const cascade::gui::RateSetOutcome set =
-                cascade::gui::applySourceRate(*rx().device_, c.num[0], rx().sourceError_);
+            // A RATE CHANGE ON A LIVE STREAM stops and restarts it (bounded driver steps: the lock wait and the vendor calls of kStopWaits), so it is judged in the Stop phase (must-fix 4b).
+            const cascade::gui::RateSetOutcome set = [&] {
+                const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
+                cascade::gui::RateSetOutcome o = cascade::gui::applySourceRate(*rx().device_, c.num[0], rx().sourceError_);
+                controlWatchdog_.heartbeat();
+                return o;
+            }();
             rx().sourceError_ = set.sourceError;
             rateWatch.noteRefusalIf(!set.ok, rx().device_, rx().sourceKind_.c_str(), rre::Control::Rate, set.sourceError);   // a refusal the driver did not say itself
             if (!set.ok) { return refuse(FOXAPI_FAILED, "the radio refused the rate"); }
@@ -11729,6 +11754,12 @@ void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) 
     // shutdown budget is charged kSaveBound once. A default-constructed deadline waits for nothing and collects what has finished.
     drainListSaves(drainDeadline);
     drainRecordFinishes(drainDeadline);
+    // THE ISSUE REPORTS THE TEARDOWN ITSELF RAISED (CatStop, CloseLeak, ReaderLeak) are written by detached writer threads: wait for those in flight, at most
+    // issue::kShutdownFlushWait (250 ms, charged in HangWatchdog::kShutdownBoundedWaitsMs), so they are on disk when the process ends (review of fix/freezes, finding 3b).
+    // THE WORDS THE TEARDOWN RAISED (ReaderLeak, CloseLeak: a lock-free bit, drained into a written report only by the pass, which has stopped) are drained NOW, so the flush below has
+    // a writer to wait for (review of fix/freezes, must-fix 1). CatStop files directly and was never lost.
+    cascade::core::health::drainRecovered();
+    (void)cascade::core::issue::flushWritesAtShutdown();
 }
 
 void Engine::shutdownRelease() {
@@ -11976,14 +12007,24 @@ cascade::core::AppConfig Engine::configSnapshot() const {
 
 void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); }
 
-void Engine::startControlThread(const ControlThreadOptions& options) {
-    if (controlThread_.joinable()) { return; }
-    txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
+void Engine::armControlWatchdog(const ControlThreadOptions& options) {
+    if (controlWatchdogArmed_) { return; }
     controlDiagDir_ = options.diagnosticsDir;
     // THE SENTINEL'S HEARTBEAT IS THE FRAME LOOP'S, and this thread's is that only when no window follows (ControlThreadOptions::sentinelHeartbeat; deep review of
     // engine/stage4, batch A, docs/engine-stage4.md 6.31): the watcher outside the process must not read this thread's 62 beats a second as a window that is alive.
     controlWatchdog_.setSentinelHeartbeat(options.sentinelHeartbeat);
+    controlWatchdog_.setRole(cascade::core::HangWatchdog::Role::Control);   // its reports say `watchdog: control` and the pass's phase, not the window's frame scope
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
+    // THE START-UP BUDGET IS BY TIME AND PASSES, NOT BEATS (review of fix/freezes, finding 5): 30 s until 30 passes have completed or 30 s have gone, whichever is first.
+    // (It was 30 beats, and the loop beats twice a pass: the budget was over after about 14 passes, a quarter of a second.)
+    if (options.startupBudget) { controlWatchdog_.beginStartupByTime(); }   // ControlThreadOptions::startupBudget
+    controlWatchdogArmed_ = true;
+}
+
+void Engine::startControlThread(const ControlThreadOptions& options) {
+    if (controlThread_.joinable()) { return; }
+    txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
+    armControlWatchdog(options);   // (a no-op when EngineService::start armed it before its first pass)
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
         controlExited_ = false;
@@ -12068,6 +12109,7 @@ void Engine::stopControlThread() {
     controlThread_.join();
     controlThreadId_.store(std::thread::id{});
     controlWatchdog_.stop();
+    controlWatchdogArmed_ = false;
 #ifdef _WIN32
     if (timerResolutionApplied_ > 0) {
         (void)timeEndPeriod(timerResolutionApplied_);
@@ -12085,30 +12127,49 @@ void Engine::controlPass() {
 }
 
 void Engine::runPassPart(PassPart part) {
+    // THE PHASE, for a freeze report about this thread (core/stall_context.hpp): one relaxed store a step, a word from a closed list.
+    using cascade::core::stall::PassPhase;
+    using cascade::core::stall::setPassPhase;
     switch (part) {
         case PassPart::Front:
+            setPassPhase(PassPhase::Gps);
             pollGpsReader();
+            setPassPhase(PassPhase::Frame);
             pumpFrameBegin();
+            setPassPhase(PassPhase::Inputs);
             pumpInputs();
+            setPassPhase(PassPhase::Remote);
             pumpRemoteControls();
+            setPassPhase(PassPhase::Plugins);
             pumpPlugins();
+            setPassPhase(PassPhase::Patch);
             pumpPatch();
+            setPassPhase(PassPhase::Publish);
             (void)pumpPublish();
             break;
         case PassPart::Mute:
+            setPassPhase(PassPhase::Mute);
             pumpAudioMute();
             break;
         case PassPart::Back:
+            setPassPhase(PassPhase::Workers);
             pumpWorkers();
+            setPassPhase(PassPhase::Audio);
             pumpAudio();
             // THE ADDED RADIOS' OWN HOUSEKEEPING (stage 4): each under its own scope, after the first radio's.
+            setPassPhase(PassPhase::Extra);
             pumpExtraReceivers();
+            setPassPhase(PassPhase::Schedule);
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
+            setPassPhase(PassPhase::Macros);
             pumpMacros();     // (a macro being played: engine_macros.cpp)
             forEachReceiver([this] { recplayPump(); });   // screen lane S3: rollover, clips and the replay buffer (engine_recplay.cpp)
+            setPassPhase(PassPhase::Wire);
             pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pumpWireC();      // wire-c (engine_wire_c.cpp)
+            setPassPhase(PassPhase::Smeter);
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
+            setPassPhase(PassPhase::Idle);
             break;
     }
 }
@@ -12123,6 +12184,7 @@ void Engine::runPassPart(PassPart part) {
 // the queue the pass drains afterwards. Clearing it after the wait would eat exactly that wake.
 void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::milliseconds floor, bool stepped) {
     controlThreadId_.store(std::this_thread::get_id());
+    cascade::core::stall::registerThreadRole(cascade::core::stall::Role::Control);   // (what a freeze report says this thread is: core/stall_context.hpp)
     using SteadyClock = std::chrono::steady_clock;
     SteadyClock::time_point passStart{};
     bool first = true;
@@ -12186,6 +12248,7 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
             lk.lock();
             if (part == PassPart::Back) {
                 controlPasses_.fetch_add(1);
+                controlWatchdog_.notePassCompleted();
                 passesEnded_.store(passesBegun_.load());
             }
             ++stepsDone_;
@@ -12261,6 +12324,7 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
         }
         controlPass();
         controlPasses_.fetch_add(1);
+        controlWatchdog_.notePassCompleted();   // (the start-up budget counts passes, not beats)
         {
             const std::uint64_t us = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(SteadyClock::now() - passStart).count());

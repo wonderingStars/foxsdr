@@ -1230,7 +1230,7 @@ void noteRecovered(Recovered r) {
     // ...AND REPORTED (0.99.100, core/issue_report.hpp): once a session per word, under
     // the Diagnostics switch rather than usage reporting, so the feed hears of a fault
     // the person met whether or not this count is ever sent.
-    issue::fileIssueReport(r);
+    issue::fileIssueReportOffThread(r);
     const std::string token = tokenRecovered(r);
     if (!token.empty()) { note(token); }
 }
@@ -1277,11 +1277,11 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     auto g = globalLedger();
     if (const std::uint32_t n = moved(now.sourceThreadsAbandoned, last_.sourceThreadsAbandoned)) {
         g->note(tokenRecovered(Recovered::SrcThread), n);
-        issue::fileIssueReport(Recovered::SrcThread);
+        issue::fileIssueReportOffThread(Recovered::SrcThread);
     }
     if (const std::uint32_t n = moved(now.vendorCallsAbandoned, last_.vendorCallsAbandoned)) {
         g->note(tokenRecovered(Recovered::VendorCall), n);
-        issue::fileIssueReport(Recovered::VendorCall);
+        issue::fileIssueReportOffThread(Recovered::VendorCall);
     }
     if (const std::uint32_t n = moved(now.ringDroppedSamples, last_.ringDroppedSamples)) {
         // Counted here, every drop; the feed ROW is filed by the DSP minute
@@ -1292,29 +1292,29 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     }
     if (const std::uint32_t n = moved(now.dspThreadExceptions, last_.dspThreadExceptions)) {
         g->note(tokenRecovered(Recovered::DspExc), n);
-        issue::fileIssueReport(Recovered::DspExc);
+        issue::fileIssueReportOffThread(Recovered::DspExc);
     }
     // THE BRANCH'S FIVE (the per-thread watchdog, the plugin containment) are polled counters like the four above, so each is
     // REPORTED as well as counted - master's rule (0.99.100, core/issue_report.hpp: filed wherever a word is counted, once a session).
     if (const std::uint32_t n = moved(now.threadWedges, last_.threadWedges)) {
         g->note(tokenRecovered(Recovered::ThreadWedge), n);
-        issue::fileIssueReport(Recovered::ThreadWedge);
+        issue::fileIssueReportOffThread(Recovered::ThreadWedge);
     }
     if (const std::uint32_t n = moved(now.pluginFaults, last_.pluginFaults)) {
         g->note(tokenRecovered(Recovered::PluginFault), n);
-        issue::fileIssueReport(Recovered::PluginFault);
+        issue::fileIssueReportOffThread(Recovered::PluginFault);
     }
     if (const std::uint32_t n = moved(now.pluginQuarantines, last_.pluginQuarantines)) {
         g->note(tokenRecovered(Recovered::PluginQuarantine), n);
-        issue::fileIssueReport(Recovered::PluginQuarantine);
+        issue::fileIssueReportOffThread(Recovered::PluginQuarantine);
     }
     if (const std::uint32_t n = moved(now.pluginWedges, last_.pluginWedges)) {
         g->note(tokenRecovered(Recovered::PluginWedge), n);
-        issue::fileIssueReport(Recovered::PluginWedge);
+        issue::fileIssueReportOffThread(Recovered::PluginWedge);
     }
     if (const std::uint32_t n = moved(now.pluginOveruses, last_.pluginOveruses)) {
         g->note(tokenRecovered(Recovered::PluginOveruse), n);
-        issue::fileIssueReport(Recovered::PluginOveruse);
+        issue::fileIssueReportOffThread(Recovered::PluginOveruse);
     }
     last_ = now;
 }

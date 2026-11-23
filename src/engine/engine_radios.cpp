@@ -226,6 +226,9 @@ FoxCommandResult Engine::radioRemoveOp(const FoxCommand& c, FoxCommandResult res
 
 void Engine::removeReceiverSlot(std::size_t slot) {
     if (slot == 0 || slot >= kMaxReceivers || !receivers_[slot]) { return; }
+    // A RADIO'S REMOVAL IS A STOP (applyCommand RUN 0 below) AND A CLOSE (the pipeline's destructor stops again and the source closes its device): the same bounded waits, once or twice over, so the
+    // same phase and threshold as stopReceiver (core/stall_context.hpp kStopWaits; the sums are stated there), and a beat at the end (review of fix/freezes, must-fix 4b).
+    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
     wireBStopIqOut(slot);   // wire-b: the radio's network I/Q output ends before its pipeline goes
     cascade::core::diagLogf("radio: radio %u removed", static_cast<unsigned>(slot + 1u));
     {
@@ -262,6 +265,7 @@ void Engine::removeReceiverSlot(std::size_t slot) {
     api_->radioClosed(slot);
     rebuildDeviceLedger();
     applyAudioRoutes();
+    controlWatchdog_.heartbeat();
 }
 
 // --- RADIO_AUDIO and RADIO_SOLO ----------------------------------------------------------------------------------------------------------------

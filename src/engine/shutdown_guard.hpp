@@ -33,8 +33,8 @@
 // written with the raw write of the platform, not through stdio: the thread that is wedged may be holding stderr's lock.
 // The guard takes no other lock the stop could hold, and does not log to the diagnostics file for the same reason.
 //
-// THE BUDGET'S SIZE is HangWatchdog::kShutdownThresholdMs (56000 ms, tests/test_shutdown_budget.cpp holds it to the
-// arithmetic of the bounded waits), so the longest a stop is allowed is that plus kEndGraceMs: 61 s. A service
+// THE BUDGET'S SIZE is HangWatchdog::kShutdownThresholdMs (56500 ms, tests/test_shutdown_budget.cpp holds it to the
+// arithmetic of the bounded waits), so the longest a stop is allowed is that plus kEndGraceMs: 61.5 s. A service
 // manager's stop timeout must be longer than that (docs/headless-service.md: TimeoutStopSec=90).
 //
 // A bounded run's TEST SEAM, FOXSDR_ENGINE_SHUTDOWN_BUDGET_MS, shrinks the budget (engine_main.cpp reads it only with

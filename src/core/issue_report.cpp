@@ -9,6 +9,9 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -25,6 +28,8 @@
 #include "core/crash_handler.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/leak_on_purpose.hpp"
+#include "core/thread_beats.hpp"
 
 namespace cascade::core::issue {
 
@@ -247,7 +252,109 @@ std::string renderIssueReport(Recovered word) {
     return out;
 }
 
-std::string fileIssueReport(Recovered word) {
+// THE OFF-THREAD WRITER'S STATE. Writes still out (the test seam waits on it, and so does the shutdown's bounded flush) and the test's slow-disk hook.
+//
+// THE HOOK'S STATE IS LEAKED ON PURPOSE (core/leak_on_purpose.hpp; review of fix/freezes, finding 3c). A writer that is still running when main() returns - the shutdown
+// waits for it at most flushWritesAtShutdown()'s bound, then goes on - would read a std::function and a mutex the C runtime had already destroyed: the exit-time crash
+// family of signatures 929BF825 and 74EEC22D (a detached worker reading statics the static destructors have run). State that is never destroyed cannot be used after it is
+// gone. Nothing else the writer touches has a destructor: the counters are atomics, the log (core/diag_log.cpp) and the thread registry (core/thread_beats.cpp) are leaked
+// the same way, and the path and the text are the thread's own copies.
+static std::atomic<unsigned> g_writesOut{0};
+namespace {
+struct HookBox {
+    std::mutex mu;
+    std::function<void()> fn;
+    std::function<void()> beforeRename;   // TEST SEAM: called between the write of the temporary file and its rename
+};
+HookBox& hookBox() {
+    static HookBox* const b = cascade::core::leakOnPurpose(new HookBox());
+    return *b;
+}
+}  // namespace
+static void callDiskHook() {
+    std::function<void()> h;
+    { std::lock_guard<std::mutex> lk(hookBox().mu); h = hookBox().fn; }
+    if (h) { h(); }
+}
+
+// The write itself: written whole to a name the sweep does not read (`<name>.part`), flushed, closed, then RENAMED to its final name (review of fix/freezes, finding 3a). A
+// sweep that lists the folder while this runs - another word's report landing on a slow disk starts one - therefore never sees an empty or half-written `issue-*.txt`, which it
+// would refuse for good ("not a readable report"); and a writer that the process's exit kills leaves only a `.part` file, never a short report. True when the report is on disk.
+static bool writeReportFile(const std::string& path, const std::string& text) {
+    const std::string part = path + ".part";
+    {
+        std::ofstream out(part, std::ios::binary | std::ios::trunc);
+        if (!out) { return false; }
+        out.write(text.data(), static_cast<std::streamsize>(text.size()));
+        out.flush();
+        if (!out) {
+            out.close();
+            std::error_code ec;
+            std::filesystem::remove(part, ec);   // (a half-written report is not a report)
+            return false;
+        }
+    }
+    {
+        std::function<void()> h;
+        { std::lock_guard<std::mutex> lk(hookBox().mu); h = hookBox().beforeRename; }
+        if (h) { h(); }
+    }
+    std::error_code ec;
+    std::filesystem::rename(part, path, ec);
+    if (ec) {
+        std::error_code rm;
+        std::filesystem::remove(part, rm);
+        return false;
+    }
+    return true;
+}
+
+static std::string fileImpl(Recovered word, bool offThread);
+
+std::string fileIssueReport(Recovered word) { return fileImpl(word, false); }
+std::string fileIssueReportOffThread(Recovered word) { return fileImpl(word, true); }
+
+void setDiskHookForTest(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lk(hookBox().mu);
+    hookBox().fn = std::move(hook);
+}
+
+void setBeforeRenameHookForTest(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lk(hookBox().mu);
+    hookBox().beforeRename = std::move(hook);
+}
+
+// THE SHUTDOWN'S BOUNDED FLUSH. ONE deadline for the whole process: the first call that finds a write out sets it (now + the bound) and every call waits only until that same
+// instant, so the teardown pays the bound once however many places ask (the engine's destructor asks again after the service's drain; by then the instant has usually passed).
+static std::atomic<std::int64_t> g_flushDeadlineMs{0};
+static std::int64_t steadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+bool flushWritesAtShutdown(unsigned boundMs) {
+    if (g_writesOut.load(std::memory_order_acquire) == 0u) { return true; }
+    std::int64_t deadline = g_flushDeadlineMs.load(std::memory_order_acquire);
+    if (deadline == 0) {
+        const std::int64_t mine = steadyMs() + static_cast<std::int64_t>(boundMs);
+        std::int64_t expected = 0;
+        deadline = g_flushDeadlineMs.compare_exchange_strong(expected, mine, std::memory_order_acq_rel) ? mine : expected;
+    }
+    while (g_writesOut.load(std::memory_order_acquire) != 0u) {
+        if (steadyMs() >= deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
+}
+
+bool waitForWritesForTest(unsigned ms) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (g_writesOut.load(std::memory_order_acquire) != 0u) {
+        if (std::chrono::steady_clock::now() >= until) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return true;
+}
+
+static std::string fileImpl(Recovered word, bool offThread) {
     const std::size_t i = static_cast<std::size_t>(word);
     if (i >= health::kRecoveredCount) { return std::string(); }
     // Consent and a directory, both, or nothing is written - the crash handler's own
@@ -269,17 +376,31 @@ std::string fileIssueReport(Recovered word) {
     const std::string path = dir + "/issue-" + stamp() + "-" + std::to_string(processId()) + "-" +
                              std::to_string(g_seq.fetch_add(1u) + 1u) + ".txt";
     const std::string text = renderIssueReport(word);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        giveBack();
-        return std::string();
+    if (offThread) {
+        // THE FILE CALLS ARE A WORKER'S (freeze FA0B39E3: the control pass sat in the ofstream below). The gates, the path and the text are the caller's and
+        // cost no disk; the worker opens, writes, logs and counts, or gives the once-a-session bit back, as the synchronous branch does.
+        g_writesOut.fetch_add(1u, std::memory_order_acq_rel);
+        try {
+            std::thread([path, text, word, bit]() {
+                cascade::core::beats::Registration beat(cascade::core::beats::kThreadDiskJob);
+                beat.beat("disk");
+                callDiskHook();
+                if (writeReportFile(path, text)) {
+                    diagLogf("issue report written - %s (recovered.%s)", path.c_str(), health::recoveredWord(word));
+                    g_newlyFiled.fetch_add(1u, std::memory_order_acq_rel);
+                } else {
+                    g_filed.fetch_and(~bit, std::memory_order_acq_rel);
+                }
+                g_writesOut.fetch_sub(1u, std::memory_order_acq_rel);
+            }).detach();
+        } catch (...) {
+            g_writesOut.fetch_sub(1u, std::memory_order_acq_rel);
+            giveBack();
+            return std::string();
+        }
+        return path;
     }
-    out.write(text.data(), static_cast<std::streamsize>(text.size()));
-    out.flush();
-    if (!out) {
-        out.close();
-        std::error_code ec;
-        std::filesystem::remove(path, ec);   // (a half-written report is not a report)
+    if (!writeReportFile(path, text)) {
         giveBack();
         return std::string();
     }
@@ -299,6 +420,7 @@ void filePendingIssueReports() {
 }
 
 void resetIssueReportsForTest() {
+    g_flushDeadlineMs.store(0, std::memory_order_release);
     g_filed.store(0ull, std::memory_order_release);
     g_pending.store(0ull, std::memory_order_release);
     g_newlyFiled.store(0u, std::memory_order_release);

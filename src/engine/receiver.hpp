@@ -37,6 +37,7 @@
 #include "core/noise_floor_tracker.hpp"
 #include "core/pipeline.hpp"
 #include "core/receiver_snapshot.hpp"
+#include "core/stall_context.hpp"
 #include "core/ppm_auto.hpp"
 #include "core/recorder.hpp"
 #include "core/record_finish.hpp"
@@ -53,6 +54,9 @@ namespace cascade::engine {
 // in total, patch radios included. ONE constant: every structure that is per radio is sized by it, `FoxCommand.target` is a number, the facts are keyed
 // by number and a client reads `fact.radio.max`. Nothing may assume four.
 inline constexpr std::size_t kMaxReceivers = 8;
+// One plugin runner (one tagged lock) per receiver, plus the radio reporter's lock and the diagnostics log's: the tagged-lock table must hold them all, or a freeze that
+// waited for the last ones names no lock (core/stall_context.hpp).
+static_assert(cascade::core::stall::detail::kMaxTagged >= kMaxReceivers + 2, "the tagged-lock table is too small for every runner, the reporter and the log");
 
 // WHAT A DEVICE OPEN WORKER HANDS BACK (it was Engine::DeviceOpenResult; Engine keeps the name as an alias). Off-thread SoapySDR discovery and open:
 // SoapySDR::Device::enumerate()/make() do USB bus discovery and, for a B200, an FPGA/firmware load: seconds of blocking work, so they run on a worker

@@ -123,6 +123,7 @@ const char* idleWord(cascade::core::DecoderIdleReason r) {
         case R::CreateFailed: return "create failed";
         case R::NoAudioTable: return "no audio table";
         case R::PollFailed: return "poll failed";
+        case R::Starting: return "starting";
     }
     return "";
 }
@@ -199,6 +200,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     Fingerprint f;
     f.value(rx().modeIndex_);
     f.value(rx().vfoBandwidthHz_);
+    f.value(companionStates_.generation());   // a refresh of the companion shelf's states that changed one (core/companion_state_cache.hpp)
     f.value(freqMgr_.version());
     f.value(freqMgr_.list().size());
     // THE WATERFALL'S MARKERS (FREQ_MARKERS, stub campaign B10): the list's own counter - bumped by every drop, remove, clear and note - and the sentence of a
@@ -1105,7 +1107,11 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             fact(k + "companion.source", e.companion.source);
             fact(k + "companion.hide", e.companion.identifierLine);
             fact(k + "companion.program", e.companion.program.file);
-            fact(k + "companion.state", cascade::core::companion::stateWord(cascade::core::companion::stateForEntry(e, pluginDir_)));
+            {
+                // From the cache, memory only (core/companion_state_cache.hpp): no file is read on the pass. Empty until the first refresh lands.
+                cascade::core::companion::State cs = cascade::core::companion::State::NotAvailable;
+                fact(k + "companion.state", companionStates_.lookup(e.id, cs) ? cascade::core::companion::stateWord(cs) : "");
+            }
         }
         fact(k + "summary", e.summary);
         fact(k + "description", e.description);
@@ -2109,6 +2115,7 @@ std::uint64_t Engine::publishApiLists() {
     syncPatchImages();
     refreshPatchLive();
     refreshAirbandLive();
+    companionStates_.tick(catalog_, pluginDir_);   // collects / starts the worker that reads the companion shelf's files; never blocks
     const std::uint64_t fp = apiListsFingerprint();
     if (apiLists_ == nullptr || apiLists_->fingerprint != fp) {
         apiLists_ = buildApiLists(fp);

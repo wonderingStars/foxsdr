@@ -80,6 +80,7 @@
 #include "core/plugin_reload_phases.hpp"
 #include "core/plugin_host.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/companion_state_cache.hpp"   // the shelf's companion states, read off the pass
 #include "core/plugin_runner.hpp"
 #include "core/plugin_run.hpp"
 #include "core/plugin_ui.hpp"
@@ -2497,6 +2498,7 @@ private:
     std::atomic<bool> controlRun_{false};
     std::atomic<std::thread::id> controlThreadId_{};
     cascade::core::HangWatchdog controlWatchdog_;
+    bool controlWatchdogArmed_ = false;   // armControlWatchdog() has started it and stopControlThread() has not stopped it (the caller's thread only)
     std::atomic<std::uint64_t> controlPasses_{0};
     // TESTS ONLY: while true the control thread is parked at the top of its
     // loop - no pass, no tick, no heartbeat (tests/test_engine_control_thread).
@@ -2957,6 +2959,9 @@ private:
     void removeBlockedPlugin(const std::string& fileName);
     std::string pluginCatalogueUrl_;  // committed value (persisted)
     std::vector<cascade::core::PluginCatalogEntry> catalog_;
+    // THE COMPANION SHELF'S STATES, computed on a worker and read here from memory (core/companion_state_cache.hpp; freeze B058596B: stateForEntry's file reads
+    // were on the pass, twice per companion row per list rebuild). Ticked once a pass by publishApiLists; its generation is in the list fingerprint.
+    cascade::core::companion::StateCache companionStates_;
     // How many times catalog_ has been replaced, cleared or pushed to (a fetch starting, a fetch landing or
     // failing, the test hook's entry): the list fingerprint hashes this one value for everything a catalogue entry
     // carries (API 0.3 8.9: author, licence, platforms, floor, size, the long texts), where hashing each entry's
@@ -3845,6 +3850,9 @@ public:
     static constexpr std::chrono::milliseconds kPassWaitNet{20};
     void startControlThread();
     void startControlThread(const ControlThreadOptions& options);
+    // Starts the control thread's watchdog (and its start-up budget) WITHOUT the thread, so a first pass run on the caller's thread before the thread exists
+    // (EngineService::start) is already watched (review of fix/freezes, finding 5). startControlThread() then finds it running and does not start it again.
+    void armControlWatchdog(const ControlThreadOptions& options);
     void stopControlThread();
     bool controlThreadRunning() const { return controlRun_.load(); }
     // Where the control thread's hang reports go (empty: none); the front end moves it with its own diagnostics switch.

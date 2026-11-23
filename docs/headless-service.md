@@ -142,9 +142,9 @@ first wait, a few seconds at most; a second one ends the process.
 ## The stop is bounded
 
 Every stop - signal, `--seconds`, a failed start - runs under the window teardown's own budget: `HangWatchdog::kShutdownThresholdMs`,
-**53 s**. When a report may be written (`FOXSDR_DIAG_DIR`, or the stored Diagnostics switch on a run that is allowed to
+**56.5 s**. When a report may be written (`FOXSDR_DIAG_DIR`, or the stored Diagnostics switch on a run that is allowed to
 write) a hang report with every thread's stack is written when the budget is crossed. **5 s later** (`ShutdownGuard::kEndGraceMs`)
-the process is ended with **exit code 3** after one line on stderr naming the budget. So a stop takes at most 61 s.
+the process is ended with **exit code 3** after one line on stderr naming the budget. So a stop takes at most 61.5 s.
 If it was wedged before the marker was written (the plugin unload, the pipeline join, a driver's close), the marker is
 false and the next start counts the run as a crash.
 
@@ -181,7 +181,7 @@ ExecStart=/opt/foxsdr/foxsdr-engine --config /var/lib/foxsdr/config.json
 # The engine's stderr is its journal; it installs no capture of its own.
 
 # systemctl stop sends SIGTERM (the default KillSignal): an orderly stop, exit 0. The engine's own budget for a stop is
-# 53 s + 5 s; the manager's timeout must be longer than that, or SIGKILL arrives first and the marker is left false.
+# 56.5 s + 5 s; the manager's timeout must be longer than that, or SIGKILL arrives first and the marker is left false.
 TimeoutStopSec=90
 # SIGTERM to the engine alone; whatever else is left in the unit's cgroup (a sentinel, an enumeration child) is killed at
 # the end. The default, control-group, sends the stop signal to every process of the unit.

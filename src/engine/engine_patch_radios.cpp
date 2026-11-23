@@ -440,8 +440,17 @@ void Engine::patchReconcile() {
                 cascade::core::radioreport::noteDeviceFault(nullptr, n != nullptr ? pc::deviceDriver(n->device).c_str() : "", "the patch radio stopped", it->second->fault());
             }
         }
-        it->second->stop();
-        it = patchRadios_.erase(it);
+        {
+            // A PATCH RADIO'S STOP AND CLOSE ARE BOUNDED WAITS ON THIS THREAD, the same ones a receiver's removal makes (review of fix/freezes part 3, F9): the source's own stop (the device lock,
+            // kControlLockWait 1500, and the vendor's deactivate, kVendorCallWait 1500, with the stall restart's give-back, kRestartGiveBack, while one is in flight), then the reader's join
+            // (PatchRadio::kStopWaitMs 3000, the pipeline's kSourceJoinWait's twin), then the destructor closes the device (the same lock wait, give-back and vendor call): one radio is
+            // stopWaitMs sum + the close = kRemovalWorstMs() (12000 ms with kRestartGiveBack 1500; core/stall_context.hpp), which fits under kStopThresholdMs. The scope names the
+            // phase and the beat at the end of EACH radio restarts the clock, so a patch of several radios is judged one radio at a time, as the pass's other stops are.
+            const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
+            it->second->stop();
+            it = patchRadios_.erase(it);
+            controlWatchdog_.heartbeat();
+        }
         patchRadioOpenedAs_.erase(id);
         patchRadioSig_.erase(id);
         patchSpectra_.erase(id);
@@ -816,21 +825,32 @@ void Engine::patchStopAll(bool restoreMain) {
                                     patchRadios_.size());
         }
     }
-    for (auto& [id, radio] : patchRadios_) {
-        (void)id;
-        radio->stop();
-    }
-    // Destroying the radios destroys their runners and every set in them - on
-    // this thread, after the readers have stopped - which finalises each
-    // speaker's file and destroys each decoder handle where the ABI wants it.
-    // ONE WAIT FOR EVERY SOUND CARD AMONG THEM: each card's close is handed to
-    // its own thread as the radios go, and the batch then waits for all of
-    // them against a single kCloseWaitMs deadline - five cards whose closes
-    // hang cost one second here, not five.
+    // EVERY STOP BELOW IS THE STOP PHASE'S, one radio per beat (review of fix/freezes part 3, F9): each radio's stop is the source's lock wait and vendor call plus the reader's join
+    // (PatchRadio::kStopWaitMs 3000), 7500 ms worst (with kRestartGiveBack 1500); the destruction after the loop closes each device (kControlLockWait + kRestartGiveBack +
+    // kVendorCallWait, 4500 ms) and beats after each, so the worst between two beats is one radio's removal, kRemovalWorstMs() (core/stall_context.hpp), which fits under kStopThresholdMs
+    // however many radios there are. (A reader abandoned past its join is flushed by PatchRadio::stop() itself: that wait is for a plugin's own call and has no bound here.)
     {
-        cascade::source::SoundCardSource::CloseBatch closes;
-        patchRadios_.clear();
-    }
+        const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
+        for (auto& [id, radio] : patchRadios_) {
+            (void)id;
+            radio->stop();
+            controlWatchdog_.heartbeat();
+        }
+        // Destroying the radios destroys their runners and every set in them - on
+        // this thread, after the readers have stopped - which finalises each
+        // speaker's file and destroys each decoder handle where the ABI wants it.
+        // ONE WAIT FOR EVERY SOUND CARD AMONG THEM: each card's close is handed to
+        // its own thread as the radios go, and the batch then waits for all of
+        // them against a single kCloseWaitMs deadline - five cards whose closes
+        // hang cost one second here, not five.
+        {
+            cascade::source::SoundCardSource::CloseBatch closes;
+            while (!patchRadios_.empty()) {   // (one at a time, so each device's close is followed by a beat: patchRadios_.clear() did the same destructions in one go)
+                patchRadios_.erase(patchRadios_.begin());
+                controlWatchdog_.heartbeat();
+            }
+        }
+    }   // (end of the Stop phase)
     patchRadioOpenedAs_.clear();
     patchRadioSig_.clear();
     patchSpectra_.clear();

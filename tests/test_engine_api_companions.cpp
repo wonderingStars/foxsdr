@@ -272,6 +272,10 @@ int main() {
     std::printf("[E1] the website copy's facts\n");
     const std::string a = "store.companion-alpha.";
     const std::string b = "store.companion-beta.";
+    // THE SHELF'S STATES ARE READ ON A WORKER NOW (core/companion_state_cache.hpp; freeze B058596B), so they arrive a pass or two after the catalogue does: wait for
+    // them, then ask exactly what this test always asked.
+    CHECK(passUntil(eng, [&] { return !fact(local, a + "companion.state").empty() && fact(local, a + "companion.state") != "<absent>" &&
+                                      !fact(local, b + "companion.state").empty() && fact(local, b + "companion.state") != "<absent>"; }));
     CHECK_EQ(fact(local, a + "companion"), std::string("1"));
     CHECK_EQ(fact(local, a + "companion.state"), std::string("download"));
     CHECK_EQ(fact(local, a + "companion.upstream"), std::string("alpha-ng"));

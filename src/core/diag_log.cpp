@@ -119,7 +119,7 @@ void DiagLog::configure(const std::string& dir, bool enabled) {
     // The file's lock for all of it, held across the I/O: a configure that finds a
     // write in flight waits for it, as it always did. The ring's lock is taken only
     // at the end, for the two facts the panel reads (see publish()).
-    std::lock_guard<std::mutex> lk(fileMutex_);
+    std::lock_guard<stall::TaggedMutex> lk(fileMutex_);
     if (fp_ != nullptr) {
         std::fclose(fp_);
         fp_ = nullptr;
@@ -223,7 +223,7 @@ void DiagLog::write(const char* level, const char* msg) {
     // even locked for: fileEnabledFlag_ says so without the lock, and
     // appendToFileLocked looks again under it.
     if (!fileEnabledFlag_.load(std::memory_order_acquire)) { return; }
-    std::lock_guard<std::mutex> fk(fileMutex_);
+    std::lock_guard<stall::TaggedMutex> fk(fileMutex_);
     appendToFileLocked(line, len);
 }
 
@@ -281,7 +281,7 @@ std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
 }
 
 void DiagLog::resetForTest() {
-    std::lock_guard<std::mutex> fk(fileMutex_);
+    std::lock_guard<stall::TaggedMutex> fk(fileMutex_);
     std::lock_guard<std::mutex> lk(ringMutex_);
     if (fp_ != nullptr) {
         std::fclose(fp_);
