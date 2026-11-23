@@ -302,6 +302,40 @@ struct Reporter::Impl {
             }
         }
     }
+    // THE ANONYMOUS FORM of a stored radio_fail (contract 1.2): installId, sessionId and seq ABSENT, a random messageId present.
+    static void anonymize(json& env) {
+        env.erase("installId");
+        env.erase("sessionId");
+        env.erase("seq");
+        if (!env.contains("messageId")) { env["messageId"] = randomHex(16); }
+    }
+    static bool carriesInstallId(const json& env) { return env.is_object() && env.contains("installId"); }
+
+    // USAGE REPORTING IS OFF (the id is empty): everything queued that carries the install id goes. The journal and first-session lines are deleted (a segment that cannot be deleted
+    // now is held back from every listing, and is deleted again at the next start while Usage reporting is still off: the re-scan rule, so no marker file is kept), and a queued
+    // failure is kept as the anonymous form (the owner's rule of 2026-11-15 is that every failed radio open reaches him, with Diagnostics and Usage reporting off alike).
+    // Called with `mu` held, from setIdentity (the opt-out) and from configure (a start with Usage reporting already off). Returns false when a failure file could not be rewritten:
+    // it still carries the id on disk, and the send-time rule in runBatch strips it from what is posted.
+    bool purgeForOptOut() {
+        for (const Seg& g : listSegments()) { removeOrDefer(g.path); removeOrDefer(posPathOf(g.path)); }
+        segReady = false;
+        bool allRewritten = true;
+        for (const fs::path& f : listFailFiles()) {
+            json w = json::parse(readAll(f), nullptr, false);
+            if (!w.is_object() || !w.contains("msg") || !w["msg"].is_object()) { continue; }
+            if (!carriesInstallId(w["msg"])) { continue; }
+            anonymize(w["msg"]);
+            if (!writeAtomic(f, dumpJson(w))) {
+                allRewritten = false;
+                ++st.guardRefused;
+                diagLogf("radio reports: a queued failure report could not be rewritten without the install id; it is sent without it");
+            }
+        }
+        envSent = false;
+        firstSessionSent = 0;
+        return allRewritten;
+    }
+
     void retryUnsaved() {
         std::map<fs::path, std::size_t> todo;
         {
@@ -901,9 +935,30 @@ struct Reporter::Impl {
             if (!it.env.is_object() || expired) { if (!advance(it)) { return accepted; } continue; }   // (a file call: not under `mu`)
             bool resent = false;
             for (;;) {
-                // USAGE REPORTING WENT OFF since this batch read its lines: a journal line carries the install id and is not sent (a failure file is the anonymous form and still is).
-                if (!it.isFail && optOutGen.load(std::memory_order_acquire) != optOutAtStart) { break; }
+                // WHAT MAY BE POSTED IS JUDGED AGAINST THE CURRENT INSTALL ID, read under `mu` at this moment (review of fix/freezes part 3, F5 to F7).
+                //  - A journal or first-session line is posted only when it carries the CURRENT id: an opt-out (no id) or an id change makes every older line unsendable. It is consumed without being
+                //    sent (it can never be sent), unless the opt-out has just deleted its segment, when it is left alone.
+                //  - A radio_fail is always sent (the owner's rule), but in the anonymous form (contract 1.2) when the id it carries is not the current one: an item this batch read before an
+                //    opt-out is not posted with the id after it.
+                std::string curId;
+                {
+                    std::lock_guard<stall::TaggedMutex> lk(mu);
+                    curId = id.installId;
+                }
+                if (!it.isFail) {
+                    if (optOutGen.load(std::memory_order_acquire) != optOutAtStart) { break; }   // the segment is being deleted
+                    const std::string itemId = (it.env.contains("installId") && it.env["installId"].is_string()) ? it.env["installId"].get<std::string>() : std::string();
+                    if (curId.empty() || itemId != curId) {
+                        {
+                            std::lock_guard<stall::TaggedMutex> lk(mu);
+                            ++st.unsendable;
+                        }
+                        if (!advance(it)) { return accepted; }
+                        break;
+                    }
+                }
                 json env = it.env;
+                if (it.isFail && carriesInstallId(env) && env.value("installId", std::string()) != curId) { anonymize(env); }
                 if (it.degraded) { env = degrade(env); }
                 env["age"] = std::clamp<std::int64_t>(sendNow - it.eventEpoch, 0, kMaxT);
                 const std::string text = fitSize(env);
@@ -1158,6 +1213,9 @@ void Reporter::configure(const Options& options) {
     std::error_code ec;
     fs::create_directories(s.dir, ec);
     if (ec) { s.on = false; s.preFails.clear(); s.preEvents.clear(); return; }
+    // A START WITH USAGE REPORTING ALREADY OFF (review of fix/freezes part 3, F5): whatever an earlier session queued under an install id - a delete that failed at the opt-out, or a crash between
+    // the opt-out and the delete - is purged now, before any batch can run, so a restart cannot send what the opt-out should have removed.
+    if (s.id.installId.empty()) { s.purgeForOptOut(); }
     const bool hadState = fs::exists(s.statePath(), ec);
     s.loadState();
     const std::string dayLoaded = s.day;
@@ -1196,26 +1254,12 @@ void Reporter::setIdentity(const Identity& idn) {
     s.id = idn;
     if (!s.on) { return; }
     if (hadId && idn.installId.empty()) {
-        // Usage reporting went OFF: the install id is deleted, so everything that carries it goes with it. A queued failure is kept, as the
-        // anonymous form (the owner's rule is that every failure reaches him); the journal and first-session lines are deleted.
-        // A segment that cannot be deleted now (the batch thread has it open) is held back from every listing and deleted when it can be (removeOrDefer), and a batch that already read
-        // lines before this point sends none of them (optOutGen): nothing carrying the install id is sent after the opt-out (review of fix/freezes, must-fix 3).
+        // Usage reporting went OFF: the install id is deleted, so everything that carries it goes with it (purgeForOptOut). A segment that cannot be deleted now is held back from every
+        // listing and retried (removeOrDefer), and what is posted is judged against the CURRENT id at the moment of the send (runBatch), so a batch that read lines before this point sends
+        // none of them. The generation is raised AFTER the deletes have been requested and the rewrites made (review of fix/freezes part 3, F7): a batch that starts between the two
+        // reads the old generation, lists nothing it can send (the id it reads under `mu` is already empty), and one that began earlier is stopped by the same id rule.
+        s.purgeForOptOut();
         s.optOutGen.fetch_add(1, std::memory_order_acq_rel);
-        for (const Impl::Seg& g : s.listSegments()) { s.removeOrDefer(g.path); s.removeOrDefer(Impl::posPathOf(g.path)); }
-        s.segReady = false;
-        for (const fs::path& f : s.listFailFiles()) {
-            json w = json::parse(readAll(f), nullptr, false);
-            if (!w.is_object() || !w.contains("msg") || !w["msg"].is_object()) { continue; }
-            json& m = w["msg"];
-            if (!m.contains("installId")) { continue; }
-            m.erase("installId");
-            m.erase("sessionId");
-            m.erase("seq");
-            m["messageId"] = randomHex(16);
-            writeAtomic(f, dumpJson(w));
-        }
-        s.envSent = false;
-        s.firstSessionSent = 0;
     }
     if (!hadId && !idn.installId.empty()) { s.envSent = false; }
 }
@@ -1351,6 +1395,7 @@ void Reporter::flushAtQuit(int maxMs) {
     {
         std::lock_guard<stall::TaggedMutex> lk(p_->mu);
         if (!p_->on) { return; }
+        p_->retryDeferred();   // a delete that failed earlier (an opt-out's) is tried once more before the process ends
         p_->releaseHeld();
         p_->saveState();
         p_->reapWorker();

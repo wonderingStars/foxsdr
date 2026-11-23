@@ -128,6 +128,7 @@ struct Stats {
     std::uint64_t boundHeld = 0;          // held by the daily bound (sent later, counted in `dropped`)
     std::uint64_t boundDropped = 0;       // not sent because a later one replaced them (counted in `dropped`)
     std::uint64_t guardRefused = 0;       // refused locally: a forbidden field or text that would not pass
+    std::uint64_t unsendable = 0;         // journal lines whose install id was not the current one at the send (an opt-out, an id change): consumed, never posted
     std::uint64_t suppressedByBuild = 0;  // batches that did nothing because the live send is not armed (a bounded run, or kRadioReportsLiveSend false)
     std::size_t failFilesOnDisk = 0, journalLinesPending = 0;
 };

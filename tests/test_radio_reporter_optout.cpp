@@ -5,7 +5,12 @@
 //      nothing carrying the install id is sent after the opt-out, however many times the delete fails, and the files are gone once it can succeed;
 //   B  A BATCH THAT WAS RUNNING when the opt-out came (its lines were read before): the line in flight cannot be recalled, no other line is sent;
 //   C  advance()'S RESULT: a position that cannot be written is kept in memory and the batch stops; nothing is sent twice, and the position lands when the file can be replaced;
-//   D  TWO WRITERS NEVER COLLIDE ON ONE FILE NAME: the temporary name of the atomic write is unique to the call; many threads writing one file all succeed and leave one whole file.
+//   D  TWO WRITERS NEVER COLLIDE ON ONE FILE NAME: the temporary name of the atomic write is unique to the call; many threads writing one file all succeed and leave one whole file;
+//   E  THE OPT-OUT ACROSS A RESTART (review of fix/freezes part 3, F5): Usage reporting OFF, the delete fails, the program quits, starts again: nothing queued under the install id is sent, with the
+//      delete still failing and when it can succeed; a delete that fails is retried at quit;
+//   F  AN ID CHANGE: a line stored under another install id is never posted under the current one;
+//   G  A FAILURE READ BEFORE THE OPT-OUT is posted in the anonymous form (no install id, no session id, no seq, a message id), never with the id; a failure file that could not be rewritten at the
+//      opt-out is rewritten at the next start. The failure itself is always sent (the owner's rule of 2026-11-15).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -236,6 +241,176 @@ void testWritersNeverCollide() {
     CHECK(files == 1u);                             // no temporary file is left behind
 }
 
+rr::FailureInput failureOf(const char* serial) {
+    rr::FailureInput f;
+    f.driverKind = "rtlsdr";
+    f.args = std::string("serial=") + serial;
+    f.nativeLabel = std::string("RTL-SDR (serial ") + serial + ")";
+    f.reason = "usb_open error -3";
+    f.reasonClass = "busy";
+    f.trigger = rr::Trigger::StartupRestore;
+    return f;
+}
+
+const std::vector<std::string> kNoRing = {};
+
+std::size_t sentWithoutInstallIdOfKind(Bench& b, const char* kind) {
+    std::lock_guard<std::mutex> lk(b.mu);
+    std::size_t n = 0;
+    for (const json& m : b.sent) {
+        if (m.value("kind", std::string()) == kind && !m.contains("installId") && !m.contains("sessionId") && !m.contains("seq") && m.contains("messageId")) { ++n; }
+    }
+    return n;
+}
+
+// E  the opt-out across a restart
+void testOptOutSurvivesARestart() {
+    std::printf("E  the opt-out across a restart\n");
+    Bench b("e");
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.liveSend = false;
+        rep.configure(o);
+        queueOpen(rep, 3);
+        CHECK(b.journalFiles() >= 1u);
+        // every delete of a journal file fails (a scanner has it open), through the opt-out AND the quit
+        rr::Reporter::setFileFaultHookForTest([](const char* op, const std::string& path) { return std::string(op) == "remove" && path.find("journal-") != std::string::npos; });
+        identityOff(rep);
+        CHECK(b.journalFiles() >= 1u);   // still on disk
+        rep.flushAtQuit(200);            // the retry at quit fails too
+        CHECK(b.journalFiles() >= 1u);
+    }                                    // the program ends with the segment on disk
+    // START AGAIN with Usage reporting off and the delete STILL failing: nothing queued before the opt-out is sent.
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.identity.installId.clear();
+        rep.configure(o);
+        (void)rep.runBatchNow();
+        (void)rep.runBatchNow();
+        std::printf("    restart, delete still failing: lines sent %zu, with the id %zu\n", b.sentOfKind("radio_open"), b.sentWithInstallId());
+        CHECK(b.sentOfKind("radio_open") == 0u);
+        CHECK(b.sentWithInstallId() == 0u);
+        rep.shutdown();
+    }
+    // ...and with the delete able to succeed the next start removes the segment.
+    rr::Reporter::setFileFaultHookForTest(nullptr);
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.identity.installId.clear();
+        rep.configure(o);
+        (void)rep.runBatchNow();
+        CHECK(b.sentOfKind("radio_open") == 0u);
+        CHECK(b.journalFiles() == 0u);
+        CHECK(!b.anyFileHoldsInstallId());
+        rep.shutdown();
+    }
+}
+
+void testDeferredDeleteIsRetriedAtQuit() {
+    std::printf("E2 a delete that failed at the opt-out is retried at quit\n");
+    Bench b("e2");
+    rr::Reporter rep;
+    rr::Reporter::Options o = b.options();
+    o.liveSend = false;
+    rep.configure(o);
+    queueOpen(rep, 2);
+    std::atomic<bool> locked{true};
+    rr::Reporter::setFileFaultHookForTest([&](const char* op, const std::string& path) { return locked.load() && std::string(op) == "remove" && path.find("journal-") != std::string::npos; });
+    identityOff(rep);
+    CHECK(b.journalFiles() >= 1u);
+    locked.store(false);                 // the scanner let go; nothing else runs a batch: only the quit can do it
+    rep.flushAtQuit(200);
+    std::printf("    journal files after the quit: %zu\n", b.journalFiles());
+    CHECK(b.journalFiles() == 0u);
+    rr::Reporter::setFileFaultHookForTest(nullptr);
+}
+
+// F  an id change
+void testAnIdChangeMakesOlderLinesUnsendable() {
+    std::printf("F  an id change\n");
+    Bench b("f");
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.liveSend = false;
+        rep.configure(o);
+        queueOpen(rep, 3);
+        rep.flushAtQuit(100);
+    }
+    const char* const kOtherId = "0f0e0d0c0b0a09080706050403020100";
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.identity.installId = kOtherId;
+        o.sessionId = "bbbbbbbbbbbbbbbb";
+        rep.configure(o);
+        queueOpen(rep, 1);                 // a line of THIS id, in a segment of its own
+        (void)rep.runBatchNow();
+        (void)rep.runBatchNow();
+        std::printf("    lines sent %zu (1 expected), with the old id %zu, unsendable %llu\n", b.sentOfKind("radio_open"), b.sentWithInstallId(), static_cast<unsigned long long>(rep.stats().unsendable));
+        CHECK(b.sentOfKind("radio_open") == 1u);       // only the line of the current id
+        CHECK(b.sentWithInstallId() == 0u);            // nothing under the old id
+        CHECK(rep.stats().unsendable == 3u);
+        rep.shutdown();
+    }
+}
+
+// G  a failure read before the opt-out, and a failure file that could not be rewritten
+void testAFailureReadBeforeTheOptOutIsPostedAnonymously() {
+    std::printf("G  a failure read before the opt-out\n");
+    Bench b("g");
+    rr::Reporter rep;
+    rr::Reporter::Options o = b.options();
+    o.liveSend = false;
+    rep.configure(o);
+    rep.fileFailure(failureOf("00000001"), kNoRing);
+    rep.fileFailure(failureOf("00000002"), kNoRing);
+    rep.fileFailure(failureOf("00000003"), kNoRing);
+    CHECK(b.anyFileHoldsInstallId());
+    std::atomic<int> posts{0};
+    b.onPost = [&]() {
+        if (posts.fetch_add(1) == 0) { identityOff(rep); }   // the first post is in flight; the other two were READ with the id
+    };
+    rep.setLiveSend(true);
+    (void)rep.runBatchNow();
+    std::printf("    failures sent: %zu, of which anonymous %zu, with the id %zu\n", b.sentOfKind("radio_fail"), sentWithoutInstallIdOfKind(b, "radio_fail"), b.sentWithInstallId());
+    CHECK(b.sentOfKind("radio_fail") == 3u);                       // every failure still reaches the owner
+    CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 2u);      // the two read before the opt-out go without the id; the one in flight could not be recalled
+    CHECK(b.sentWithInstallId() == 1u);
+    CHECK(!b.anyFileHoldsInstallId());
+    rep.shutdown();
+}
+
+void testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart() {
+    std::printf("G2 a failure file that could not be rewritten at the opt-out\n");
+    Bench b("g2");
+    {
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options();
+        o.liveSend = false;
+        rep.configure(o);
+        rep.fileFailure(failureOf("00000004"), kNoRing);
+        // the REPLACE of a failure file fails at the opt-out (the file is open elsewhere: neither a rename over it nor a delete of it can be done)
+        rr::Reporter::setFileFaultHookForTest([](const char*, const std::string& path) { return path.find("fail-") != std::string::npos; });
+        identityOff(rep);
+        CHECK(rep.stats().guardRefused >= 1u);       // the failed rewrite is counted, not ignored
+        CHECK(b.anyFileHoldsInstallId());            // it is still on disk with the id...
+        rr::Reporter::setFileFaultHookForTest(nullptr);
+    }                                                // ...and the program ends
+    rr::Reporter rep;
+    rr::Reporter::Options o = b.options();
+    o.identity.installId.clear();
+    rep.configure(o);                                // the start with Usage reporting off rewrites it
+    CHECK(!b.anyFileHoldsInstallId());
+    (void)rep.runBatchNow();
+    CHECK(b.sentOfKind("radio_fail") == 1u);
+    CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 1u);
+    rep.shutdown();
+}
+
 }  // namespace
 
 int main() {
@@ -243,5 +418,10 @@ int main() {
     testOptOutDuringABatch();
     testPositionThatCannotBeSaved();
     testWritersNeverCollide();
+    testOptOutSurvivesARestart();
+    testDeferredDeleteIsRetriedAtQuit();
+    testAnIdChangeMakesOlderLinesUnsendable();
+    testAFailureReadBeforeTheOptOutIsPostedAnonymously();
+    testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart();
     return testSummary("test_radio_reporter_optout");
 }
