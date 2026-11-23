@@ -351,6 +351,17 @@ public:
 
     // CONTROL THREAD. Copies the newest frame not yet read into out (cap floats); returns the columns written, 0 if nothing new.
     std::size_t latest(float* out, std::size_t cap, std::uint64_t* seq = nullptr) {
+        const std::size_t c = latestPower(out, cap, seq);
+        powerToDb(out, out, c);
+        return c;
+    }
+    // The block's decibel conversion (what latest() applies): 10 log10 of the power, floored at 1e-20. In place is allowed (power == outDb).
+    static void powerToDb(const float* power, float* outDb, std::size_t n) {
+        for (std::size_t i = 0; i < n; ++i) { outDb[i] = 10.0f * std::log10(std::max(power[i], 1e-20f)); }
+    }
+    // CONTROL THREAD. latest() without the logarithm: copies the newest frame not yet read as LINEAR POWER (a memcpy), so a caller that holds a lock
+    // while it pulls can take the logarithms (powerToDb) after releasing it.
+    std::size_t latestPower(float* out, std::size_t cap, std::uint64_t* seq = nullptr) {
         Engine* e = forReader_.load(std::memory_order_acquire);
         if ((e->ready_.load(std::memory_order_acquire) & Engine::kNew) != 0) {
             const int old = e->ready_.exchange(e->rd_, std::memory_order_acq_rel);
@@ -359,7 +370,7 @@ public:
         const Engine::Slot& s = e->slot_[static_cast<std::size_t>(e->rd_)];
         if (s.seq == 0 || s.seq == e->readSeq_) { return 0; }
         const std::size_t c = std::min(cap, e->outCols_);
-        for (std::size_t i = 0; i < c; ++i) { out[i] = 10.0f * std::log10(std::max(s.db[i], 1e-20f)); }   // (s.db is the power: see frame())
+        std::memcpy(out, s.db.data(), c * sizeof(float));   // (s.db is the power: see frame())
         e->readSeq_ = s.seq;
         if (seq != nullptr) { *seq = s.seq; }
         return c;

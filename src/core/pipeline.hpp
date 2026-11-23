@@ -416,6 +416,9 @@ public:
     bool faulted() const;
     std::string faultMessage() const;             // empty unless faulted()
     bool getLatestFrame(SpectrumFrame& out);      // true iff a frame newer than out.seq was copied into out
+    // The longest hold of the frame lock by getLatestFrame since the last reset, in ns (the DSP thread's legacy publish waits at most this long; a test seam).
+    std::uint64_t frameLockHoldMaxNs() const { return frameLockHoldMaxNs_.load(std::memory_order_relaxed); }
+    void resetFrameLockHoldMax() { frameLockHoldMaxNs_.store(0, std::memory_order_relaxed); }
 
     // --- Source selection ----------------------------------------------------
     // Replaces the IQ source feeding the ring; a null pointer restores the
@@ -1296,6 +1299,12 @@ private:
     // true while latest_.dbBins holds the averaged LINEAR POWER of the legacy estimator and not yet dB (the demod performance pass): the logarithm is
     // taken in getLatestFrame, on the thread that pulls the frame, so the DSP thread no longer takes a thousand of them every block. Under frameMutex_.
     bool latestIsPower_ = false;
+    // with latestIsPower_: the power is the SPECTRUM BLOCK's (floor 1e-20 by std::max, then the legacy tone offset added in dB) and not the legacy estimator's.
+    // The block's frames are converted after the frame lock is released, like the legacy ones. Under frameMutex_.
+    bool latestIsBlockPower_ = false;
+    // The longest time getLatestFrame has held frameMutex_ (ns) since the last reset: what the DSP thread's legacy publish can be made to wait for
+    // (a measurement seam for the test; two clock reads per pull).
+    std::atomic<std::uint64_t> frameLockHoldMaxNs_{0};
     // The last frame converted to dB, so that a second consumer of the same frame does not convert it again (its own mutex: never held with frameMutex_).
     std::mutex dbCacheMutex_;
     std::uint64_t dbCacheSeq_ = 0;
@@ -1447,7 +1456,8 @@ private:
     int specWindow_ = 3;
     double specFps_ = 0.0;
     std::vector<float> specScratch_;   // getLatestFrame's read buffer
-    void convertPowerFrameToDb(SpectrumFrame& out);   // see getLatestFrame
+    void convertPowerFrameToDb(SpectrumFrame& out, bool blockPower);   // see getLatestFrame
+    void noteFrameLockHold(std::chrono::steady_clock::time_point lockedAt);   // getLatestFrame's hold of frameMutex_, into frameLockHoldMaxNs_
     void rebuildSpectrumBlock();   // the choice -> the block (any control thread; takes frameMutex_ for the hand-over only)
     std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
     bool noiseSqOn_ = false;

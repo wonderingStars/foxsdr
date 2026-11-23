@@ -1315,6 +1315,7 @@ bool Pipeline::running() const {
 
 bool Pipeline::getLatestFrame(SpectrumFrame& out) {
     std::unique_lock<std::mutex> lk(frameMutex_);
+    const std::chrono::steady_clock::time_point lockedAt = std::chrono::steady_clock::now();
     if (specOn_.load(std::memory_order_acquire)) {
         // THE SPECTRUM BLOCK PATH (setSpectrum): the newest block frame, if one is newer than the last pulled, becomes the latest frame. The legacy estimator's tone level is
         // uncompensated for the window (a full-scale tone under Blackman-Harris reads 20 log10(0.35875) = -8.9 dB), and the block's is compensated: lowering by the same figure keeps every
@@ -1323,31 +1324,50 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
         const std::size_t cols = blk.columns();
         if (specScratch_.size() < cols) { specScratch_.resize(cols); }
         std::uint64_t blockSeq = 0;
-        const std::size_t got = blk.latest(specScratch_.data(), specScratch_.size(), &blockSeq);
+        const std::size_t got = blk.latestPower(specScratch_.data(), specScratch_.size(), &blockSeq);
         if (got > 0) {
-            latest_.dbBins.resize(got);
-            for (std::size_t i = 0; i < got; ++i) { latest_.dbBins[i] = specScratch_[i] + kLegacyToneOffsetDb; }
-            latestIsPower_ = false;   // (the block's frames are dB)
+            // the block's frames are handed over as LINEAR POWER (SpectrumBlock::latestPower, a memcpy) and converted below, after the frame lock is released,
+            // exactly like the legacy estimator's: the logarithms of a 131,072-bin frame must not be taken while the DSP thread could be waiting for this lock.
+            latest_.dbBins.assign(specScratch_.begin(), specScratch_.begin() + static_cast<std::ptrdiff_t>(got));
+            latestIsPower_ = true;
+            latestIsBlockPower_ = true;
             latest_.seq += 1;
         }
     }
-    if (latest_.seq <= out.seq) { return false; }
+    if (latest_.seq <= out.seq) {
+        noteFrameLockHold(lockedAt);
+        return false;
+    }
     out = latest_;
     const bool power = latestIsPower_;
+    const bool blockPower = latestIsBlockPower_;
+    noteFrameLockHold(lockedAt);
     lk.unlock();   // (the logarithms below are taken without the frame lock: the DSP thread publishes under it)
-    if (power) { convertPowerFrameToDb(out); }
+    if (power) { convertPowerFrameToDb(out, blockPower); }
     return true;
+}
+
+void Pipeline::noteFrameLockHold(std::chrono::steady_clock::time_point lockedAt) {
+    const std::uint64_t ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - lockedAt).count());
+    std::uint64_t seen = frameLockHoldMaxNs_.load(std::memory_order_relaxed);
+    while (ns > seen && !frameLockHoldMaxNs_.compare_exchange_weak(seen, ns, std::memory_order_relaxed)) {}
 }
 
 // THE LEGACY ESTIMATOR'S FRAME, POWER -> dB, ONCE PER FRAME. out.dbBins holds the averaged linear power of frame out.seq; this replaces it with exactly what
 // SpectrumEstimator::process would have written (the same logarithm with the same floor on the same floats). Every consumer of the frame pulls it
 // through getLatestFrame, so every consumer gets dB; the first one to pull a given frame converts it and the others copy that (a one-entry cache under
 // its own mutex, never held with the frame lock), so a frame is converted once however many windows, scanners and plugins read it.
-void Pipeline::convertPowerFrameToDb(SpectrumFrame& out) {
+void Pipeline::convertPowerFrameToDb(SpectrumFrame& out, bool blockPower) {
     std::lock_guard<std::mutex> lk(dbCacheMutex_);
     if (dbCacheSeq_ != out.seq || dbCache_.size() != out.dbBins.size()) {
         dbCache_.resize(out.dbBins.size());
-        cascade::dsp::SpectrumEstimator::powerToDb(out.dbBins.data(), dbCache_.data(), out.dbBins.size());
+        if (blockPower) {
+            // the block's conversion (its own floor) and then the level the application shows (see getLatestFrame): the two steps the lock-held code took
+            cascade::dsp::SpectrumBlock::powerToDb(out.dbBins.data(), dbCache_.data(), out.dbBins.size());
+            for (float& v : dbCache_) { v += kLegacyToneOffsetDb; }
+        } else {
+            cascade::dsp::SpectrumEstimator::powerToDb(out.dbBins.data(), dbCache_.data(), out.dbBins.size());
+        }
         dbCacheSeq_ = out.seq;
     }
     out.dbBins = dbCache_;
@@ -2877,6 +2897,7 @@ void Pipeline::dspThreadBody() {
                 std::lock_guard<std::mutex> lk(frameMutex_);
                 latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
                 latestIsPower_ = (gpuState == 0);   // (a GPU frame is dB already)
+                latestIsBlockPower_ = false;
                 latest_.seq += 1;     // strictly increasing; never reset (see header)
             }
         }
