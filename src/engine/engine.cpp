@@ -279,6 +279,7 @@ Engine::~Engine() {
         stopTransfers();
         wireCShutdown();   // wire-c: the listeners and CAT sessions of wiring lane C are closed while the API host they use still stands (an engine that is destroyed without shutdownQuiesce)
         teardown();
+        cascade::core::health::drainRecovered();   // THE RAISED WORDS BECOME REPORTS FIRST (ReaderLeak, CloseLeak are only a bit until drained; the pass that drains them has stopped)
         (void)cascade::core::issue::flushWritesAtShutdown();   // (the same bound, spent once per process: a teardown that raised an issue lands it)
     }
 #ifdef _WIN32
@@ -11503,6 +11504,9 @@ void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) 
     drainRecordFinishes(drainDeadline);
     // THE ISSUE REPORTS THE TEARDOWN ITSELF RAISED (CatStop, CloseLeak, ReaderLeak) are written by detached writer threads: wait for those in flight, at most
     // issue::kShutdownFlushWait (250 ms, charged in HangWatchdog::kShutdownBoundedWaitsMs), so they are on disk when the process ends (review of fix/freezes, finding 3b).
+    // THE WORDS THE TEARDOWN RAISED (ReaderLeak, CloseLeak: a lock-free bit, drained into a written report only by the pass, which has stopped) are drained NOW, so the flush below has
+    // a writer to wait for (review of fix/freezes, must-fix 1). CatStop files directly and was never lost.
+    cascade::core::health::drainRecovered();
     (void)cascade::core::issue::flushWritesAtShutdown();
 }
 
