@@ -57,7 +57,7 @@ namespace acc = cascade::core::access;
 using cascade::i18n::tr;
 using cc::formatText;
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 // A SOUND OUTPUT THAT WOULD NOT OPEN, OR DIED WHILE THE TONE PLAYED, is counted as every refused output is (core/health_events.hpp noteSoundFail: the host API and one of five
 // reasons, never what the system said). The person is told in the section; the owner by this count.

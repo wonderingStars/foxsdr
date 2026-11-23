@@ -30,7 +30,7 @@ using cascade::i18n::tr;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {

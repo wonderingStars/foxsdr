@@ -25,7 +25,7 @@
 
 #include <algorithm>
 #include <string_view>
-#include "safe_text_make.hpp"
+#include "safe_text.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -336,8 +336,9 @@ private:
         w.dispatch_pointer_press_event(slint::LogicalPosition({x, y}), slint::PointerEventButton::Left);
         w.dispatch_pointer_release_event(slint::LogicalPosition({x, y}), slint::PointerEventButton::Left);
     }
-    // The key's text is the toolkit's own key code or a character from the host's key table: valid by construction (safe_text_make.hpp).
-    static slint::SharedString keyText(std::u8string_view t) { return foxsdr::slintsafe::Make::from(std::string_view(reinterpret_cast<const char*>(t.data()), t.size())); }
+    // The key's text is the toolkit's own key code, a character from the host's key table, or a piece of a script's `type` step - and a script
+    // can carry any bytes - so it goes through the text boundary (a byte that is not UTF-8 is repaired, once per site logged), never straight to Slint.
+    static slint::SharedString keyText(std::u8string_view t) { return foxsdr::slintsafe::keyEventText(t); }
     void keyDown(std::u8string_view t) { ui_->window().dispatch_key_press_event(keyText(t)); }
     void keyUp(std::u8string_view t) { ui_->window().dispatch_key_release_event(keyText(t)); }
     void keyTap(std::u8string_view t) { keyDown(t); keyUp(t); }

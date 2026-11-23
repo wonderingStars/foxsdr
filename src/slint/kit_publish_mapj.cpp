@@ -28,7 +28,7 @@ namespace access = cascade::core::access;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }
 template <class T> std::shared_ptr<slint::Model<T>> model(std::vector<T> v) { return std::make_shared<slint::VectorModel<T>>(std::move(v)); }
 std::string tr(const std::string& s) { return std::string(cascade::i18n::tr(s.c_str())); }

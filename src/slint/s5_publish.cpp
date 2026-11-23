@@ -15,7 +15,7 @@ namespace foxsdr::slints5 {
 namespace {
 namespace slk = foxsdr::slintlanek;
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 KRow toK(const slk::Row& r) {
     KRow k;

@@ -11,6 +11,7 @@
 #include "core/utf8_text.hpp"
 
 #include <cstdio>
+#include <random>
 #include <string>
 #if defined(_WIN32)
 #include <windows.h>
@@ -191,6 +192,75 @@ void testAnsiFirst() {
 #endif
 }
 
+// DOUBLE-BYTE PAGES (review 2026-11-23, finding 4): a Chinese, Japanese, Korean machine's own sentence is read in its page even when some of
+// its two-byte letters look like valid UTF-8 (CF B5 CD B3 is the Chinese word xitong in GBK and two Greek-looking letters in UTF-8), and real
+// UTF-8 with one damaged byte keeps its valid letters on both sides of the damage.
+void testDoubleBytePages() {
+    std::printf("  double-byte code pages: whole sentences, GBK letters that look like UTF-8, valid UTF-8 around one bad byte, a fuzz of 100000 byte strings\n");
+#if defined(_WIN32)
+    CHECK(isDoubleByteCodePage(936) && isDoubleByteCodePage(932) && isDoubleByteCodePage(949) && isDoubleByteCodePage(950));
+    CHECK(!isDoubleByteCodePage(1252) && !isDoubleByteCodePage(1251) && !isDoubleByteCodePage(65001));
+    CHECK(isDbcsLeadByte(936, 0x81) && !isDbcsLeadByte(936, 0x41) && !isDbcsLeadByte(1252, 0x81));
+    struct Case { unsigned cp; const char* in; const char* out; const char* what; };
+    const Case cases[] = {
+        {936, "\xCF\xB5\xCD\xB3\xB4\xED\xCE\xF3", "\xE7\xB3\xBB\xE7\xBB\x9F\xE9\x94\x99\xE8\xAF\xAF", "cp936: the sentence that starts with a pair that is valid UTF-8"},
+        {936, "\xD5\xD2\xB2\xBB\xB5\xBD\xD6\xB8\xB6\xA8\xB5\xC4\xCE\xC4\xBC\xFE", "\xE6\x89\xBE\xE4\xB8\x8D\xE5\x88\xB0\xE6\x8C\x87\xE5\xAE\x9A\xE7\x9A\x84\xE6\x96\x87\xE4\xBB\xB6", "cp936: a whole sentence"},
+        {936, "\xD6\xD0\xCE\xC4", "\xE4\xB8\xAD\xE6\x96\x87", "cp936: two letters"},
+        {950, "\xA8\x74\xB2\xCE\xBF\xF9\xBB\x7E", "\xE7\xB3\xBB\xE7\xB5\xB1\xE9\x8C\xAF\xE8\xAA\xA4", "cp950: a sentence"},
+        {950, "\xA7\xE4\xA4\xA3\xA8\xEC\xAB\xFC\xA9\x77\xAA\xBA\xC0\xC9\xAE\xD7", "\xE6\x89\xBE\xE4\xB8\x8D\xE5\x88\xB0\xE6\x8C\x87\xE5\xAE\x9A\xE7\x9A\x84\xE6\xAA\x94\xE6\xA1\x88", "cp950: a longer sentence"},
+        {932, "\x83\x56\x83\x58\x83\x65\x83\x80\x83\x47\x83\x89\x81\x5B", "\xE3\x82\xB7\xE3\x82\xB9\xE3\x83\x86\xE3\x83\xA0\xE3\x82\xA8\xE3\x83\xA9\xE3\x83\xBC", "cp932: katakana with an ASCII trail byte (5B)"},
+        {932, "\x8E\x77\x92\xE8\x82\xB3\x82\xEA\x82\xBD\x83\x74\x83\x40\x83\x43\x83\x8B\x82\xAA\x8C\xA9\x82\xC2\x82\xA9\x82\xE8\x82\xDC\x82\xB9\x82\xF1",
+         "\xE6\x8C\x87\xE5\xAE\x9A\xE3\x81\x95\xE3\x82\x8C\xE3\x81\x9F\xE3\x83\x95\xE3\x82\xA1\xE3\x82\xA4\xE3\x83\xAB\xE3\x81\x8C\xE8\xA6\x8B\xE3\x81\xA4\xE3\x81\x8B\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93", "cp932: a whole sentence"},
+        {949, "\xBD\xC3\xBD\xBA\xC5\xDB\x20\xBF\xC0\xB7\xF9", "\xEC\x8B\x9C\xEC\x8A\xA4\xED\x85\x9C\x20\xEC\x98\xA4\xEB\xA5\x98", "cp949: Hangul with a space"},
+        {949, "\xC1\xF6\xC1\xA4\xB5\xC8\x20\xC6\xC4\xC0\xCF\xC0\xBB\x20\xC3\xA3\xC0\xBB\x20\xBC\xF6\x20\xBE\xF8\xBD\xC0\xB4\xCF\xB4\xD9",
+         "\xEC\xA7\x80\xEC\xA0\x95\xEB\x90\x9C\x20\xED\x8C\x8C\xEC\x9D\xBC\xEC\x9D\x84\x20\xEC\xB0\xBE\xEC\x9D\x84\x20\xEC\x88\x98\x20\xEC\x97\x86\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4", "cp949: a whole sentence"},
+        {1251, "x \xCF\xF0\xE8\xE2\xE5\xF2 y", "x \xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 y", "cp1251: Cyrillic inside ASCII"},
+        {1252, "c\xF3" "digo", "c\xC3\xB3" "digo", "cp1252: o acute"},
+    };
+    for (const Case& c : cases) {
+        const std::string got = repairUtf8WithCodePage(c.in, c.cp);
+        if (got != c.out) { std::printf("FAIL %s\n", c.what); }
+        CHECK(got == c.out);
+        CHECK(isValidUtf8(got));
+    }
+    // Valid UTF-8, ONE bad byte, valid UTF-8: both sides stay as they are, in every page (the bad byte is a lead byte of the double-byte pages).
+    const std::string left = "\xE4\xB8\xAD";
+    const std::string right = "\xE6\x96\x87";
+    for (const unsigned cp : {932u, 936u, 949u, 950u, 1251u, 1252u, 65001u}) {
+        for (const char* bad : {"\x81", "\xFF", "\x93", "\xC0"}) {
+            const std::string got = repairUtf8WithCodePage(left + bad + right, cp);
+            const bool kept = got.compare(0, left.size(), left) == 0 && got.size() >= right.size() && got.compare(got.size() - right.size(), right.size(), right) == 0;
+            if (!kept) { std::printf("FAIL cp%u bad byte %02x: both sides of the bad byte must stay\n", cp, static_cast<unsigned>(static_cast<unsigned char>(bad[0]))); }
+            CHECK(kept);
+            CHECK(isValidUtf8(got));
+        }
+        const std::string text = "ab " + left + " cd\x81" + right + " ef";   // the same with ASCII around it
+        const std::string got = repairUtf8WithCodePage(text, cp);
+        CHECK(got.find(left) != std::string::npos && got.find(right) != std::string::npos && isValidUtf8(got));
+    }
+    // A fuzz with a fixed seed: whatever it is given, the repair returns valid UTF-8 and does not crash.
+    std::mt19937 rng(20261123u);
+    const unsigned pages[] = {1252u, 1251u, 932u, 936u, 949u, 950u, 65001u, 0u};
+    std::size_t bad = 0;
+    for (int i = 0; i < 100000; ++i) {
+        std::string s(rng() % 65u, '\0');
+        const unsigned mode = static_cast<unsigned>(i) % 3u;
+        for (char& ch : s) {
+            const unsigned r = rng();
+            unsigned char b = static_cast<unsigned char>(r >> 8);
+            if (mode == 1u && (r & 7u) != 0u) { b = static_cast<unsigned char>(0x20 + (b % 0x5F)); }      // ASCII with sparse high bytes
+            if (mode == 2u && (r & 3u) != 0u) { b = static_cast<unsigned char>(0x80 + (b % 0x80)); }      // mostly high bytes
+            ch = static_cast<char>(b);
+        }
+        const unsigned cp = pages[static_cast<unsigned>(i) % 8u];
+        if (!isValidUtf8(repairUtf8WithCodePage(s, cp)) || !isValidUtf8(codePageToUtf8(s, cp))) { ++bad; }
+    }
+    CHECK(bad == 0);
+#else
+    SKIP_LINUX("code pages are a Windows facility");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -202,5 +272,6 @@ int main() {
     testAnsi();
     testLogRing();
     testAnsiFirst();
+    testDoubleBytePages();
     return testSummary("test_utf8_sanitize");
 }

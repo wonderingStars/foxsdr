@@ -3,22 +3,27 @@
 // THE FAULT (0.99.112, crash groups 6CCFD0C0E58FC30C and 104F425230C2A742): slint::SharedString checks its bytes with Rust's
 // str::from_utf8().unwrap(); one byte that is not UTF-8 panics inside slint_cpp.dll and the process is gone. The first test
 // SHOWS THAT in a child process (this executable run with --raw): a SharedString built from "AirSpy M" + 0xF3 + ... ends the
-// child abnormally. The rest hold the repair: the same bytes through foxsdr::slintsafe come out valid, once per site is logged
-// with the bad bytes as hex, and every publisher's ss() really goes through it (a scan of the sources).
+// child abnormally. The rest hold the repair: the same bytes through foxsdr::slintsafe come out valid, once per call site is logged
+// without any of the text, and every publisher's ss() really goes through it (a scan of the sources).
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "safe_text.hpp"
 
 #include "core/diag_log.hpp"
+#include "core/radio_report.hpp"
 
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <new>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -26,6 +31,16 @@
 #endif
 
 #include "test_check.hpp"
+
+// Counts every C++ allocation, for the test that says valid text allocates none (the SharedString's own storage is Slint's, not this).
+std::atomic<std::size_t> g_newCalls{0};
+void* operator new(std::size_t n) {
+    ++g_newCalls;
+    if (void* p = std::malloc(n != 0 ? n : 1)) { return p; }
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 
@@ -143,23 +158,23 @@ void testRawAborts() {
 void testBoundary() {
     std::printf("  slintsafe::shared: valid text untouched, invalid bytes repaired\n");
     namespace ss = foxsdr::slintsafe;
-    CHECK(std::string(ss::shared("", "t.cpp").data()) == "");
-    CHECK(std::string(ss::shared("plain", "t.cpp").data()) == "plain");
-    CHECK(std::string(ss::shared("Portugu\xC3\xAAs", "t.cpp").data()) == "Portugu\xC3\xAAs");
+    CHECK(std::string(ss::shared("").data()) == "");
+    CHECK(std::string(ss::shared("plain").data()) == "plain");
+    CHECK(std::string(ss::shared("Portugu\xC3\xAAs").data()) == "Portugu\xC3\xAAs");
     // ANSI first: what the bytes become depends on the machine's code page, so the outcome checked is "valid, and the ASCII around it kept";
     // on a Windows-1252 machine it is the o acute.
     for (const std::string* s : {&kBad8, &kBad17}) {
-        const std::string out = ss::shared(*s, "t.cpp").data();
+        const std::string out = ss::shared(*s).data();
         CHECK(cascade::core::isValidUtf8(out));
         CHECK(out.find("INI v1.0") != std::string::npos || out.find(" text") != std::string::npos);
     }
 #if defined(_WIN32)
-    if (::GetACP() == 1252) { CHECK(std::string(ss::shared(kBad8, "t.cpp").data()) == "AirSpy M\xC3\xB3" "INI v1.0"); }
+    if (::GetACP() == 1252) { CHECK(std::string(ss::shared(kBad8).data()) == "AirSpy M\xC3\xB3" "INI v1.0"); }
 #endif
-    CHECK(cascade::core::isValidUtf8(std::string(ss::shared("abc\xC3", "t.cpp").data())));
-    CHECK(cascade::core::isValidUtf8(std::string(ss::shared("a\xC0\xAF" "b", "t.cpp").data())));
+    CHECK(cascade::core::isValidUtf8(std::string(ss::shared("abc\xC3").data())));
+    CHECK(cascade::core::isValidUtf8(std::string(ss::shared("a\xC0\xAF" "b").data())));
     const std::string nul("a\0b", 3);
-    CHECK(ss::shared(nul, "t.cpp").data()[0] == 'a');   // a NUL is valid UTF-8 and does not abort (Slint reads the text as a C string, so shows "a")
+    CHECK(ss::shared(nul).data()[0] == 'a');   // a NUL is valid UTF-8 and does not abort (Slint reads the text as a C string, so shows "a")
 }
 
 int countLines(const std::string& needle) {
@@ -170,28 +185,174 @@ int countLines(const std::string& needle) {
     return n;
 }
 
+void resetSites() {
+    foxsdr::slintsafe::SiteLog& log = foxsdr::slintsafe::siteLog();
+    std::lock_guard<std::mutex> lk(log.mutex);
+    log.sites.clear();
+    log.capNoticeGiven = false;
+}
+
+// The text of the newest ring line that holds `needle`, from "slint text:" on (the ring's own time stamp left out).
+std::string newestLine(const std::string& needle) {
+    std::string found;
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        const std::size_t at = l.find("slint text:");
+        if (at != std::string::npos && l.find(needle) != std::string::npos) { found = l.substr(at); }
+    }
+    return found;
+}
+
 void testLoggedOncePerSite() {
-    std::printf("  the log: once per call site, the bad bytes as hex, never the text around them\n");
+    std::printf("  the log: once per call site (file and line), no text of the string, only the site, the offsets and the bad byte\n");
     namespace ss = foxsdr::slintsafe;
-    for (int i = 0; i < 5; ++i) { (void)ss::shared(kBad8, "C:/x/site_a.cpp"); }
-    CHECK(countLines("in site_a.cpp") == 1);
-    (void)ss::shared(kBad17, "C:/x/site_b.cpp");
-    (void)ss::shared(kBad17, "C:/x/site_b.cpp");
-    CHECK(countLines("in site_b.cpp") == 1);
-    CHECK(countLines("in site_a.cpp at 8/17: f3 49 4e 49 20 76 31 2e 30") == 1);   // offset 8 of 16, hex of the bytes from there
-    CHECK(countLines("AirSpy") == 0);                                              // none of the text itself
+    resetSites();
+    for (int i = 0; i < 5; ++i) { (void)ss::validAt(kBad8, "C:/x/site_a.cpp", 931); }
+    CHECK(countLines("site site_a:931:") == 1);
+    (void)ss::validAt(kBad8, "C:/x/site_a.cpp", 932);        // another line of the same file is another site
+    CHECK(countLines("site site_a:932:") == 1);
+    (void)ss::validAt(kBad17, "C:/x/site_b.cpp", 7);
+    (void)ss::validAt(kBad17, "C:/x/site_b.cpp", 7);
+    CHECK(countLines("site site_b:7:") == 1);
+    // the exact line: offset 8 of 17, the bad byte f3, both neighbours ASCII letters ("a")
+    const std::string line = newestLine("site site_a:931:");
+    const std::string want = "slint text: site site_a:931: first bad byte at 8 of 17, value f3, before a, after a, looks like ";
+    CHECK(line.compare(0, want.size(), want) == 0);
+    CHECK(line.find(", 1 bad byte(s)") != std::string::npos);
+    std::printf("    %s\n", line.c_str());
+    // none of the text, in any spelling
+    CHECK(countLines("AirSpy") == 0);
     CHECK(countLines("localised") == 0);
+    CHECK(countLines("INI") == 0 && countLines("49 4e") == 0 && countLines("41 69") == 0);
     for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) { CHECK(cascade::core::isValidUtf8(l)); }
     // Valid text logs nothing.
     const int before = countLines("slint text:");
-    (void)ss::shared("all fine \xC3\xA9", "C:/x/site_c.cpp");
+    (void)ss::validAt("all fine \xC3\xA9", "C:/x/site_c.cpp", 1);
+    (void)ss::shared("all fine \xC3\xA9");
     CHECK(countLines("slint text:") == before);
 }
 
-// Every publisher's ss() helper must go through the boundary: a new translation unit that builds a SharedString from a std::string
-// by hand is the way this fault comes back.
+void testLineFormat() {
+    std::printf("  the log line: neighbours only when they are not ASCII letters or digits, and what the fault looks like\n");
+    namespace ss = foxsdr::slintsafe;
+    // a neighbour that is a space and one that is a slash are named by value; letters and digits as "a"; an end as "none"
+    CHECK(ss::badTextLine("ab \xF3/cd", 3, 1, "s:1", 1252).find("value f3, before 20, after 2f, looks like system ANSI code page, code page 1252, 1 bad byte(s)") != std::string::npos);
+    CHECK(ss::badTextLine("a1\xF3" "9z", 2, 1, "s:1", 1252).find("value f3, before a, after a,") != std::string::npos);
+    CHECK(ss::badTextLine("\xF3" "x", 0, 1, "s:1", 1252).find("first bad byte at 0 of 2, value f3, before none, after a,") != std::string::npos);
+    CHECK(ss::badTextLine("x\xF3", 1, 1, "s:1", 1252).find("before a, after none,") != std::string::npos);
+    CHECK(ss::badTextLine("x\xC3", 1, 1, "s:1", 1252).find("looks like cut-off UTF-8") != std::string::npos);
+    CHECK(ss::badTextLine("x\xE2\x82", 1, 2, "s:1", 1252).find("looks like cut-off UTF-8") != std::string::npos);
+    CHECK(ss::badTextLine("x\xE9y", 1, 1, "s:1", 65001).find("looks like other") != std::string::npos);
+    CHECK(ss::badTextLine("x\xE9y", 1, 1, "s:1", 0).find("looks like other") != std::string::npos);
+#if defined(_WIN32)
+    CHECK(ss::badTextLine("x\x81\x41", 1, 1, "s:1", 936).find("looks like double-byte code page, code page 936") != std::string::npos);
+    CHECK(ss::badTextLine("x\xFFy", 1, 1, "s:1", 936).find("looks like other") != std::string::npos);
+#endif
+    CHECK(ss::siteName("D:\\a\\b\\signal_publish.cpp", 931) == "signal_publish:931");
+    CHECK(ss::siteName("src/slint/main.cpp", 12) == "main:12");
+    CHECK(ss::siteName(nullptr, 3) == "?:3");
+    // no letter of the text is in the line
+    const std::string l = ss::badTextLine("Secret\xF3Name", 6, 1, "s:1", 1252);
+    CHECK(l.find("Secret") == std::string::npos && l.find("Name") == std::string::npos && l.find("53") == std::string::npos);
+}
+
+void testSiteCap() {
+    std::printf("  the log: at most 16 call sites per run, then one line says so; the text is repaired all the same\n");
+    namespace ss = foxsdr::slintsafe;
+    resetSites();
+    for (unsigned line = 1; line <= 20; ++line) { CHECK(cascade::core::isValidUtf8(ss::validAt(kBad8, "C:/x/cap_site.cpp", 100 + line))); }
+    CHECK(countLines("site cap_site:1") == 16);                 // lines 101 to 116
+    CHECK(countLines("16 call sites reported") == 1);
+    CHECK(countLines("site cap_site:117:") == 0);
+    CHECK(cascade::core::isValidUtf8(ss::validAt(kBad8, "C:/x/cap_site.cpp", 130)));   // still repaired
+    CHECK(countLines("16 call sites reported") == 1);          // said once
+    resetSites();
+}
+
+// The scrub the report goes through (scrubUploadLog, then the path token of radioreport::pathsToToken) leaves the line as it is.
+void testLineSurvivesUploadScrub() {
+    std::printf("  the log line survives the upload scrub chain intact\n");
+    namespace ss = foxsdr::slintsafe;
+    resetSites();
+    (void)ss::validAt("ab \xF3/cd", "C:/x/signal_publish.cpp", 931);
+    (void)ss::validAt(kBad8, "C:/x/kit_publish_mapj.cpp", 1288);
+    (void)ss::validAt("Serielles USB-Ger\xE4t", "C:/Users/someone/x/tools_publish.cpp", 54);
+    (void)ss::validAt("x\xC3", "C:/x/main.cpp", 4000);
+    std::vector<std::string> lines;
+    for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+        for (const char* site : {"site signal_publish:931:", "site kit_publish_mapj:1288:", "site tools_publish:54:", "site main:4000:"}) {
+            if (l.find(site) != std::string::npos) { lines.push_back(l); }
+        }
+    }
+    CHECK(lines.size() == 4);
+    const std::vector<std::string> scrubbed = cascade::core::scrubUploadLog(lines);
+    CHECK(scrubbed.size() == lines.size());
+    for (std::size_t i = 0; i < lines.size() && i < scrubbed.size(); ++i) {
+        const std::string once = scrubbed[i];
+        const std::string twice = cascade::core::radioreport::pathsToToken(once);
+        const std::size_t a = lines[i].find("slint text: site ");
+        const std::size_t b = once.find("slint text: site ");
+        const std::size_t c = twice.find("slint text: site ");
+        CHECK(a != std::string::npos && b != std::string::npos && c != std::string::npos);
+        if (a == std::string::npos || b == std::string::npos || c == std::string::npos) { continue; }
+        if (once.substr(b) != lines[i].substr(a)) { std::printf("FAIL the scrub changed a line:\n  was %s\n  now %s\n", lines[i].substr(a).c_str(), once.substr(b).c_str()); }
+        CHECK(once.substr(b) == lines[i].substr(a));
+        CHECK(twice.substr(c) == lines[i].substr(a));
+    }
+    resetSites();
+}
+
+void testLanguageCode() {
+    std::printf("  the language code: a plausible code only; anything else is logged once (its length) and refused before Slint sees it\n");
+    namespace ss = foxsdr::slintsafe;
+    for (const char* ok : {"en", "de", "pt-BR", "zh_Hans_CN", "es419", "x1", "abcdefghijklmnop"}) { CHECK(ss::plausibleLanguageCode(ok)); }
+    CHECK(!ss::plausibleLanguageCode(""));
+    CHECK(!ss::plausibleLanguageCode("e"));
+    CHECK(!ss::plausibleLanguageCode("abcdefghijklmnopq"));      // 17 bytes
+    CHECK(!ss::plausibleLanguageCode("d\xE9"));                  // a code-page letter: not UTF-8
+    CHECK(!ss::plausibleLanguageCode("\xC3\xA9s"));              // valid UTF-8 but not an ASCII code
+    CHECK(!ss::plausibleLanguageCode("de/../x"));
+    CHECK(!ss::plausibleLanguageCode("de x"));
+    CHECK(!ss::plausibleLanguageCode(std::string("de\0xx", 5)));
+    // The call itself, with bytes that are not UTF-8: this would abort inside Slint if the code reached it.
+    const int before = countLines("language code refused");
+    CHECK(!ss::selectBundledTranslation("d\xE9" "utsch"));
+    CHECK(!ss::selectBundledTranslation("\xFF\xFE"));
+    CHECK(!ss::selectBundledTranslation("a\xC3"));
+    CHECK(countLines("language code refused") == before + 3);
+    CHECK(countLines("tsch") == 0);
+}
+
+void testKeyEventText() {
+    std::printf("  a key event's text (the scripted input's `type`): a byte that is not UTF-8 is repaired, never passed on\n");
+    namespace ss = foxsdr::slintsafe;
+    CHECK(std::string(ss::keyEventText(u8"a").data()) == "a");
+    CHECK(std::string(ss::keyEventText(u8"\u00e9").data()) == "\xC3\xA9");
+    const std::u8string bad = {static_cast<char8_t>(0xF3)};
+    CHECK(cascade::core::isValidUtf8(std::string(ss::keyEventText(bad).data())));
+    const std::u8string cut = {static_cast<char8_t>(0xE4), static_cast<char8_t>(0xB8)};   // a letter cut in two
+    CHECK(cascade::core::isValidUtf8(std::string(ss::keyEventText(cut).data())));
+    const std::u8string mixed = {u8'x', static_cast<char8_t>(0xC0), static_cast<char8_t>(0xAF), u8'y'};
+    CHECK(cascade::core::isValidUtf8(std::string(ss::keyEventText(mixed).data())));
+}
+
+// VALID TEXT COSTS NO C++ ALLOCATION AND NO LOG: shared() on valid text scans once and builds the SharedString (whose storage is Slint's own).
+void testValidTextIsFree() {
+    std::printf("  valid text: no C++ allocation and no log line\n");
+    namespace ss = foxsdr::slintsafe;
+    const std::string long8(200, 'x');
+    const std::string_view view(long8);
+    const int before = countLines("slint text:");
+    g_newCalls = 0;
+    for (int i = 0; i < 100; ++i) { const slint::SharedString s = ss::shared(view); CHECK(s.size() == 200); }
+    const std::size_t calls = g_newCalls;
+    CHECK(calls == 0);
+    CHECK(countLines("slint text:") == before);
+}
+
+// Every publisher's ss() helper must go through the boundary, with the caller's source location: a new translation unit that builds a
+// SharedString from a std::string by hand is the way this fault comes back.
 void testSourcesUseTheBoundary(const std::filesystem::path& srcDir) {
-    std::printf("  every ss() helper in src/slint goes through slintsafe::shared\n");
+    std::printf("  every ss() helper in src/slint goes through slintsafe::shared with the caller's source location\n");
     int helpers = 0;
     for (const auto& e : std::filesystem::directory_iterator(srcDir)) {
         if (e.path().extension() != ".cpp") { continue; }
@@ -205,9 +366,9 @@ void testSourcesUseTheBoundary(const std::filesystem::path& srcDir) {
             std::printf("FAIL %s builds a SharedString by hand\n", e.path().filename().string().c_str());
             CHECK(false);
         }
-        if (text.find("slint::SharedString ss(const std::string& s)") != std::string::npos) {
+        if (text.find("slint::SharedString ss(const std::string& s") != std::string::npos) {
             ++helpers;
-            CHECK(text.find("foxsdr::slintsafe::shared(s, __FILE__)") != std::string::npos);
+            CHECK(text.find("slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }") != std::string::npos);
             CHECK(text.find("#include \"safe_text.hpp\"") != std::string::npos);
         }
     }
@@ -226,7 +387,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--boundary") == 0) {
-        const slint::SharedString s = foxsdr::slintsafe::shared(kBad8, "child.cpp");
+        const slint::SharedString s = foxsdr::slintsafe::shared(kBad8);
         return cascade::core::isValidUtf8(std::string_view(s)) && s.size() >= 17 ? 0 : 2;
     }
     if (argc > 1 && std::strcmp(argv[1], "--control") == 0) {
@@ -235,6 +396,12 @@ int main(int argc, char** argv) {
     }
     testBoundary();
     testLoggedOncePerSite();
+    testLineFormat();
+    testSiteCap();
+    testLineSurvivesUploadScrub();
+    testLanguageCode();
+    testKeyEventText();
+    testValidTextIsFree();
     testRawAborts();
 #if defined(_WIN32)
     testRealPanicInReportTail();

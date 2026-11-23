@@ -14,7 +14,7 @@ namespace foxsdr::slintgaps1 {
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 // THE LIVE ANSWER: the site is asked on a detached worker (core::BetaLinkNameSender); a bounded run never gets this one.
 class LiveNet final : public LinkNet {
