@@ -1556,6 +1556,9 @@ private:
     // Stops the retries: the user chose something else, so the saved radio is no longer what the session is waiting for. restoreKeep_ itself is
     // left for the exit save to read.
     void cancelSavedRadioRetry() { rx().savedRadioRetryBusy_ = false; }
+    // The pending open is an rtl_tcp server's (the only open that listens for a cancel): raise its flag, wait up to ~400 ms for the worker to
+    // return, apply the answer (a cancelled open files nothing). False when nothing cancellable is pending; the caller then still refuses to pick.
+    bool cancelPendingNetworkOpen();
     // The reopen itself, once pollSoapyRecovery has judged it due: reads the
     // rate, gains, running state and AIR centre off the dead radio (device_),
     // closes it and launches the open. Split from the gate so the carry-across

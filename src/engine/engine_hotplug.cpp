@@ -52,7 +52,9 @@ void Engine::pumpHotplug() {
     cascade::core::diagLogf("hot-plug: %d arrived, %d removed", arrived, removed);   // counts only, never a name
     scanNative();
     scanSoapy();
-    if (arrived > 0 && rx().savedRadioRetryBusy_) {
+    // NOT FOR A NETWORK SERVER: a USB device arriving says nothing about an rtl_tcp server, and re-arming its series on every mouse plugged in
+    // restarted four tries (and, before the series stopped reporting, one more failure report) without limit.
+    if (arrived > 0 && rx().savedRadioRetryBusy_ && rx().restoreKeep_.kind != "rtltcp") {
         // a device appeared while a saved radio is waiting: try it now (the retry's own rules - the same radio kinds, the cap on attempts - still apply)
         rx().savedRadioRetryAttempts_ = 0;
         rx().savedRadioRetryLastFailSec_ = -1.0e9;

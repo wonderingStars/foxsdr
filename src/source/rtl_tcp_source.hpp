@@ -155,6 +155,15 @@ public:
     // to each receive and the receive is repeated until this is spent) and HOW LONG A REFUSED CONNECT IS RETRIED (default 6 s).
     // Both are for a real rtl_tcp, which serves one client at a time and needs ~3.6 s after a client leaves before it accepts
     // the next (measured, tests/test_rtl_tcp_realpeer.cpp); see rtl_tcp_source.cpp handshakeLocked. The setter is for tests.
+    // PATIENCE. A source is SHORT-WINDED unless told otherwise: header wait kShortHeaderWait (4 s, the measured cold start is 1.5 s) and
+    // no retry of a refusal. That is what the start-up restore gets - it runs on the thread that shows the window, and a saved server
+    // that is switched off must not hold the window up for seconds - and what each try of the background retry series gets (the series
+    // itself is the patience). A user's own pick runs on the open worker and asks for setPatient(true): the long waits below.
+    static constexpr std::chrono::milliseconds kShortHeaderWait{4000};
+    void setPatient(bool patient) { patient_.store(patient, std::memory_order_relaxed); }
+    // The flag the engine raises to abandon an open in progress (a pick of another source, quitting): looked at about every 50 ms of the
+    // connect and the header wait. Set before open(); a flag already raised makes open() fail at once.
+    void setCancelFlag(std::shared_ptr<std::atomic<bool>> cancel) { cancel_ = std::move(cancel); }
     static constexpr std::chrono::milliseconds kHeaderWaitDefault{12000};
     static constexpr std::chrono::milliseconds kRefusedRetryDefault{6000};
     static std::chrono::milliseconds headerWait();
@@ -410,6 +419,12 @@ private:
     void setName(std::string n);
 
     mutable std::mutex devMutex_;
+
+    std::atomic<bool> patient_{false};
+    std::shared_ptr<std::atomic<bool>> cancel_;
+    bool cancelled() const { return cancel_ != nullptr && cancel_->load(std::memory_order_relaxed); }
+    std::chrono::milliseconds effectiveHeaderWait() const;
+    std::chrono::milliseconds effectiveRefusedRetryWait() const;
 
     std::unique_ptr<iiod::Transport> transport_;
     std::thread reader_;

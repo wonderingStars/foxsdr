@@ -66,6 +66,7 @@
 #include "core/tune_control.hpp"
 #include "source/iq_file_source.hpp"
 #include "source/raw_iq_net_source.hpp"
+#include "source/rtl_tcp_source.hpp"
 #include "source/kiwisdr_source.hpp"
 #include "engine/wire_b_sources.hpp"   // wire-b
 #include "source/rsp_rows.hpp"
@@ -1637,6 +1638,16 @@ void Engine::pollDeviceOpen() {
     }
 }
 
+bool Engine::cancelPendingNetworkOpen() {
+    if (!rx().deviceOpenPending_ || !rx().pendingOpenIsNetwork_ || !rx().openCancel_ || !rx().deviceOpenFuture_.valid()) { return false; }
+    rx().openCancel_->store(true);
+    // The worker checks the flag every ~50 ms of the connect and of the header wait; a name lookup in progress cannot be interrupted and
+    // may outlast this, in which case the pick is refused as before and the next click finds the open finished.
+    if (rx().deviceOpenFuture_.wait_for(std::chrono::milliseconds(400)) != std::future_status::ready) { return true; }
+    pollDeviceOpen();
+    return true;
+}
+
 void Engine::reapPendingDeviceOpen() {
     if (!rx().deviceOpenPending_ || !rx().deviceOpenFuture_.valid()) { return; }
 
@@ -1654,6 +1665,7 @@ void Engine::reapPendingDeviceOpen() {
     // short enough not to be felt and long enough to cover every open that was
     // not actually stuck.
     constexpr auto kQuitGrace = std::chrono::milliseconds(250);
+    if (rx().openCancel_) { rx().openCancel_->store(true); }   // an rtl_tcp connect or header wait in flight returns within ~50 ms
     if (rx().deviceOpenFuture_.wait_for(kQuitGrace) == std::future_status::ready) {
         drainDeviceOpen(rx().deviceOpenFuture_);
         rx().deviceOpenPending_ = false;
@@ -1735,6 +1747,12 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
                              /*superseded=*/false, f.requestRateHz, f.openMs);
         }
     }
+    // AN OPEN THE USER (or quitting) CANCELLED, rtl_tcp's connect or header wait: not a radio that failed, so nothing is reported, counted
+    // or remembered; the generator that stood in for the radio is what is running.
+    if (r.cancelled && !r.dev) {
+        cascade::core::diagLogf("source: the open of the rtl_tcp server was cancelled");
+        return;
+    }
     // THE USER MAY HAVE MOVED ON. Opening a device takes seconds and the GUI
     // stays live throughout, so by the time this runs they may have selected
     // the generator, opened an IQ file, or done either from the web UI. Before
@@ -1782,14 +1800,21 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         // already counted, so a busy-again try adds nothing to the anonymous count; a different reason is a new fact and is counted.
         const bool retryBusyAgain = r.savedRadioRetry && cascade::gui::savedRadioFailureWorthRetry(
             whyReason == cascade::core::health::RadioReason::Busy,
-            r.kind == "rtltcp" && (whyReason == cascade::core::health::RadioReason::Absent || whyReason == cascade::core::health::RadioReason::Timeout));
+            cascade::gui::savedNetworkServerNotThere(r.kind, whyReason == cascade::core::health::RadioReason::Absent || whyReason == cascade::core::health::RadioReason::Timeout, why));
         if (r.savedRadioRetry) {
             rx().savedRadioRetryBusy_ = retryBusyAgain;
             rx().savedRadioRetryLastFailSec_ = retryClockS();
             if (retryBusyAgain && rx().savedRadioRetryAttempts_ >= 4) {
-                cascade::core::diagWarnf(
-                    "source: the saved radio is still in use by another program after 4 more "
-                    "tries - giving up");
+                if (r.kind == "rtltcp") {
+                    // WHAT HAPPENED, for a network server: it was not busy, it did not answer.
+                    cascade::core::diagWarnf(
+                        "source: the saved rtl_tcp server at its saved address did not answer after 4 more tries - giving up; "
+                        "pick it again when it is running");
+                } else {
+                    cascade::core::diagWarnf(
+                        "source: the saved radio is still in use by another program after 4 more "
+                        "tries - giving up");
+                }
             }
         }
         // A RADIO THAT WOULD NOT OPEN, COUNTED ANONYMOUSLY (0.99.64,
@@ -1801,7 +1826,9 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         // try in the middle of the saved radio's retry series (FIELD FIX A3, 2026-11-19: one held dongle sent five reports in thirty seconds, from each of four
         // copies). The series' first failure was reported by the start-up restore, its last (the fourth retry, "giving up") is reported here, and a retry that
         // fails for another reason is a new fact and is reported at once; the tries between are counted in `attempt` and shown by the journal, not sent.
-        const bool midSeries = retryBusyAgain && rx().savedRadioRetryAttempts_ < 4;
+        // A NETWORK SERVER'S SERIES NEVER REPORTS AGAIN: its start-up restore filed the one failure of the incident, and a series that
+        // ends in giving up is the same incident (2026-11-23 review: reports per incident were 2 where they had been 1).
+        const bool midSeries = retryBusyAgain && (r.kind == "rtltcp" || rx().savedRadioRetryAttempts_ < 4);
         reportFailedOpen(r.kind, r.args, why,
                          r.recovery ? cascade::core::radioreport::Trigger::AutoReopen
                                     : (r.savedRadioRetry ? cascade::core::radioreport::Trigger::SavedRetry : cascade::core::radioreport::Trigger::UserPick),
@@ -2043,6 +2070,10 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
     }
     rx().deviceBusyLabel_ = busyLabel;
     rx().deviceOpenPending_ = true;
+    // THE FLAG THAT ABANDONS THIS OPEN (an rtl_tcp connect or header wait looks at it); raised by selectSource and at quit.
+    r.openCancel = std::make_shared<std::atomic<bool>>(false);
+    rx().openCancel_ = r.openCancel;
+    rx().pendingOpenIsNetwork_ = (r.kind == "rtltcp");
     // Stamp the request with the selection it belongs to. Nothing is installed
     // yet, so the counter is NOT bumped here — only the answer's right to be
     // applied is recorded.
@@ -2088,7 +2119,14 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
             r.error = "\"" + r.kind + "\" is not a source kind this build can open";
             return std::move(r);
         }
+        // AN rtl_tcp SERVER: the user's own pick is PATIENT (long header wait, a refusal retried: the real server needs ~3.6 s between
+        // clients); a try of the saved-radio series or an automatic reopen is short (the series is the patience). Cancellable either way.
+        if (auto* tcp = dynamic_cast<cascade::source::RtlTcpSource*>(dev.get())) {
+            tcp->setPatient(!r.savedRadioRetry && !r.recovery);
+            tcp->setCancelFlag(r.openCancel);
+        }
         if (!dev->open(r.args)) {
+            r.cancelled = r.openCancel && r.openCancel->load();
             r.error = dev->lastError();
             // THE ONE FALLBACK, and it is a real dongle rather than a
             // hypothetical: an E4000 or FC0012/13 tuner, which the native
@@ -2494,7 +2532,12 @@ void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
     // generator mid-open used to strand the resolving device for a stale-drop
     // teardown, and the combo's busy label already tells the user why the
     // click did nothing.
-    if (rx().deviceOpenPending_) { return; }
+    if (rx().deviceOpenPending_) {
+        // A PENDING NETWORK OPEN IS CANCELLED, NOT WAITED FOR (rtl_tcp): its connect and header waits look at the flag every ~50 ms, so the
+        // worker is back within a fraction of a second and the pick goes ahead. A mistyped server address no longer locks the source list.
+        if (!cancelPendingNetworkOpen()) { return; }
+        if (rx().deviceOpenPending_) { return; }
+    }
     rx().sourceError_.clear();
     // THE USER CHOSE A SOURCE, so a saved radio that was only busy is no longer what the session is waiting for (0.99.92). restoreKeep_ stays
     // for the exit save; a failed pick must not be followed by a retry of the radio they left.
@@ -10519,7 +10562,7 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             const cascade::core::health::RadioReason failedReason = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_);
             const bool failedBusy = failedReason == cascade::core::health::RadioReason::Busy;
             const bool waitMayCure = cascade::gui::savedRadioFailureWorthRetry(
-                failedBusy, kind == "rtltcp" && (failedReason == cascade::core::health::RadioReason::Absent || failedReason == cascade::core::health::RadioReason::Timeout));
+                failedBusy, cascade::gui::savedNetworkServerNotThere(kind, failedReason == cascade::core::health::RadioReason::Absent || failedReason == cascade::core::health::RadioReason::Timeout, rx().sourceError_));
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes

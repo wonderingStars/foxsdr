@@ -132,6 +132,10 @@ std::string closedLabel;
 // that finishDeviceOpen, which sees only the answer, knows whether a failure should arm the next try; an answer the user has moved on from
 // drops it with the rest.
 bool savedRadioRetry = false;
+// THE FLAG THAT ABANDONS THIS OPEN (an rtl_tcp connect or header wait looks at it), shared with Receiver::openCancel_; and whether the open
+// ended because it was raised - a cancelled open is not a radio that failed, and files no report.
+std::shared_ptr<std::atomic<bool>> openCancel;
+bool cancelled = false;
 };
 
 // WHAT THE AUTOMATIC AUDIO BUFFER LAST DID (it was Engine::AudioLeadNote; Engine keeps the name as an alias).
@@ -183,6 +187,8 @@ struct Receiver {
     double savedRadioRetryClockS_ = -1.0;
     std::future<DeviceOpenResult> deviceOpenFuture_;
     bool deviceOpenPending_ = false;
+    bool pendingOpenIsNetwork_ = false;               // the pending open is an rtl_tcp server's (it listens for the cancel flag)
+    std::shared_ptr<std::atomic<bool>> openCancel_;   // the pending open's cancel flag (see DeviceOpenResult::openCancel)
     std::string deviceBusyLabel_;  // device name shown while an open is in flight
     // Paces hardware retunes - see retuneSourceHz. 50 ms: invisible against
     // the wheel gesture, one apply per notch burst instead of one per frame.

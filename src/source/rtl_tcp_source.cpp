@@ -132,17 +132,24 @@ bool parseRtlTcpAddress(const std::string& args, std::string& host, std::uint16_
         v = v.substr(a, b - a);
     };
     trimSpace(text);
+    const bool typedSomething = !text.empty();
     const std::size_t scheme = text.find("://");
-    if (scheme != std::string::npos && scheme > 0 && scheme <= 12) {
-        bool word = true;
-        for (std::size_t i = 0; i < scheme; ++i) {
-            const char c = text[i];
-            word = word && (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-');
+    if (scheme != std::string::npos) {
+        // ONLY THE SPELLINGS OF THIS PROTOCOL: any other scheme (http://, udp://) is somebody else's address and is refused, not guessed at.
+        const std::string word = text.substr(0, scheme);
+        if (!(equalsNoCase(word, "rtl_tcp") || equalsNoCase(word, "rtltcp") || equalsNoCase(word, "tcp"))) {
+            error = "\"" + word + "://\" is not an rtl_tcp address (use host, host:port, rtl_tcp://host:port or tcp://host:port)";
+            return false;
         }
-        if (word) { text = text.substr(scheme + 3); }
+        text = text.substr(scheme + 3);
     }
     while (!text.empty() && text.back() == '/') { text.pop_back(); }
     trimSpace(text);
+    // A scheme or a slash with nothing after it used to read as "nothing typed" and silently mean 127.0.0.1:1234.
+    if (text.empty() && typedSomething) {
+        error = "the rtl_tcp address has no host name or number in it";
+        return false;
+    }
     if (text.empty()) { return true; }
 
     std::string hostPart;
@@ -207,6 +214,13 @@ std::atomic<long long> g_headerWaitMs{RtlTcpSource::kHeaderWaitDefault.count()};
 std::atomic<long long> g_refusedRetryMs{RtlTcpSource::kRefusedRetryDefault.count()};
 }  // namespace
 
+std::chrono::milliseconds RtlTcpSource::effectiveHeaderWait() const {
+    const auto h = headerWait();
+    return patient_.load(std::memory_order_relaxed) ? h : std::min(h, kShortHeaderWait);
+}
+std::chrono::milliseconds RtlTcpSource::effectiveRefusedRetryWait() const {
+    return patient_.load(std::memory_order_relaxed) ? refusedRetryWait() : std::chrono::milliseconds(0);
+}
 std::chrono::milliseconds RtlTcpSource::headerWait() { return std::chrono::milliseconds(g_headerWaitMs.load()); }
 std::chrono::milliseconds RtlTcpSource::refusedRetryWait() { return std::chrono::milliseconds(g_refusedRetryMs.load()); }
 void RtlTcpSource::setWaitsForTest(std::chrono::milliseconds header, std::chrono::milliseconds refusedRetry) {
@@ -392,27 +406,34 @@ bool RtlTcpSource::handshakeLocked(std::unique_ptr<iiod::Transport> t, std::stri
     // (and refuses connections outright for part of that time); a cold start takes about 1.5 s to its first connection. A wait of
     // 2 s failed every re-open made within seconds of a close with the very text the field reports ("receive timed out" at
     // ~2.0 s). The socket's own bound still applies to each receive; the receive is repeated until kHeaderWait is spent.
+    // THE WAIT IS A select() FOR READABILITY, NEVER A RECEIVE TIMEOUT: Microsoft documents a Windows socket whose receive timed out as in
+    // an indeterminate state (SO_RCVTIMEO), and a header byte lost there would give "not an rtl_tcp header" or swap I and Q for the whole
+    // session. The wait is cut into 50 ms slices so a cancel (cancel_) is heard at once.
     {
-        const auto deadline = std::chrono::steady_clock::now() + headerWait();
+        const auto wait = effectiveHeaderWait();
+        const auto deadline = std::chrono::steady_clock::now() + wait;
         std::size_t got = 0;
-        bool silent = false;
         while (got < sizeof(header)) {
+            if (cancelled()) {
+                error = iiod::kOpenCancelledText;
+                return false;
+            }
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+            if (left.count() <= 0) {
+                error = "connected to " + hostPortText(host_, port_) + ", but nothing came back within " +
+                        std::to_string(std::chrono::duration_cast<std::chrono::seconds>(wait).count()) +
+                        " s (timed out): either this is not an rtl_tcp server, or it is busy with another program (rtl_tcp serves one at a time) "
+                        "or still starting its dongle";
+                return false;
+            }
+            const int ready = t->waitForData(std::min(left, std::chrono::milliseconds(50)));
+            if (ready == 0) { continue; }
             std::size_t part = 0;
-            if (t->recvSome(header + got, sizeof(header) - got, part)) {
-                got += part;
-                continue;
+            if (ready < 0 || !t->recvSome(header + got, sizeof(header) - got, part)) {
+                error = "nothing at " + hostPortText(host_, port_) + " answered as an rtl_tcp server (" + t->lastError() + ")";
+                return false;
             }
-            const std::string why = t->lastError();
-            if (why.find("timed out") != std::string::npos) {
-                if (std::chrono::steady_clock::now() < deadline) { continue; }
-                silent = true;
-            }
-            error = silent ? ("connected to " + hostPortText(host_, port_) + ", but nothing came back within " +
-                              std::to_string(std::chrono::duration_cast<std::chrono::seconds>(headerWait()).count()) +
-                              " s (timed out): either this is not an rtl_tcp server, or it is busy with another program (rtl_tcp serves one at a time) "
-                              "or still starting its dongle")
-                           : ("nothing at " + hostPortText(host_, port_) + " answered as an rtl_tcp server (" + why + ")");
-            return false;
+            got += part;
         }
     }
     if (std::memcmp(header, "RTL0", 4) != 0) {
@@ -466,13 +487,20 @@ std::unique_ptr<iiod::Transport> RtlTcpSource::dialLocked(std::string& error) {
     // refusal inside kRefusedRetryWait of the first try is tried again; a server that is simply not there still says so, a few
     // seconds later. The wait is spent on the open worker, never the window's thread.
     const auto began = std::chrono::steady_clock::now();
+    const auto retryFor = effectiveRefusedRetryWait();
     for (;;) {
-        auto t = iiod::connectTcp(host_, port_, iiod::kConnectWait, iiod::kReplyWait, error, peer);
+        auto t = iiod::connectTcp(host_, port_, iiod::kConnectWait, iiod::kReplyWait, error, peer, cancel_.get());
         if (t != nullptr) { return t; }
-        const bool refused = error.find("10061") != std::string::npos || error.find("refused") != std::string::npos ||
-                             error.find("111)") != std::string::npos;
-        if (!refused || std::chrono::steady_clock::now() - began >= refusedRetryWait()) { return nullptr; }
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        // BY THE CONNECT'S OWN WORDS, not by any digits in the text (the sentence also quotes the host and the port):
+        // "connect failed (network error 10061)" is Windows' refusal, 111 is ECONNREFUSED.
+        const bool refused = error.find("connect failed (network error 10061)") != std::string::npos ||
+                             error.find("connect failed (network error 111)") != std::string::npos;
+        if (!refused || retryFor.count() <= 0 || std::chrono::steady_clock::now() - began >= retryFor) { return nullptr; }
+        for (int i = 0; i < 6 && !cancelled(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+        if (cancelled()) {
+            error = iiod::kOpenCancelledText;
+            return nullptr;
+        }
     }
 }
 
