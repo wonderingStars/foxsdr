@@ -123,6 +123,7 @@ const char* idleWord(cascade::core::DecoderIdleReason r) {
         case R::CreateFailed: return "create failed";
         case R::NoAudioTable: return "no audio table";
         case R::PollFailed: return "poll failed";
+        case R::Starting: return "starting";
     }
     return "";
 }

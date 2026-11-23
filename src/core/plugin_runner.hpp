@@ -96,6 +96,10 @@ enum class DecoderIdleReason {
     // panel can say - a decoder that has failed looks exactly like one still
     // building a picture, and only one of the two is worth waiting for.
     PollFailed,
+    // THE PLUGIN'S create() IS RUNNING and has not returned (freeze diagnosis P1/P6): the runner marks the plugin "starting" under its lock and builds the
+    // instances OUTSIDE it, so the window and the sound go on while a slow create() runs. The row is replaced by the real ones when the instances are published,
+    // or removed when the start was cancelled.
+    Starting,
 };
 
 // What a running instance produces. Text and image decoders are fed
@@ -707,10 +711,29 @@ private:
     // the moved-out copies, and the lock is retaken before returning, so a
     // caller sees exactly the state a function that never let go would leave.
     void destroyInstances(std::unique_lock<std::mutex>& lock);
-    // Creates every instance ONE plugin declares and appends their status rows,
-    // against audioRateHz_/iqRateHz_/centreHz_. Lock held; the body rebuild()
-    // runs for each plugin, and what startPlugin() runs for one.
-    void buildPluginLocked(const LoadedPlugin& lp);
+    // WHAT ONE PLUGIN'S BUILD PRODUCES, held OUTSIDE the runner until it is published (freeze diagnosis P1/P6, stage A). The create() calls are third-party code
+    // of unbounded duration; they used to run with mutex_ held, which stopped the window (pollImages) and the sound (processIq) behind them. buildPlugin() fills
+    // one of these without the lock - nobody else can see it, so nothing can call into a handle it holds - and publishLocked() appends it to the runner's vectors
+    // under the lock, in one step. Status rows are indexed from 0 here and shifted by publishLocked().
+    struct Stage;
+    // Creates every instance ONE plugin declares into `s`, against the rates and centre `s` carries. NO LOCK HELD, none taken: it touches no member of the runner.
+    static void buildPlugin(const LoadedPlugin& lp, Stage& s);
+    // Lock held. Appends the stage to the runner: instances, status rows (shifted), speakers, transmit claims, processors; bumps statusGen_.
+    void publishLocked(Stage& s);
+    // Lock held. Tells the stage's I/Q instances the centre if it moved since the stage was built against `s.centreHz` (a retune() that arrived meanwhile).
+    void retuneStageLocked(Stage& s);
+    // NO LOCK HELD. Destroys a stage's instances that will never be published, with the plugin-call discipline destroyInstances uses.
+    static void discardStage(Stage& s);
+    // Lock held. Whether a stage built for `lp` may still be published: not stopped, not dormant, not switched off, and built against the rates now in force.
+    bool stageStillWantedLocked(const LoadedPlugin& lp, const Stage& s) const;
+    // Lock held. Removes the "starting" row of `key`, if any.
+    void dropStartingRowLocked(const std::string& key);
+    // Lock held. Marks `key` as starting: a row, and the key in starting_.
+    void markStartingLocked(const LoadedPlugin& lp);
+    // Lock held on entry and on return; DROPPED while the creates run. Every plugin in `wanted` has been marked starting. Builds each into a Stage with the lock
+    // dropped, then publishes the ones still wanted (or builds again against the new rates when a rebuild() came meanwhile; discards when stopped, switched off or
+    // cleared) and takes the marks off. The body rebuild() and startPlugin() share.
+    void buildAndPublishLocked(std::vector<const LoadedPlugin*> wanted, std::unique_lock<std::mutex>& lock);
     // The per-plugin counterpart of destroyInstances(): moves ONE plugin's
     // instances out (the rest stay, with their status rows re-indexed), drops
     // the lock, destroys them, retakes it.
@@ -747,12 +770,44 @@ private:
         std::string key;  // as Instance::key
         std::string title;
     };
+    // See the declaration of buildPlugin. Defined here, after every instance type it holds.
+    struct Stage {
+        // The rates and centre this stage was built against: copied under the lock at the moment the build was claimed.
+        double audioRateHz = 0.0;
+        double iqRateHz = 0.0;
+        double centreHz = 0.0;
+        std::uint64_t epoch = 0;        // buildEpoch_ then: a rebuild() since makes the stage stale (built again against the new rates)
+        std::uint64_t clearEpoch = 0;   // clearEpoch_ then: a clear() since discards it
+        std::string key;           // the plugin's key (pluginKey)
+        std::vector<Instance> instances;
+        std::vector<IqInstance> iqInstances;
+        std::vector<ImageInstance> imageInstances;
+        std::vector<AudioInstance> audioInstances;
+        std::vector<TxInstance> txInstances;
+        std::vector<ProcessorInstance> processors;
+        std::vector<DecoderStatus> status;   // indexed from 0; the instances' statusIndex points here until publishLocked() shifts both
+        std::size_t audioImageCount = 0;
+        std::size_t iqImageCount = 0;
+        bool empty() const {
+            return instances.empty() && iqInstances.empty() && imageInstances.empty() && processors.empty();
+        }
+    };
     // Frames the interleaved scratch is sized for at rebuild; a larger block
     // grows it once (the pipeline's own buffers follow the same rule).
     static constexpr std::size_t kChainReserveFrames = 16384;
 
     std::atomic<std::uint32_t> radio_{1};
     mutable std::mutex mutex_;
+    // The keys whose create() is running right now, outside the lock (see Stage). Under mutex_. A key here is not started a second time and is not built by a
+    // rebuild(); the thread that builds it publishes it, or builds it again when the rates changed meanwhile.
+    std::vector<std::string> starting_;
+    // Moves with every rebuild() and clear(): a stage built against an older one is stale.
+    std::uint64_t buildEpoch_ = 0;
+    // Moves with every clear() (the modules are about to be unloaded): a stage built before it is destroyed, never rebuilt.
+    std::uint64_t clearEpoch_ = 0;
+    // True from the instant rebuild() has destroyed the old instances to the instant it has published the new ones (its builds run outside the lock): the stream
+    // clock is not advanced meanwhile, because nothing is being fed and an instance is promised that the count is what it has received.
+    bool rebuilding_ = false;
     std::vector<ProcessorInstance> processors_;
     std::vector<float> chainBuf_;
     std::uint64_t processorNonFinite_ = 0;
