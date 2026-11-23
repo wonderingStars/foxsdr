@@ -279,6 +279,7 @@ Engine::~Engine() {
         stopTransfers();
         wireCShutdown();   // wire-c: the listeners and CAT sessions of wiring lane C are closed while the API host they use still stands (an engine that is destroyed without shutdownQuiesce)
         teardown();
+        (void)cascade::core::issue::flushWritesAtShutdown();   // (the same bound, spent once per process: a teardown that raised an issue lands it)
     }
 #ifdef _WIN32
     // The control thread is gone (teardown, above or earlier): nothing waits on, or sets, these any more.
@@ -11432,6 +11433,9 @@ void Engine::shutdownDrain(std::chrono::steady_clock::time_point drainDeadline) 
     // shutdown budget is charged kSaveBound once. A default-constructed deadline waits for nothing and collects what has finished.
     drainListSaves(drainDeadline);
     drainRecordFinishes(drainDeadline);
+    // THE ISSUE REPORTS THE TEARDOWN ITSELF RAISED (CatStop, CloseLeak, ReaderLeak) are written by detached writer threads: wait for those in flight, at most
+    // issue::kShutdownFlushWait (250 ms, charged in HangWatchdog::kShutdownBoundedWaitsMs), so they are on disk when the process ends (review of fix/freezes, finding 3b).
+    (void)cascade::core::issue::flushWritesAtShutdown();
 }
 
 void Engine::shutdownRelease() {

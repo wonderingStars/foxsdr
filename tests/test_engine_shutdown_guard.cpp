@@ -14,7 +14,7 @@
 //       the `--seconds` stop and the two failed-start stops alike); the budget is the guard's default - the window
 //       teardown's HangWatchdog::kShutdownThresholdMs - and the only thing that changes it is the bounded-run seam, read
 //       only under `--seconds`.
-//   C.  THE CONSTANTS: exit code 3 (beside 0, 1, 2), grace 5 s, budget 59 s.
+//   C.  THE CONSTANTS: exit code 3 (beside 0, 1, 2), grace 5 s, budget 59.5 s.
 //
 // Break-it (docs/engine-stage4.md 6.18): ShutdownGuard::arm() returning at once -> G1 RED (never fires) and tests/
 // test_engine_main_sigterm_wedged.cpp RED; a service.stop() with no guard before it -> S RED.
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     CHECK(same(ShutdownGuard::kExitWedged, 3));
     CHECK(same(ShutdownGuard::kEndGraceMs, 5000u));
     CHECK(ShutdownGuard::Options{}.budgetMs == cascade::core::HangWatchdog::kShutdownThresholdMs);
-    CHECK(same(cascade::core::HangWatchdog::kShutdownThresholdMs, 59000u));
+    CHECK(same(cascade::core::HangWatchdog::kShutdownThresholdMs, 59500u));
     CHECK(ShutdownGuard::Options{}.graceMs == ShutdownGuard::kEndGraceMs);
     CHECK(ShutdownGuard::Options{}.exitCode == 3);
 

@@ -323,7 +323,11 @@ public:
     // device lock and, when a stall restart is in flight and still holds it, kRestartGiveBack more (3000 ms: two of the restart's bounded
     // steps) for the restart to hand it back instead of condemning a healthy radio. Spent once, on the teardown thread, and only while a restart
     // really is in flight. 23500 -> 26500, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 26500;
+    //
+    // AND THE ISSUE REPORTS' BOUNDED FLUSH IS THE SIXTH (review of fix/freezes, finding 3b): the teardown itself raises issues (CatStop, CloseLeak, ReaderLeak), each filed by
+    // a writer thread, and Engine::shutdownDrain() waits for writers in flight at most issue::kShutdownFlushWait, 250 ms, spent ONCE per process however many places
+    // ask (the engine's destructor asks again; it finds the bound spent). Only while a write really is out. 26500 -> 26750, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 26750;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, queuing the teardown's two config saves (the WRITE is
@@ -348,7 +352,8 @@ public:
     // is the drift this test exists to stop; a stop that does not wait for a held request is the better cure and is not done.)
     // (53000 -> 59000 with the Soapy restart's give-back above: twice (26500 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
     // really wedges is reported 6 s later than it was.)
-    static constexpr unsigned kShutdownThresholdMs = 59000;
+    // (59000 -> 59500 with the issue reports' flush above: twice (26750 + kShutdownReserveMs 3000).)
+    static constexpr unsigned kShutdownThresholdMs = 59500;
 
     HangWatchdog() = default;
     ~HangWatchdog();

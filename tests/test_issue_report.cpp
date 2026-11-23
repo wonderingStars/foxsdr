@@ -26,7 +26,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <atomic>
 #include <set>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -429,6 +431,106 @@ int main() {
         CHECK(issue::fileIssueReport(Recovered::Audio).empty());    // and a report that DID get written is still once a session
         CHECK(issueFiles(flaky).size() == 1);
         CHECK(issue::takeNewlyFiled() == 0);                        // a refused repeat is not a reason to sweep again
+    }
+
+    // --- A SWEEP NEVER SEES A SHORT REPORT (review of fix/freezes, finding 3a) ------------------------------------------------------------
+    // The writer used to create `issue-*.txt` and fill it: a sweep that listed the folder in between found an empty file, refused it ("not a readable report; it will not be
+    // retried") and the report was lost for good. It now writes `<name>.part` and renames. With the writer held BETWEEN the write and the rename, no file the sweep opens exists yet.
+    {
+        issue::resetIssueReportsForTest();
+        const fs::path sub = dir / "rename";
+        fs::create_directories(sub, ec);
+        CrashHandlerConfig on;
+        on.crashDir = sub.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        installCrashHandlers(on);
+        std::atomic<bool> held{false}, go{false};
+        std::vector<std::string> seenAtHold;
+        issue::setBeforeRenameHookForTest([&] {
+            for (const auto& e : fs::directory_iterator(sub)) { seenAtHold.push_back(e.path().filename().string()); }
+            held = true;
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!go.load() && std::chrono::steady_clock::now() < until) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        });
+        (void)issue::fileIssueReportOffThread(Recovered::Viewport);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!held.load() && std::chrono::steady_clock::now() < until) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        CHECK(held.load());
+        // The sweep's own listing, at the moment the file is fully written and not yet renamed: nothing it would open.
+        CHECK(seenAtHold.size() == 1u);
+        for (const std::string& n : seenAtHold) { CHECK(!(n.rfind("issue-", 0) == 0 && n.size() > 4 && n.compare(n.size() - 4, 4, ".txt") == 0)); }
+        CHECK(issue::takeNewlyFiled() == 0u);   // and the cue to sweep has not been given yet
+        go = true;
+        CHECK(issue::waitForWritesForTest(3000));
+        issue::setBeforeRenameHookForTest(nullptr);
+        const std::vector<fs::path> files = issueFiles(sub);
+        CHECK(files.size() == 1u);
+        if (files.size() == 1u) {
+            const std::string text = readFile(files[0]);
+            CHECK(text.find("--- log (last ") != std::string::npos);                       // whole: the log block is the last thing written
+            ParsedReport pr;
+            CHECK(parseReportText(text, pr) && pr.kind == "issue");   // the uploader reads it as a report
+        }
+        std::size_t parts = 0;
+        for (const auto& e : fs::directory_iterator(sub)) { if (e.path().extension() == ".part") { ++parts; } }
+        CHECK(parts == 0u);                      // the temporary name is gone
+        CHECK(issue::takeNewlyFiled() == 1u);
+    }
+
+    // --- THE SHUTDOWN WAITS FOR A WRITER IN FLIGHT, A BOUNDED TIME (finding 3b) --------------------------------------------------------------
+    // The teardown itself raises issues (CatStop, CloseLeak, ReaderLeak): one raised then must be on disk when the process ends, complete.
+    {
+        issue::resetIssueReportsForTest();
+        const fs::path sub = dir / "flush";
+        fs::create_directories(sub, ec);
+        CrashHandlerConfig on;
+        on.crashDir = sub.string();
+        on.enabled = true;
+        on.minidump = false;
+        on.exitAfterReport = false;
+        installCrashHandlers(on);
+        // (a) a slow disk of 120 ms: the flush waits for it and the report is complete on disk when it returns
+        issue::setDiskHookForTest([] { std::this_thread::sleep_for(std::chrono::milliseconds(120)); });
+        (void)issue::fileIssueReportOffThread(Recovered::CatStop);
+        CHECK(issue::flushWritesAtShutdown());
+        {
+            std::vector<fs::path> files;
+            for (const auto& e : fs::directory_iterator(sub)) { files.push_back(e.path()); }
+            CHECK(files.size() == 1u);
+            if (files.size() == 1u) {
+                const std::string text = readFile(files[0]);
+                CHECK(text.find("\nreason: " + issue::issueReason(Recovered::CatStop) + "\n") != std::string::npos);
+                CHECK(text.find("--- log (last ") != std::string::npos);
+            }
+        }
+        // (b) a disk that takes 1.5 s: the flush gives up at the bound (250 ms), not at the disk
+        issue::resetIssueReportsForTest();
+        issue::setDiskHookForTest([] { std::this_thread::sleep_for(std::chrono::milliseconds(1500)); });
+        (void)issue::fileIssueReportOffThread(Recovered::CloseLeak);
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool all = issue::flushWritesAtShutdown();
+        const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("  flush with a 1.5 s disk: gave up after %.0f ms (all written: %s)\n", took, all ? "yes" : "no");
+        CHECK(!all);
+        CHECK(took >= 200.0 && took < 700.0);
+        // (c) one bound for the process: a second ask, with the write still out, does not wait another 250 ms
+        const auto t1 = std::chrono::steady_clock::now();
+        CHECK(!issue::flushWritesAtShutdown());
+        const double second = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+        CHECK(second < 100.0);
+        CHECK(issue::waitForWritesForTest(5000));   // the abandoned writer finished on its own, touching nothing destroyed
+        issue::setDiskHookForTest(nullptr);
+        // (d) Engine::shutdownDrain asks for the flush (the wiring: a source scan, as the budget test reads the teardown)
+        {
+            std::ifstream in(fs::path(CASCADE_SOURCE_DIR) / "src" / "engine" / "engine.cpp", std::ios::binary);
+            const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const std::size_t drain = src.find("void Engine::shutdownDrain(");
+            CHECK(drain != std::string::npos);
+            const std::size_t call = src.find("flushWritesAtShutdown()", drain == std::string::npos ? 0 : drain);
+            CHECK(call != std::string::npos && call - drain < 3000);
+        }
     }
 
     fs::remove_all(dir, ec);

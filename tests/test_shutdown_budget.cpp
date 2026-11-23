@@ -1142,6 +1142,11 @@ const KnownWait kKnownWaits[] = {
      "the cap on how much silence one silent read adds to the stall detector's tally. An arithmetic cap, not a wait"},
     {"src/source/soapy_source.hpp", "kRestartGiveBack", 1,
      "SoapySource::stop() and closeDevice() (lockForEscape): when the first kControlLockWait ran out AND a stall restart is in flight, the stop asks the restart to give the device lock back and waits up to kRestartGiveBack more. It adds to kControlLockWait on the GUI teardown thread, once, and only while a restart really is in flight. 3000 ms (two bounded restart steps; kControlLockWait + 3000 = 4.5 s stays inside the 5 s hang watchdog). 23500 -> 26500, and kShutdownThresholdMs 53000 -> 59000 with it"},
+    {"src/core/issue_report.hpp", "kShutdownFlushWait", 1,
+     "issue::flushWritesAtShutdown() - the bound on the detached issue-report writers still in flight when Engine::shutdownDrain() runs (review of fix/freezes, finding 3b). "
+     "The teardown itself raises issues (CatStop, CloseLeak, ReaderLeak) and each is filed by a writer thread; the flush waits for them, only while a write really is out, and "
+     "the bound is spent ONCE per process (a second ask - the engine's destructor - finds it spent). 250 ms, on the teardown thread. 26500 -> 26750, and kShutdownThresholdMs "
+     "59000 -> 59500 with it"},
     {"src/engine/engine.cpp", "kNetworkCancelWait", 0,
      "how long the control pass waits for a cancelled network open worker (rtl_tcp) to come back when a person picks another radio; the worker hears the cancel within ~50 ms. Reached only from the pick-a-radio command (Engine::cancelPendingNetworkOpen), never from the shutdown stretch"},
     {"src/core/transmitter.hpp", "kAudioPollWait", 0,
