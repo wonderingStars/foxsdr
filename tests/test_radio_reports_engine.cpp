@@ -302,6 +302,9 @@ struct AppWindowTestAccess {
     static void takeQueued(AppWindow& a, bool on) { passseam::on(th::engine(a), [&] { th::engine(a).rx().iqStartQueued_ = on; }); }
     static std::string sourceError(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).rx().sourceError_; }); }
     static void startReceiver(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startReceiver(); }); }
+    static double accSec(AppWindow& a) { double v = -1.0; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].accSec; }); return v; }
+    static double runningSecOf(AppWindow& a) { double v = -1.0; passseam::on(th::engine(a), [&] { v = (*th::engine(a).radioRun_)[0].runningSec; }); return v; }
+    static void setRunningSec(AppWindow& a, double s) { passseam::on(th::engine(a), [&] { (*th::engine(a).radioRun_)[0].runningSec = s; }); }
     static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) { passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 100); }); }
 };
 
@@ -725,6 +728,66 @@ static __declspec(noinline) void phantomFoundTest() {
     CHECK(other == 1);   // a radio only SoapySDR lists is still said
 }
 
+// (its own function: main() is at the stack limit, see the 0.99.112 review fixes)
+#if defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static void journalOfAnOpenedRadioTest(std::vector<json>& everything) {
+    auto keep = [&everything](const std::vector<json>& m) { everything.insert(everything.end(), m.begin(), m.end()); };
+    {
+        std::printf("  an opened radio: radio_found, radio_open, radio_settings, a minute's radio_stream, radio_close\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("journal");
+        rig.start();
+        Access::scanBoth(app);   // radio_found for what the scan listed
+        Access::setRunningSec(app, 40.0);   // what a previous radio in this slot ran for: not this one's (review S4)
+        Access::restore(app, savedRadio());
+        CHECK(Access::deviceOpen(app));
+        Access::pass(app);
+        CHECK(Access::runningSecOf(app) == 0.0);
+        // FAULT E (field data 2026-11-23): a minute in which the receiver was STOPPED (nothing read, the pipeline not running) is not a silent stream
+        // and is not said; the minute that follows is its own window
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 0, 0);
+        // ...but a minute in which the receiver RAN for most of it and read nothing is a silent stream and IS counted (a user who stopped it
+        // inside the minute does not hide it); a stopped one adds nothing to the window
+        Access::minute(app, 0, 0);
+        CHECK(Access::accSec(app) == 0.0);
+        Access::setRunningSec(app, 50.0);
+        Access::minute(app, 0, 0);
+        CHECK(Access::accSec(app) >= 1.0);
+        Access::ageOpenRadio(app, 60.0);
+        Access::minute(app, 144000000, 0);   // a minute's samples at 2.4 MS/s
+        Access::selectGenerator(app);
+        Access::pass(app);
+        const std::vector<json> q = queued(rig.qdir());
+        const std::vector<json> found = ofKind(q, "radio_found");
+        CHECK(found.size() >= 1);
+        if (!found.empty()) {
+            CHECK(found[0]["body"]["binding"] == "usable" && found[0]["body"]["source"] == "scan");
+            CHECK(found[0]["radioKey"] == "generic-rtl2832u:00000001");
+        }
+        for (const json& f : found) { CHECK(f["body"]["model"] != "other" || true); }   // (the Pluto and rtl_tcp ADDRESS rows are not radios that were found)
+        for (const json& f : found) { CHECK(f["body"]["driver"] != "pluto" && f["body"]["driver"] != "rtltcp"); }
+        const std::vector<json> streams = ofKind(q, "radio_stream");
+        CHECK(streams.size() == 1);
+        if (!streams.empty()) {
+            // 144 million samples over the minute's window (the window is the aged 60 s plus however long this run took, whole seconds):
+            // samples a second times the window is the figure that was handed in, to the rounding of one second
+            const long long perSec = streams[0]["body"]["samplesPerSec"].get<long long>();
+            const long long window = streams[0]["body"]["windowSec"].get<long long>();
+            CHECK(window >= 60 && window <= 120);
+            CHECK(perSec * window >= 143000000LL && perSec * window <= 145000000LL);
+            CHECK(streams[0]["body"]["drops"] == 0);
+        }
+        const std::vector<json> closes = ofKind(q, "radio_close");
+        CHECK(closes.size() == 1);
+        if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "user" && closes[0]["radioKey"] == "generic-rtl2832u:00000001"); }
+        keep(q);
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc >= 3 && std::string(argv[1]) == "--holder") { return holderMain(argv[2]); }
     std::printf("test_radio_reports_engine\n");
@@ -995,45 +1058,7 @@ int main(int argc, char** argv) {
     phantomFoundTest();
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
-    {
-        std::printf("  an opened radio: radio_found, radio_open, radio_settings, a minute's radio_stream, radio_close\n");
-        resetFake();
-        th::TestWindow app;
-        Rig rig("journal");
-        rig.start();
-        Access::scanBoth(app);   // radio_found for what the scan listed
-        Access::restore(app, savedRadio());
-        CHECK(Access::deviceOpen(app));
-        Access::pass(app);
-        Access::ageOpenRadio(app, 60.0);
-        Access::minute(app, 144000000, 0);   // a minute's samples at 2.4 MS/s
-        Access::selectGenerator(app);
-        Access::pass(app);
-        const std::vector<json> q = queued(rig.qdir());
-        const std::vector<json> found = ofKind(q, "radio_found");
-        CHECK(found.size() >= 1);
-        if (!found.empty()) {
-            CHECK(found[0]["body"]["binding"] == "usable" && found[0]["body"]["source"] == "scan");
-            CHECK(found[0]["radioKey"] == "generic-rtl2832u:00000001");
-        }
-        for (const json& f : found) { CHECK(f["body"]["model"] != "other" || true); }   // (the Pluto and rtl_tcp ADDRESS rows are not radios that were found)
-        for (const json& f : found) { CHECK(f["body"]["driver"] != "pluto" && f["body"]["driver"] != "rtltcp"); }
-        const std::vector<json> streams = ofKind(q, "radio_stream");
-        CHECK(streams.size() == 1);
-        if (!streams.empty()) {
-            // 144 million samples over the minute's window (the window is the aged 60 s plus however long this run took, whole seconds):
-            // samples a second times the window is the figure that was handed in, to the rounding of one second
-            const long long perSec = streams[0]["body"]["samplesPerSec"].get<long long>();
-            const long long window = streams[0]["body"]["windowSec"].get<long long>();
-            CHECK(window >= 60 && window <= 120);
-            CHECK(perSec * window >= 143000000LL && perSec * window <= 145000000LL);
-            CHECK(streams[0]["body"]["drops"] == 0);
-        }
-        const std::vector<json> closes = ofKind(q, "radio_close");
-        CHECK(closes.size() == 1);
-        if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "user" && closes[0]["radioKey"] == "generic-rtl2832u:00000001"); }
-        keep(q);
-    }
+    journalOfAnOpenedRadioTest(everything);
 
     // --- OPENED, NO SAMPLES (L3) -----------------------------------------------------------------------------------------------------------------------
     {

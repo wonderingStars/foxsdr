@@ -173,6 +173,7 @@ void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr:
     j.args = args;
     j.openedAtS = clockS();
     j.lastMinuteS = j.openedAtS;
+    (*radioRun_)[slot] = RadioRun{};   // the previous radio's running seconds are not this one's (review of 3813659b, S4)
     j.readAtOpen = rx().pipeline_.sourceSamplesRead();
     radioOpenedThisSession_ = true;
     rr::registerSource(rx().device_, rid);   // the drivers' own events (a refused setting, a radio that went away) find their radio through this
@@ -265,6 +266,19 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     // A FAULTED RADIO IS OVER (field data 2026-11-19: 38 windows after a close): its slot stays open until the pass sees it leave, but no window is said for it
     if (!j.open || j.faulted) { return; }
     const double now = clockS();
+    // FAULT E (field data 2026-11-23: one RSP1B "open" with 61 zero-sample minutes of 69, an RSPduo 31 of 105): a radio
+    // that is open while the receiver is STOPPED is not delivering anything, by the user's own choice, and the
+    // source thread's 5 s stall watchdog (which runs only on reads) rightly says nothing. Those minutes were counted
+    // as silent streams. A stopped receiver says no stream window; the clock moves on so the next running window is its own.
+    // (review of 885ebd7e: "running" is the seconds the pass saw the pipeline running in this minute, not the state at the close, so a silent
+    // stream the user stopped inside the minute is still said)
+    RadioRun& run = (*radioRun_)[scopedSlot()];
+    const double ranSec = run.runningSec;
+    run.runningSec = 0.0;
+    if (samplesRead == 0 && ranSec < 0.5 * std::max(1.0, now - j.lastMinuteS)) {
+        j.lastMinuteS = now;
+        return;
+    }
     const double dt = std::max(1.0, now - j.lastMinuteS);
     j.lastMinuteS = now;
     j.accRead += samplesRead;
@@ -436,11 +450,18 @@ void Engine::radioReportsPass() {
             j.args = rx().deviceArgs_;
             j.openedAtS = now;
             j.lastMinuteS = now;
+            (*radioRun_)[s] = RadioRun{};
             j.readAtOpen = rx().pipeline_.sourceSamplesRead();
             radioOpenedThisSession_ = true;
             rr::registerSource(rx().device_, rid);
         }
         if (hw && j.open) {
+            {
+                RadioRun& run = (*radioRun_)[scopedSlot()];
+                const double sincePass = run.lastPassS > 0.0 ? std::min(now - run.lastPassS, 5.0) : 0.0;
+                run.lastPassS = now;
+                if (rx().pipeline_.running()) { run.runningSec += std::max(0.0, sincePass); }
+            }
             if (!j.faulted && rx().pipeline_.faulted()) {
                 j.faulted = true;
                 j.faultReason = rx().pipeline_.faultMessage();
