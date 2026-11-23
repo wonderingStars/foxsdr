@@ -27,6 +27,10 @@ namespace cascade::core {
 namespace {
 
 constexpr std::size_t kMachineLineBudget = 172;   // DiagLog::kLineBytes (192) - NUL - the 18-character stamp - one spare
+std::size_t g_testBudget = 0;                      // test seam (setMachineLineBudgetForTest): 0 = kMachineLineBudget
+bool g_testSampleOn = false;                       // test seam (setMachineSampleForTest): a made-up clock, memory load and commit ratio
+std::string g_testClock;
+int g_testLoad = 0, g_testCommitPct = 0;
 std::atomic<int> g_display{-1};
 std::string g_lastLogged;      // the pass thread's (logMachineStateIfChanged)
 std::string g_lastClockKey;    // the clock and the memory load as last said (the second line); "" = not said yet
@@ -58,6 +62,7 @@ const char* windowWord() {
 // (ProcessorInformation) from powrprof.dll, resolved at run time (no new import), read-only. "now" is the highest current clock of any logical
 // processor (what the thread could be given), "max" the highest maximum. Writes "N/M" or "unknown"; Windows only.
 std::string clockText() {
+    if (g_testSampleOn) { return g_testClock; }
     char out[96];
     const std::size_t cap = sizeof(out);
     std::snprintf(out, cap, "unknown");
@@ -67,10 +72,11 @@ std::string clockText() {
         ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState;
     };
     constexpr int kProcessorInformation = 11;   // POWER_INFORMATION_LEVEL::ProcessorInformation
+    // LOADED ONCE AND KEPT for the life of the process (a function-local static: thread-safe, never freed): one load, not one load and free per call.
     // From the Windows system folder ONLY (never the application's folder or the search path): a DLL planted beside the program must not be loaded.
-    const HMODULE lib = ::LoadLibraryExW(L"powrprof.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    static const HMODULE lib = ::LoadLibraryExW(L"powrprof.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (lib == nullptr) { return out; }
-    const auto fn = reinterpret_cast<CallNtPowerInformationFn>(reinterpret_cast<void*>(::GetProcAddress(lib, "CallNtPowerInformation")));
+    static const auto fn = reinterpret_cast<CallNtPowerInformationFn>(reinterpret_cast<void*>(::GetProcAddress(lib, "CallNtPowerInformation")));
     const DWORD active = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
     if (fn != nullptr && active != 0 && active <= 1024) {
         std::vector<ProcessorPowerInformation> info(active);
@@ -83,26 +89,47 @@ std::string clockText() {
             if (now != 0 && max != 0) { std::snprintf(out, cap, "%lu/%lu", now, max); }
         }
     }
-    ::FreeLibrary(lib);
 #endif
     return out;
 }
 
 // THE MEMORY (2026-11-23, a field session whose whole process was barely being run): the system's memory load in percent, the physical memory still
 // available in MB, and the commit charge against the commit limit in MB - GlobalMemoryStatusEx, read-only. "unknown" for each on a failed query.
-std::string memoryWords() {
-    char out[96];
-    std::snprintf(out, sizeof(out), "mem_load=unknown mem_avail_mb=unknown commit_mb=unknown");
+struct MemNow {
+    bool ok = false;
+    unsigned long load = 0;
+    unsigned long long availMb = 0, usedMb = 0, limitMb = 0;
+};
+
+MemNow memoryNow() {
+    MemNow m;
+    if (g_testSampleOn) {
+        m.ok = true;
+        m.load = static_cast<unsigned long>(g_testLoad);
+        m.availMb = 1000;
+        m.limitMb = 1000;
+        m.usedMb = static_cast<unsigned long long>(g_testCommitPct) * 10ull;
+        return m;
+    }
 #if defined(_WIN32)
     MEMORYSTATUSEX ms{};
     ms.dwLength = sizeof(ms);
     if (::GlobalMemoryStatusEx(&ms) != 0) {
         const unsigned long long mb = 1024ull * 1024ull;
-        const unsigned long long used = ms.ullTotalPageFile >= ms.ullAvailPageFile ? (ms.ullTotalPageFile - ms.ullAvailPageFile) / mb : 0ull;
-        std::snprintf(out, sizeof(out), "mem_load=%lu mem_avail_mb=%llu commit_mb=%llu/%llu", static_cast<unsigned long>(ms.dwMemoryLoad),
-                      static_cast<unsigned long long>(ms.ullAvailPhys / mb), used, static_cast<unsigned long long>(ms.ullTotalPageFile / mb));
+        m.ok = true;
+        m.load = static_cast<unsigned long>(ms.dwMemoryLoad);
+        m.availMb = ms.ullAvailPhys / mb;
+        m.usedMb = ms.ullTotalPageFile >= ms.ullAvailPageFile ? (ms.ullTotalPageFile - ms.ullAvailPageFile) / mb : 0ull;
+        m.limitMb = ms.ullTotalPageFile / mb;
     }
 #endif
+    return m;
+}
+
+std::string memoryWords(const MemNow& m) {
+    char out[96];
+    if (!m.ok) { return "mem_load=unknown mem_avail_mb=unknown commit_mb=unknown"; }
+    std::snprintf(out, sizeof(out), "mem_load=%lu mem_avail_mb=%llu commit_mb=%llu/%llu", m.load, m.availMb, m.usedMb, m.limitMb);
     return out;
 }
 
@@ -143,7 +170,12 @@ int systemMemoryLoadPercent() {
 
 void noteDisplayState(int state) { g_display.store(state, std::memory_order_relaxed); }
 
-std::string machineStateText(const std::string& dspPrio, const std::string& srcPrio) {
+namespace {
+std::size_t lineBudget() { return g_testBudget != 0 ? g_testBudget : kMachineLineBudget; }
+}  // namespace
+
+// The text with the clock and memory words the caller already read (logMachineStateIfChanged reads them once per call and uses them three times).
+static std::string machineStateTextWith(const std::string& dspPrio, const std::string& srcPrio, const std::string& clock, const std::string& memWords) {
     const char* power = "unknown";
     const char* saver = "unknown";
     char throttle[48] = "unknown";
@@ -195,39 +227,56 @@ std::string machineStateText(const std::string& dspPrio, const std::string& srcP
     // upload scrub): kMachineLineBudget characters, the same 172 the DSP minute's lines are held to; logMachineStateIfChanged then says it in a
     // line of its own.
     std::string text(line);
-    const std::string clockWord = std::string(" clock=") + clockText() + " " + memoryWords();
-    if (text.size() + clockWord.size() <= kMachineLineBudget) { text += clockWord; }
+    const std::string clockWord = std::string(" clock=") + clock + " " + memWords;
+    if (text.size() + clockWord.size() <= lineBudget()) { text += clockWord; }
     return text;
 }
 
-// WHAT "CHANGED" MEANS FOR THE CLOCK AND MEMORY WORDS: the processor clock pair as Windows reports it (NOW/MAX) or the system memory load in steps of
-// ten percent. The available-memory and commit figures move every time they are read and would make every call "changed", so they are not part of it.
-std::string clockMemoryKey() {
-    const int load = systemMemoryLoadPercent();
-    return clockText() + "|" + std::to_string(load < 0 ? -1 : load / 10);
+std::string machineStateText(const std::string& dspPrio, const std::string& srcPrio) {
+    return machineStateTextWith(dspPrio, srcPrio, clockText(), memoryWords(memoryNow()));
+}
+
+// WHAT "CHANGED" MEANS FOR THE CLOCK AND MEMORY WORDS: the processor clock pair as Windows reports it (NOW/MAX), the system memory load in steps of
+// ten percent, and the commit charge against the commit limit in steps of ten percent. The available-memory and commit-megabyte figures move every time
+// they are read and would make every call "changed", so they are not part of it.
+static std::string clockMemoryKey(const std::string& clock, const MemNow& m) {
+    const int load = m.ok ? static_cast<int>(m.load) / 10 : -1;
+    const int commit = (m.ok && m.limitMb != 0) ? static_cast<int>(m.usedMb * 100ull / m.limitMb) / 10 : -1;
+    return clock + "|" + std::to_string(load) + "|" + std::to_string(commit);
 }
 
 bool logMachineStateIfChanged(const std::string& dspPrio, const std::string& srcPrio, bool force) {
-    const std::string text = machineStateText(dspPrio, srcPrio);
+    // The clock and the memory are read ONCE per call and used for the line, the second line and the change key.
+    const std::string clock = clockText();
+    const MemNow mem = memoryNow();
+    const std::string memWords = memoryWords(mem);
+    const std::string text = machineStateTextWith(dspPrio, srcPrio, clock, memWords);
     const bool clockInLine = text.find(" clock=") != std::string::npos;
-    const std::string clockLine = std::string("machine:") + " clock=" + clockText() + " " + memoryWords();
+    const std::string clockLine = std::string("machine:") + " clock=" + clock + " " + memWords;
     // CHANGE IS JUDGED ON THE STEADY WORDS ONLY for the first line: the clock and the memory figures move every time they are read.
     const std::size_t volatileAt = text.find(" clock=");
     const std::string key = volatileAt == std::string::npos ? text : text.substr(0, volatileAt);
+    // THE CLOCK AND THE MEMORY are said when a value in their key CHANGED since it was last said (and at the first call, nothing said yet), not forced
+    // into every loss minute: the diagnostics ring holds 256 lines, and a loss minute already writes ten.
+    const std::string clockKey = clockMemoryKey(clock, mem);
+    const bool steadyChanged = force || key != g_lastLogged;
+    const bool clockChanged = clockKey != g_lastClockKey;
+    if (clockInLine) {
+        // the clock words fit in the line: one line carries both, said when either part changed
+        if (!steadyChanged && !clockChanged) { return false; }
+        g_lastLogged = key;
+        g_lastClockKey = clockKey;
+        diagLogf("%s", text.c_str());
+        return true;
+    }
     bool said = false;
-    if (force || key != g_lastLogged) {
+    if (steadyChanged) {
         g_lastLogged = key;
         diagLogf("%s", text.c_str());
         said = true;
-        if (clockInLine) {
-            g_lastClockKey = clockMemoryKey();   // (said inline with the steady words)
-            return true;
-        }
     }
-    // THE SECOND LINE, the clock and the memory, is said at the first call (nothing said yet) and after that only when a value in it CHANGED since it was
-    // last said (clockMemoryKey), not forced into every loss minute: the diagnostics ring holds 256 lines, and a loss minute already writes ten.
-    const std::string clockKey = clockMemoryKey();
-    if (!clockInLine && clockKey != g_lastClockKey) {
+    // THE SECOND LINE, the clock and the memory
+    if (clockChanged) {
         g_lastClockKey = clockKey;
         diagLogf("%s", clockLine.c_str());
         said = true;
@@ -239,5 +288,14 @@ void resetMachineStateLogForTest() {
     g_lastLogged.clear();
     g_lastClockKey.clear();
 }
+
+void setMachineSampleForTest(const char* clock, int memLoadPercent, int commitPercent) {
+    g_testSampleOn = clock != nullptr;
+    g_testClock = clock != nullptr ? clock : "";
+    g_testLoad = memLoadPercent;
+    g_testCommitPct = commitPercent;
+}
+
+void setMachineLineBudgetForTest(std::size_t chars) { g_testBudget = chars; }
 
 }  // namespace cascade::core

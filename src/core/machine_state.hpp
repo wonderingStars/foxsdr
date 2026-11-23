@@ -40,5 +40,10 @@ bool logMachineStateIfChanged(const std::string& dspPrio, const std::string& src
 
 // TEST SEAM: forget the last logged text.
 void resetMachineStateLogForTest();
+// TEST SEAMS: replace what the machine says. setMachineSampleForTest(clock, memLoadPercent, commitPercent) makes the processor clock text, the system memory
+// load and the commit charge (percent of the limit) made-up values; clock == nullptr goes back to the real machine. setMachineLineBudgetForTest(n) sets the
+// character budget the clock words must fit in to be said inline (0 = the real one).
+void setMachineSampleForTest(const char* clock, int memLoadPercent, int commitPercent);
+void setMachineLineBudgetForTest(std::size_t chars);
 
 }  // namespace cascade::core

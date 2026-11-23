@@ -298,6 +298,40 @@ int main() {
         noteDisplayState(-1);
     }
 
+    // --- 4a. WHAT MAKES THE CLOCK AND MEMORY WORDS "CHANGED" (made-up clock, memory load and commit ratio through the test seam) -------------------
+    {
+        // the second line (the clock words do not fit the line: the real budget)
+        resetMachineStateLogForTest();
+        setMachineSampleForTest("1000/3000", 25, 30);
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));    // first call: said
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));   // nothing changed
+        setMachineSampleForTest("1000/3000", 28, 33);                // inside the same ten-point steps: not a change
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest("1000/3000", 28, 45);                // the commit charge reached the next ten-point step, the load did not: a change
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest("1000/3000", 38, 45);                // the load moved a step: a change
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest("2000/3000", 38, 45);                // the clock moved: a change
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        // the clock words fit the line (a large budget): the one line is said again when the clock or the memory changed, and not otherwise
+        setMachineLineBudgetForTest(100000);
+        resetMachineStateLogForTest();
+        setMachineSampleForTest("1000/3000", 25, 30);
+        CHECK(machineStateText("mmcss", "mmcss").find(" clock=1000/3000 ") != std::string::npos);
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest("2000/3000", 25, 30);                // the clock changed with the steady words unchanged: said
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest("2000/3000", 25, 55);                // the commit step changed: said
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineLineBudgetForTest(0);
+        setMachineSampleForTest(nullptr, 0, 0);
+        resetMachineStateLogForTest();
+    }
+
     // --- 4b. A FAILED MMCSS REGISTRATION IS SAID (2026-11-23) ------------------------------------------------------------------------
     // The outcome of a thread that fell back to above-normal does not carry the reason, so a refused registration was silent. The scope now
     // keeps the reason (a fixed phrase and the Windows error number) for the caller's one warning line. The test seam makes the refusal.
