@@ -42,11 +42,15 @@ namespace cascade::gui {
 // every fault, "Reconnect it and pick the source again, or switch to the
 // signal generator." That is right for an unplugged dongle and WRONG for a
 // driver that has already said picking it again cannot work until FoxSDR is
-// restarted - the SDRplay lost-session sentences all end that way. False means
-// the generic line must not be shown: the driver's sentence is the whole
-// instruction.
+// restarted - the SDRplay lost-session sentences all end that way - OR to
+// restart the SDRplay API service, which a replug does not cure either (the
+// stall sentence ends "... then restart the SDRplay API service and FoxSDR").
+// False means the generic line must not be shown: the driver's sentence is the
+// whole instruction. src/slint/signal_logic.cpp applies the same rule through
+// this function.
 inline bool reconnectAdviceApplies(const std::string& faultMessage) {
-    return faultMessage.find("restart FoxSDR") == std::string::npos;
+    return faultMessage.find("restart FoxSDR") == std::string::npos &&
+           faultMessage.find("restart the SDRplay API service") == std::string::npos;
 }
 
 // --- 2. what a failed switch leaves the config naming ------------------------

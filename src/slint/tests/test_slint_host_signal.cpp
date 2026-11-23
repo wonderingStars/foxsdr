@@ -548,6 +548,15 @@ int main() {
         CHECK(m.lamp_lit && m.lamp_tone == Tone::Err);
         r.t.facts["fact.status.deviceFault"] = "The SDRplay session was lost, then restart FoxSDR.";
         CHECK(readSource(r.t, r.s, r.o).stopped_line == "Device stopped: The SDRplay session was lost, then restart FoxSDR.");   // the driver has said what to do
+        // The SDRplay stall sentence (src/source/sdrplay_source.cpp sdrPlayStreamStalledSentence(), its text copied here: this target does not link the driver) and
+        // the 3 s service sentence say "restart the SDRplay API service": a replug does not cure that, so no generic advice is appended under either.
+        {
+            const std::string stall = "the SDRplay service stopped delivering (nothing for 5 s) - press START; if that fails pick the radio again; then restart the SDRplay API service and FoxSDR";
+            r.t.facts["fact.status.deviceFault"] = "stream: " + stall;
+            CHECK(readSource(r.t, r.s, r.o).stopped_line == "Device stopped: stream: " + stall);
+            r.t.facts["fact.status.deviceFault"] = "the SDRplay service did not answer within 3 s - restart the SDRplay API service";
+            CHECK(readSource(r.t, r.s, r.o).stopped_line == "Device stopped: the SDRplay service did not answer within 3 s - restart the SDRplay API service");
+        }
         r.t.facts["fact.status.deviceFault"] = "source thread: no samples arrived for 3 seconds: the sender may have stopped";   // the thread's name is the developer's word
         CHECK(readSource(r.t, r.s, r.o).stopped_line.rfind("Device stopped: No samples arrived for 3 seconds: the sender may have stopped\nReconnect it", 0) == 0);
         Rig ok = rtlOpen();

@@ -37,6 +37,8 @@ void testTheGenericAdviceNeverContradictsTheDriver() {
     CHECK(!reconnectAdviceApplies(
         "retune: the SDRplay service stopped answering - restart the SDRplay API service, then "
         "restart FoxSDR"));
+    // The 3 s stall sentence says to restart the SDRplay API service (no "restart FoxSDR"): a replug does not cure that either.
+    CHECK(!reconnectAdviceApplies("the SDRplay service did not answer within 3 s - restart the SDRplay API service"));
     // An unplugged radio is exactly what the generic advice is for.
     CHECK(reconnectAdviceApplies("device removed: the RSP was unplugged or the service released it"));
     CHECK(reconnectAdviceApplies("source thread: bulk read failed (Windows error 31)"));

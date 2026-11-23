@@ -18,6 +18,7 @@
 #include "core/i18n.hpp"
 #include "core/iq_file_box.hpp"
 #include "core/ppm_correction.hpp"
+#include "core/source_fallback.hpp"   // reconnectAdviceApplies: the one rule for when the generic advice is shown
 #include "core/utf8_text.hpp"
 #include "gui/section_reads.hpp"
 #include "gui/tuning_reads.hpp"
@@ -928,8 +929,9 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
             if (!fault.empty() && fault[0] >= 'a' && fault[0] <= 'z') { fault[0] = static_cast<char>(fault[0] - 'a' + 'A'); }
         }
         m.stopped_line = cc::formatText(tr("Device stopped: %s"), fault.c_str());
-        // Not under a driver that has already said what to do (the SDRplay lost-session sentences end "then restart FoxSDR").
-        if (fault.find("restart FoxSDR") == std::string::npos) {
+        // Not under a driver that has already said what to do (the SDRplay sentences that say "restart FoxSDR" or "restart the SDRplay API service"):
+        // the same rule as the classic window's, core/source_fallback.hpp.
+        if (cascade::gui::reconnectAdviceApplies(fault)) {
             m.stopped_line += "\n";
             m.stopped_line += tr("Reconnect it and pick the source again, or switch to the signal generator.");
         }
