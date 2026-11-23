@@ -2,7 +2,7 @@
 //
 // The field reports "ringdrop" (samples dropped between the source thread and the DSP thread) and "audiolead" (the audio buffer deepened
 // after starved callbacks) are the two largest groups on the crash page, and neither a code diagnosis nor a bench run could name a
-// cause. This test pins the pieces that make the NEXT report name one (docs/radio-reports.md, "The DSP minute"):
+// cause. This test pins the pieces that make the NEXT report name one (docs/DIAGNOSTICS.md, "The DSP minute"):
 //
 //   1. the shared event mask and the three-minute override (core/minute_events.hpp), by themselves;
 //   2. samples discarded while the DSP thread is deliberately ABSENT (a thread start; a live sample-rate change joins and respawns it)

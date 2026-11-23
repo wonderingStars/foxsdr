@@ -330,7 +330,7 @@ public:
     // (the loader's own time before that is not counted); 0 until the thread has drained once. Sticky: a later stop and start do not clear it.
     bool dspHasDrained() const { return firstDrainProcessMs_.load(std::memory_order_acquire) != 0; }
     std::uint64_t processMsAtFirstDrain() const { return firstDrainProcessMs_.load(std::memory_order_acquire); }
-    // WHAT THE DSP THREAD DID WITH THE MINUTE (2026-11-23, the ringdrop and audiolead probe; docs/radio-reports.md "The DSP minute"). A block is
+    // WHAT THE DSP THREAD DID WITH THE MINUTE (2026-11-23, the ringdrop and audiolead probe; docs/DIAGNOSTICS.md "The DSP minute"). A block is
     // 1024 samples: 128 microseconds of an 8 MS/s stream, so "the longest block was 1 ms" says nothing about whether the thread kept up - the SUM
     // does. Cumulative and never reset (measured by difference, like the drop count), except the two maxima, which are windows: take*() returns
     // the mark and starts a new one. Plain integers and relaxed atomics written by the thread that owns them: nothing here allocates or locks.

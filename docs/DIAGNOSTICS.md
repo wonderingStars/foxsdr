@@ -868,7 +868,7 @@ The sites that are counted:
 | `reopen` | `AppWindow::reopenAfterDriverFault`, a SoapySDR driver fault answered by reopening the radio | the window's thread |
 | `srcthread` | `Pipeline::quiesceSourceThreadLocked`'s abandonment, read as `abandonedSourceThreads()` | the poll |
 | `vendorcall` | `SoapySource::driverCallsAbandoned()`, a vendor call let go after `kVendorCallWait` | the poll |
-| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full - counted by the poll; the issue report is filed by `Engine::closeDspMinute` (master's `AppWindow::closeDspMinute`) only for a minute that lost at least 0.05% of its samples (`ringDropWorthAReport`, 0.99.102) | the poll (the count), the engine's pass (the report) |
+| `ringdrop` | `Pipeline::ringDroppedSamples()`, the source ring full - counted by the poll; the issue report is filed by `Engine::closeDspMinute` (master's `AppWindow::closeDspMinute`) only for a minute that lost at least 0.05% of its samples (`ringDropWorthAReport`, 0.99.102) and held no deliberate event (a rate change, a source switch, a plugin reload or wake) unless it is the third loss minute in a row; samples lost while the DSP thread was deliberately absent are not counted (2026-11-23, *The DSP minute and the audio minute*) | the poll (the count), the engine's pass (the report) |
 | `dspexc` | `Pipeline::dspThreadExceptions()`, the DSP thread's catch blocks | the poll |
 | `cfgsave` | `AppWindow::pollConfigWriter`, the settings write that failed | the window's thread |
 | `enumchild` | `soapy_enum_proc.cpp`, a scan child that died and was contained | the scan's worker |
@@ -2482,6 +2482,111 @@ holding the DSP thread. Neither line in a minute with crackle points past the
 receive path, to the audio side (`audio: N starved callbacks`) or the signal.
 `tests/test_dsp_drop_minute_app.cpp` stalls the DSP thread through
 `Pipeline::holdLockForTest` and pins the line, its count and its share.
+
+### The DSP minute and the audio minute: events, accounting and the machine (2026-11-23)
+
+`ringdrop` and `audiolead` are the two largest groups on the crash page, and neither a read of the code nor a
+bench run on a fast PC (0 of 10) could name a cause. This is what the code now measures so that the next report
+does, and what it no longer counts as a fault. **No threshold changed**: the ringdrop floor is still 0.05% of the
+minute's input, `audiolead` still needs 3 starved callbacks in a minute, the lead still steps 120, 240, 480, 960 ms.
+
+**The order.** Both minutes close in the same pass. The DSP minute now closes first (`Engine::pumpAudio`, and the
+added radios' pass in `engine_radios.cpp`), so a cause they share is described once, in order, before either report
+is filed. A report keeps the log's tail as it is when it is written, and `closeDspMinute` used to file the `ringdrop`
+report BEFORE it logged the `dsp: ring high water ...` line that describes the minute: 3 of 262 field reports had that
+line. It files last now.
+
+**The first minute starts with the stream.** The minute clocks used to start at the engine's construction, so a
+session's first minute held the plugin scan, the saved radio's open and the window's creation. The DSP thread now
+stamps the first time it reads the ring; the pass notices it, says once
+
+    dsp: first drain 812 ms after the program started; digest minutes start in 10 s
+
+and both digests take their marks and start their first minute **10 s** later (`Engine::digestClockStarted`,
+`kDigestGraceS`). Nothing closes before. The time is from the program's static initialisation (the loader's own time
+before that is not counted).
+
+**One event mask for both digests** (`core/minute_events.hpp`). A source switch (`Pipeline::setSource`), an accepted
+live sample-rate change (`setInputRateHz`: the DSP thread is joined and respawned while the source keeps writing), a
+plugin reload, wake or stop (`Engine::pluginScans_`, `pluginLifeEvents_`) and an audio output open (`AudioOut::opens()`)
+are counted where they are performed; each digest keeps its own mark, so each minute has its own mask. A minute that
+held one is **logged in full with the event named and not filed as a fault**:
+
+    dsp: ring drops in a minute with deliberate events (rate) - logged, not filed as a fault
+    audio: buffer kept at 240 ms - the starved callbacks came in a minute with deliberate events (plugins)
+
+(the audio minute keeps its older sentence, `... came in a minute that reloaded plugins`, for a rescan). The audio
+minute ignores the output-open bit for skipping because it already subtracts one starved callback per open, and per
+stop, from the count. **The override: the third consecutive loss minute is judged whatever it held**, in both
+digests, so a machine that is really behind is not hidden by a busy spell.
+
+**Samples discarded while the DSP thread is deliberately absent are not ringdrop.** A thread start has a delay with
+the source already writing, and a live rate change joins and respawns the DSP thread. What the ring cannot hold in
+those windows is counted in `Pipeline::ringDroppedAbsent()` and not in `ringDroppedSamples()` (which alone feeds the
+floor), and is said in the minute's line as `absent_discards=`.
+
+**The two lines of a loss minute.** Whenever a minute dropped anything, discarded anything as absent, or the audio
+minute beside it starved 3 or more callbacks, `closeDspMinute` writes (before it files anything), in fixed key=value
+form and split in two to stay inside `DiagLog::kLineBytes` (a `[radio N]` tag ends each when there are several radios;
+every figure is capped at ten digits; widest form 173 characters):
+
+    dsp minute: dropped=1048576 pct=66.67 busy_ms=2967 cpu_ms=15 longest_gap_ms=2962 gap_phase=audio-lock blocks=67 ring_high_pct=100
+    dsp minute: src_longest_gap_ms=265 gen_resyncs=0 gen_skipped_ms=0 absent_discards=0 events=none
+
+`events=` is `rate|switch|plugins|audio` in that order, or `none`. The figures, per minute:
+
+| key | what it is |
+|---|---|
+| `dropped`, `pct` | samples the ring could not hold, and that as a share of what the source read (`unknown` with nothing read) |
+| `busy_ms` | the DSP thread's wall time inside blocks (the `noteDspBlock` span: includes a wait for `audioMutex_`, every plugin call, the audio write) |
+| `cpu_ms` | the DSP thread's OWN processor time (`GetThreadTimes`; `CLOCK_THREAD_CPUTIME_ID` on Linux and Android; `unknown` elsewhere), sampled every 256 blocks and when the thread ends |
+| `longest_gap_ms`, `gap_phase` | the longest time between two ring reads, and the heartbeat word the thread spent the most of it in: `ring` (the idle sleep: up to 15.6 ms on a process that has not asked for a finer timer, and says nothing is wrong), `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio`, `plugin-chain`, `sink` |
+| `blocks` | blocks done (a block is 1024 samples: 128 microseconds of an 8 MS/s stream, which is why "longest block 1 ms" settles nothing) |
+| `ring_high_pct` | the ring's high-water mark as a share of its capacity |
+| `src_longest_gap_ms` | the source thread's longest time between two ring writes |
+| `gen_resyncs`, `gen_skipped_ms` | the free-running generator's "resync after a long stall" events (it fell more than 250 ms behind its own pacing) and the time they skipped |
+| `absent_discards` | the samples counted as absent (above) |
+
+Reading it: `busy_ms` near 60000 with `cpu_ms` near 60000 is a chain too heavy for the machine; `busy_ms` near 60000 with
+`cpu_ms` far below is a thread that was descheduled or waited on a lock (`gap_phase` says which step); `busy_ms` far
+below 60000 beside drops is a thread that was absent or asleep between blocks (`gap_phase=ring`: the idle sleep, a
+timer problem; `sink` after the test seam's per-block delay). All of it is plain integers and relaxed atomics written
+by the thread that owns them: nothing allocates or locks on the DSP thread's hot path
+(`tests/test_engine_publish_alloc.cpp` still pins the engine's).
+
+**The machine, once at start and again when it changed.** The first drain also writes, and each loss minute writes
+again only when it differs from what was last said (`core/machine_state.hpp`; read-only queries, nothing is changed):
+
+    machine: power=ac saver=off throttle=ctl:0,state:0 timer_100ns=10000 cpus=32 affinity=32 window=visible display=on prio=dsp:mmcss,src:mmcss
+
+`power`/`saver` are `GetSystemPowerStatus` (AC or battery, the battery-saver flag); `throttle` is the process's power
+throttling request (`GetProcessInformation(ProcessPowerThrottling)`: the ControlMask and StateMask as Windows reports
+them, `unknown` where the call is unavailable); `timer_100ns` is `NtQueryTimerResolution`, resolved from ntdll at run
+time (10000 is 1 ms, 156250 the coarse default); `cpus`/`affinity` the active processors and the process's affinity
+count; `window` the frame loop's published state (`visible`, `minimised`, `hidden`; `unknown` for a window that does not
+publish one - the Slint window does not today); `display` the display state the legacy window already tracks
+(`on`, `off`, `dimmed`); `prio` the first word of each thread's priority outcome. Every value is a number or a fixed
+word.
+
+**A failed MMCSS registration is no longer silent.** The outcome of a thread that fell back to above-normal read
+`above-normal` and dropped the reason. Each of the DSP and source threads now writes one warning line with the
+reason, a fixed phrase and the Windows error number:
+
+    dsp: warning - DSP thread MMCSS registration failed: MMCSS refused (error 1552)
+    dsp: warning - source thread MMCSS registration failed: no MMCSS (avrt.dll unavailable)
+
+**Two small repairs found on the way.** A re-opened sound output now starts unprimed (`AudioOut::openLocked` clears
+`primed_` after emptying the ring), so its first callback is a priming callback and not a starved one; the engine's
+per-open discount stays as a guard. And the DSP thread sets flush-to-zero and denormals-are-zero on itself
+(`tests/test_dsp_denormal_cost.cpp`: with the register left alone a block of denormal-valued samples takes 5.6 to 6.1
+times a noise block, exact silence 1.1 to 1.2 times, ordinary signal 1.0; as shipped all three are alike). The flags
+are per thread, x86 only, and also cover every plugin's `process()`.
+
+**Tests:** `tests/test_ringdrop_measure.cpp` (the mask and the judgment, absent samples, the machine line, the DSP
+accounting under a held mutex, the source gap, the generator resync, the widest lines through the upload scrub),
+`tests/test_dsp_drop_minute_app.cpp` (the order, the event minute, the three-minute override, the first minute),
+`tests/test_audio_lead_app.cpp` (the shared mask on the audio minute), `tests/test_audio_out.cpp` (the re-open),
+`tests/test_dsp_denormal_cost.cpp`.
 
 ### What a "no audio" report carries (0.99.61)
 

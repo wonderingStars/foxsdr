@@ -1143,7 +1143,7 @@ void Engine::closeDspMinute() {
     const unsigned events = cascade::core::minuteEventsSince(minuteEventCounts(), rx().dspEventMark_);
     const bool lossMinute = dropped > 0 && cascade::core::ringDropWorthAReport(dropped, read);
     const bool judged = cascade::core::minuteJudged(lossMinute, events, rx().dspLossRun_);
-    // THE DSP THREAD'S OWN ACCOUNTING FOR THE MINUTE (2026-11-23, docs/radio-reports.md "The DSP minute"): the sum of its blocks' wall time, its
+    // THE DSP THREAD'S OWN ACCOUNTING FOR THE MINUTE (2026-11-23, docs/DIAGNOSTICS.md "The DSP minute"): the sum of its blocks' wall time, its
     // own processor time, how many blocks, the longest gap between two ring reads and the phase it was in; the source thread's longest gap
     // between writes and (for the free-running generator) the "resync after a long stall" events. All taken every minute, whether or not
     // anything was lost, so a bad minute's figures are its own. Busy near sixty seconds with CPU far below it is a thread that was descheduled
@@ -1186,7 +1186,7 @@ void Engine::closeDspMinute() {
                                 static_cast<unsigned long long>(dropped),
                                 share.empty() ? "share unknown" : share.c_str(), radioTag.c_str());
     }
-    // THE MINUTE'S TWO LINES, in a fixed key=value form (the words are the keys docs/radio-reports.md names).
+    // THE MINUTE'S TWO LINES, in a fixed key=value form (the words are the keys docs/DIAGNOSTICS.md names).
     const std::size_t capacity = rx().pipeline_.ringCapacity();
     const std::size_t pct = capacity == 0 ? 0 : std::min<std::size_t>(100, highWater * 100 / capacity);
     char dropPct[16] = "unknown";
