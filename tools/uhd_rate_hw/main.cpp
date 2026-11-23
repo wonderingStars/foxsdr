@@ -26,12 +26,18 @@
 #include "engine/engine.hpp"
 #include "engine/fox_engine_api.hpp"
 #include "engine/receiver.hpp"
+#include "source/soapy_source.hpp"
 #include "foxsdr_api.h"
 
 namespace cascade::gui {
 struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     static std::uint64_t read(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.sourceSamplesRead() : 0; }
+    static int restarts(Engine& e, std::size_t slot) {
+        if (!e.receivers_[slot] || e.receivers_[slot]->device_ == nullptr) { return -1; }
+        const auto* sp = dynamic_cast<const cascade::source::SoapySource*>(e.receivers_[slot]->device_);
+        return sp != nullptr ? sp->stallRestartsForTest() : -1;
+    }
     static bool faulted(Engine& e, std::size_t slot) { return e.receivers_[slot] && e.receivers_[slot]->pipeline_.faulted(); }
     static std::string fault(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.faultMessage() : std::string(); }
 };
@@ -212,9 +218,28 @@ int main(int argc, char** argv) {
             lastWindow = static_cast<double>(now - prev) / 10.0;
             prev = now;
             const FoxReceiverState st = state(1);
-            std::printf("phase %zu rate %.0f t=%3d s  samples/s %.0f  faulted %d '%s'\n", ph, st.sampleRateHz, t, lastWindow, Access::faulted(*eng, 0) ? 1 : 0, Access::fault(*eng, 0).c_str());
+            std::printf("phase %zu rate %.0f t=%3d s  samples/s %.0f  faulted %d restarts %d '%s'\n", ph, st.sampleRateHz, t, lastWindow, Access::faulted(*eng, 0) ? 1 : 0, Access::restarts(*eng, 0), Access::fault(*eng, 0).c_str());
         }
         if (lastWindow < 1.0) { ++stalledPhases; std::printf("PHASE %zu ENDED WITH ZERO SAMPLES\n", ph); }
+    }
+    if (const char* ss = std::getenv("UHD_RATE_HW_STOPSTART")) {
+        int stopSec = 30, runSec = 60;
+        std::sscanf(ss, "%d,%d", &stopSec, &runSec);
+        send(makeCmd(FOXAPI_OP_RUN, 0.0, 0, 1));
+        std::printf("--- receiver STOPPED for %d s\n", stopSec);
+        sleepMs(stopSec * 1000);
+        send(makeCmd(FOXAPI_OP_RUN, 0.0, 1, 1));
+        std::printf("--- receiver STARTED again\n");
+        std::uint64_t prev = Access::read(*eng, 0);
+        double lastWindow = -1.0;
+        for (int t = 10; t <= runSec; t += 10) {
+            sleepMs(10000);
+            const std::uint64_t now = Access::read(*eng, 0);
+            lastWindow = static_cast<double>(now - prev) / 10.0;
+            prev = now;
+            std::printf("restarted-run t=%3d s  samples/s %.0f  faulted %d restarts %d '%s'\n", t, lastWindow, Access::faulted(*eng, 0) ? 1 : 0, Access::restarts(*eng, 0), Access::fault(*eng, 0).c_str());
+        }
+        if (lastWindow < 1.0) { ++stalledPhases; std::printf("RESTARTED RUN ENDED WITH ZERO SAMPLES\n"); }
     }
     send(makeCmd(FOXAPI_OP_RUN, 0.0, 0, 1));   // a graceful stop
     sleepMs(1500);
