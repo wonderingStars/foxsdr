@@ -22,7 +22,6 @@
 #include "core/pipeline.hpp"
 
 #include "core/diag_log.hpp"
-#include "core/dsp_shed.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "core/plugin_runner.hpp"
 #include "core/thread_beats.hpp"
@@ -151,9 +150,8 @@ inline void dspBeat(DspPhase p) {
     }
     g.phase = p;
     g.phaseSince = now;
-    // (test seam: the load is burned AFTER the phase began, so the span above - and the minute's accounting - charges it to this phase. The
-    // spectrum phase's own load is burned by the spectrum branch itself, so that a block that skips the spectrum skips its cost too.)
-    if (g_dspPhaseBurnAny.load(std::memory_order_relaxed) != 0 && p != kPhSpectrum) {
+    // (test seam: the load is burned AFTER the phase began, so the span above - and the minute's accounting - charges it to this phase.)
+    if (g_dspPhaseBurnAny.load(std::memory_order_relaxed) != 0) {
         if (const int us = g_dspPhaseBurnUs[p].load(std::memory_order_relaxed); us > 0) { burnMicroseconds(us); }
     }
 }
@@ -869,9 +867,6 @@ void Pipeline::setDspBlockLoadForTest(int burnMs, int sleepMs) {
     g_dspSleepInSpanMs.store(sleepMs, std::memory_order_relaxed);
     refreshBlockSeam();
 }
-namespace {
-std::atomic<bool> g_dspShedEnabled{true};
-}  // namespace
 static_assert(Pipeline::kDspPhases == kPhCount, "the public phase count is the phase enum's");
 const char* Pipeline::dspPhaseName(unsigned index) { return index < kPhCount ? kDspPhaseNames[index] : ""; }
 void Pipeline::dspPhaseTotalsNs(std::uint64_t* out) const {
@@ -888,7 +883,6 @@ void Pipeline::setDspPhaseLoadForTest(const char* phase, int microseconds) {
         return;
     }
 }
-void Pipeline::setDspShedEnabledForTest(bool on) { g_dspShedEnabled.store(on, std::memory_order_relaxed); }
 void Pipeline::setDspHostAudioDelayForTest(int ms) {
     g_dspHostAudioDelayMs.store(ms, std::memory_order_relaxed);
     refreshBlockSeam();
@@ -2820,8 +2814,6 @@ void Pipeline::dspThreadBody() {
     if (g_dspFlushDenormals.load(std::memory_order_relaxed)) { _mm_setcsr(_mm_getcsr() | 0x8040u); }   // FTZ (bit 15) and DAZ (bit 6)
 #endif
     dspBlockSamples_.store(n, std::memory_order_relaxed);
-    dspShedding_ = false;
-    dspShedState_.store(false, std::memory_order_relaxed);
     // FROM HERE THE DSP THREAD READS THE RING: what the source cannot write from now on is a consumer that fell behind.
     dspAbsentSinceNs_.store(0, std::memory_order_relaxed);
     // THE FIRST DRAIN, once per pipeline: the engine's digest minutes start from here (never 0: 0 means "not yet").
@@ -2847,44 +2839,13 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
-        // BEHIND? (2026-11-23, core/dsp_shed.hpp): more than half the ring still waiting at the start of a block means this thread is not keeping up,
-        // and the samples the source cannot put in a full ring are lost. Before that happens the work whose only consumer is the screen is skipped:
-        // the spectrum (all but one block in kDspShedSpectrumEvery) and the zoom. One ring-fill read a block; back to full work under a quarter.
-        bool skipSpectrum = false;
-        if (g_dspShedEnabled.load(std::memory_order_relaxed)) {
-            const std::size_t backlog = ring_->size();
-            const std::size_t capacity = ring_->capacity();
-            const bool was = dspShedding_;
-            dspShedding_ = dspShedDecision(was, backlog, capacity);
-            if (dspShedding_ != was) {
-                dspShedState_.store(dspShedding_, std::memory_order_relaxed);
-                if (dspShedding_) { dspShedEntries_.store(dspShedEntries_.load(std::memory_order_relaxed) + 1u, std::memory_order_relaxed); }
-            }
-            if (dspShedding_) {
-                dspShedBlocks_.store(dspShedBlocks_.load(std::memory_order_relaxed) + 1u, std::memory_order_relaxed);
-                const std::uint64_t pct = capacity == 0 ? 0u : static_cast<std::uint64_t>(backlog) * 100u / capacity;
-                if (pct > dspShedPeakPct_.load(std::memory_order_relaxed)) { dspShedPeakPct_.store(pct, std::memory_order_relaxed); }
-                skipSpectrum = (++dspShedSpectrumTick_ % kDspShedSpectrumEvery) != 0u;
-            }
-        } else if (dspShedding_) {
-            dspShedding_ = false;
-            dspShedState_.store(false, std::memory_order_relaxed);
-        }
         iqCorr_->process(acc.data(), n);   // F16: the I/Q correction (nothing at all while its mask is 0)
         dspBeat(kPhSpectrum);
         const auto blockBegan = std::chrono::steady_clock::now();
-        if (skipSpectrum) {
-            // (shed: the window keeps showing the last frame)
-        } else if (specOn_.load(std::memory_order_acquire)) {
-            if (g_dspPhaseBurnAny.load(std::memory_order_relaxed) != 0) {
-                if (const int us = g_dspPhaseBurnUs[kPhSpectrum].load(std::memory_order_relaxed); us > 0) { burnMicroseconds(us); }
-            }
+        if (specOn_.load(std::memory_order_acquire)) {
             // The spectrum block (setSpectrum): frames come at its own rate from these same samples and are pulled by getLatestFrame.
             specBlock_->process(acc.data(), n);
         } else {
-            if (g_dspPhaseBurnAny.load(std::memory_order_relaxed) != 0) {
-                if (const int us = g_dspPhaseBurnUs[kPhSpectrum].load(std::memory_order_relaxed); us > 0) { burnMicroseconds(us); }
-            }
             // wire-b begin: the GPU spectrum (pipeline_gpufft.cpp), OFF by default: 0 = not engaged, the CPU estimator runs; 1 = a GPU frame is in db; 2 = none ready this block
             const int gpuState = gpuFrame(acc.data(), n, db.data());
             if (gpuState == 0) { estimator_.process(acc.data(), db.data()); }
@@ -3028,7 +2989,7 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
     // the condition on anything added to this thread.
     scopeIq_.push(chanBuf_.data(), m);
     if (ifRecorder_ != nullptr) { ifRecorder_->writeIq(chanBuf_.data(), m); }   // P4: the IF, the passband only
-    if (zoomFft_ != 0 && !dspShedding_) {   // S12: the zoom FFT of the passband (the block is held while it runs); display-only, so it is shed first (core/dsp_shed.hpp)
+    if (zoomFft_ != 0) {   // S12: the zoom FFT of the passband (the block is held while it runs)
         if (const std::shared_ptr<cascade::dsp::ZoomFft> z = zoom_.load()) { z->push(chanBuf_.data(), m); }
     }
 

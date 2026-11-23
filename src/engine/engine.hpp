@@ -1300,8 +1300,6 @@ private:
     void pollDspMinute();
     // THE BASELINE LINE (once per session 15 s after the first drain, and again after an input-rate change): see Engine::pollDspBaseline.
     void pollDspBaseline(double now);
-    // The text of the status table's "audioHealth" row: the audio watchdog's note, else the "computer is not keeping up" note.
-    std::string audioHealthLine() const;
     // A MINUTE OF THE PIPELINE'S RING HAS CLOSED: one log line if the source thread read samples the ring had no room for in the
     // minute just ended - `dsp: 412000 samples dropped between the source and the DSP in the last minute (0.17%)`, the share being of
     // the minute's input - and nothing for a minute that lost none. Takes no clock, so a test closes minutes at will. Since master's 0.99.101 /

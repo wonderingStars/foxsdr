@@ -83,7 +83,7 @@ ServiceOptions windowServiceOptions(const WindowServiceRun& run) {
     // a browser before the window exists, so the seam is in force from the start and not submitted by the window once its frames are running.
     o.holdAudioLockMs = stallFromEnvironment("FOXSDR_HOLD_AUDIO_LOCK");
     // FOXSDR_TEST_DSP_PHASE_LOAD="<phase>=<microseconds>" (2026-11-23, bounded runs only): the DSP thread burns that much processor in that phase of
-    // every block (core::Pipeline::setDspPhaseLoadForTest) - what a slow machine costs a stage - so a real run can show the display work being shed.
+    // every block (core::Pipeline::setDspPhaseLoadForTest) - what a slow machine costs a stage - so a real run can show where the time goes.
     // Phases: the words of the DSP minute's phase_ms (spectrum, demod, ...). Process-wide; never read in a real session.
     if (const char* const load = std::getenv("FOXSDR_TEST_DSP_PHASE_LOAD"); load != nullptr && *load != '\0') {
         const std::string spec(load);

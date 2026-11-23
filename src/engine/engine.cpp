@@ -53,7 +53,6 @@
 #include "core/diag_report.hpp"
 #include "core/machine_state.hpp"
 #include "core/dsp_baseline.hpp"
-#include "core/dsp_shed.hpp"
 #include "core/issue_report.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -539,10 +538,6 @@ constexpr double kScanUserTuneEpsHz = 0.5;
 // The note is stored TRANSLATED (the Sinks panel draws audioHealthNote_ as it
 // stands), so it is written and compared through tr() in both places.
 const char* const kAudioBusyNote = FOX_TR_NOOP("audio device busy - still opening");
-// THE COMPUTER CANNOT KEEP UP (2026-11-23): shown with the audio health note (Engine::audioHealthLine) once two minutes in a row lost more than 1%
-// of the samples although the display work was already being skipped; cleared by a minute that loses nothing.
-const char* const kKeepUpNote = FOX_TR_NOOP("This computer is not keeping up with the radio at this sample rate: samples are being lost. Choose a lower sample rate, or switch off decoders you are not using.");
-
 // Monotonic milliseconds for the retune coalescer — steady_clock, because a
 // wall-clock step (NTP, DST) must never stall or flood the tune pacing.
 double steadyNowMs() {
@@ -1051,12 +1046,10 @@ void Engine::pollDspMinute() {
         rx().genResyncsAtMinute_ = rx().pipeline_.genResyncs();
         rx().genSkippedAtMinute_ = rx().pipeline_.genSkippedNs();
         rx().pipeline_.dspPhaseTotalsNs(rx().dspPhaseAtMinute_);
-        rx().dspShedAtMinute_ = rx().pipeline_.dspShedBlocks();
         {
             unsigned long long faults = 0, ws = 0;
             if (cascade::core::processMemoryNow(&faults, &ws)) { rx().pageFaultsAtMinute_ = faults; }
         }
-        (void)rx().pipeline_.takeDspShedRingPeakPct();
         (void)rx().pipeline_.takeDspGapLongest(nullptr);
         (void)rx().pipeline_.takeSrcGapLongestNs();
         rx().dspEventMark_ = minuteEventCounts();
@@ -1239,7 +1232,7 @@ void Engine::closeDspMinute() {
     const char* gapPhase = "ring";
     const std::uint64_t gapNs = rx().pipeline_.takeDspGapLongest(&gapPhase);
     const std::uint64_t srcGapNs = rx().pipeline_.takeSrcGapLongestNs();
-    // WHERE THE MINUTE'S TIME WENT, per phase (the totals are cumulative: a difference), and how many blocks skipped their display-only work.
+    // WHERE THE MINUTE'S TIME WENT, per phase (the totals are cumulative: a difference).
     constexpr unsigned kPhases = cascade::core::Pipeline::kDspPhases;
     std::uint64_t phaseNow[kPhases];
     std::uint64_t phaseNs[kPhases];
@@ -1250,10 +1243,6 @@ void Engine::closeDspMinute() {
         rx().dspPhaseAtMinute_[i] = phaseNow[i];
         phaseNames[i] = cascade::core::Pipeline::dspPhaseName(i);
     }
-    const std::uint64_t shedAbs = rx().pipeline_.dspShedBlocks();
-    const std::uint64_t shedBlocks = shedAbs >= rx().dspShedAtMinute_ ? shedAbs - rx().dspShedAtMinute_ : 0;
-    rx().dspShedAtMinute_ = shedAbs;
-    const std::uint64_t shedPeakPct = rx().pipeline_.takeDspShedRingPeakPct();
     // THE PROCESS'S PAGE FAULTS THIS MINUTE (a difference) for the loss minute's memory line below; the mark moves every minute.
     unsigned long long faultsMinute = 0, workingSetMb = 0;
     bool memoryKnown = false;
@@ -1264,28 +1253,6 @@ void Engine::closeDspMinute() {
             faultsMinute = faultsNow >= rx().pageFaultsAtMinute_ ? faultsNow - rx().pageFaultsAtMinute_ : 0ull;
             rx().pageFaultsAtMinute_ = faultsNow;
         }
-    }
-    // THE COMPUTER CANNOT KEEP UP (item 4): two minutes in a row that lost more than 1% of the samples although display work was being shed. The
-    // run is broken by any minute that did not (more loss than 1% WITH shedding), and the note is cleared by a minute that lost nothing at all.
-    // Said once per session; never a report (the ringdrop report is filed as it always was, below).
-    {
-        const bool overOnePercent = read > 0 && dropped * 100u > read;
-        rx().keepUpBadMinutes_ = (overOnePercent && shedBlocks > 0) ? rx().keepUpBadMinutes_ + 1u : 0u;
-        if (dropped == 0 && !rx().keepUpNote_.empty()) { rx().keepUpNote_.clear(); }
-        if (rx().keepUpBadMinutes_ >= 2u && !rx().keepUpSaid_) {
-            rx().keepUpSaid_ = true;
-            rx().keepUpNote_ = tr(kKeepUpNote);
-            const std::string tag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
-            cascade::core::diagLogf("dsp: over 1%% of the samples lost two minutes running although display work was skipped: the computer is not keeping up; the window says so%s", tag.c_str());
-        }
-    }
-    // SHEDDING IS SAID WHENEVER IT HAPPENED, loss or not, and is never a fault or a report (core/dsp_shed.hpp).
-    if (shedBlocks > 0) {
-        const std::string tag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
-        cascade::core::diagLogf("dsp: display work skipped for %llu of %llu blocks to keep up (ring up to %llu%% full)%s",
-                                static_cast<unsigned long long>(std::min<std::uint64_t>(shedBlocks, 9999999999ULL)),
-                                static_cast<unsigned long long>(std::min<std::uint64_t>(std::max(blocks, shedBlocks), 9999999999ULL)),
-                                static_cast<unsigned long long>(std::min<std::uint64_t>(shedPeakPct, 100u)), tag.c_str());
     }
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it - and now also when the audio minute beside it starved a raise's worth
     // of callbacks (that digest closes after this one, so its numbers are read as they stand): the lines below are what an audiolead report
@@ -1315,8 +1282,8 @@ void Engine::closeDspMinute() {
     char cpuText[16] = "unknown";
     if (rx().pipeline_.dspCpuKnown()) { std::snprintf(cpuText, sizeof(cpuText), "%llu", cap(cpuNs / 1000000u)); }
     const std::uint64_t lenMs = nowS > beganS ? static_cast<std::uint64_t>((nowS - beganS) * 1000.0) : 0u;
-    cascade::core::diagLogf("dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s shed_blocks=%llu%s", cap(dropped), dropPct,
-                            cap(lenMs), static_cast<unsigned long long>(pct), eventWords, cap(shedBlocks), radioTag.c_str());
+    cascade::core::diagLogf("dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s%s", cap(dropped), dropPct, cap(lenMs),
+                            static_cast<unsigned long long>(pct), eventWords, radioTag.c_str());
     cascade::core::diagLogf("dsp minute: busy_ms=%llu cpu_ms=%s blocks=%llu longest_gap_ms=%llu gap_phase=%s%s", cap(busyNs / 1000000u), cpuText,
                             cap(blocks), cap(gapNs / 1000000u), gapPhase, radioTag.c_str());
     cascade::core::diagLogf("dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu%s", cap(srcGapNs / 1000000u),
@@ -1375,12 +1342,6 @@ void Engine::closeDspMinute() {
     if (lossMinute) {
         cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
     }
-}
-
-// THE AUDIO HEALTH ROW'S TEXT: the watchdog's note when it has one, else the "this computer is not keeping up" note (2026-11-23). One engine
-// string and no new row, so both windows already draw it, where they draw the audio health note.
-std::string Engine::audioHealthLine() const {
-    return !rx().audioHealthNote_.empty() ? rx().audioHealthNote_ : rx().keepUpNote_;
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -11878,7 +11839,7 @@ void Engine::publishStatusText() {
     t.presetNote = presetNote_;
     t.pluginEnforceError = pluginEnforceError_;
     t.restoreKeepLabel = rx().restoreKeepLabel_;
-    t.audioHealth = audioHealthLine();
+    t.audioHealth = rx().audioHealthNote_;
     t.bookmarkNote = bookmarkImportNote_;
     t.bookmarkError = bookmarkError_;
     t.installReport = installReport_;

@@ -2639,37 +2639,15 @@ two largest phases as a percentage of the work. The line is said again, once per
 per block is more than double the first baseline's (from that minute's own figures), so a machine that degrades during a
 session shows it. `rate=` carries no letters of a frequency unit, so the upload scrub leaves it alone.
 
-**Shedding display work before dropping radio samples.** While the source ring holds MORE than half its capacity at the start
-of a block (one ring-fill read per block) the DSP thread is behind, and the work whose only consumer is the screen is cut
-back; it goes back to full work when the ring holds LESS than a quarter (two thresholds, so it does not flap: between a
-quarter and a half nothing changes; `core/dsp_shed.hpp`). Shed:
-
-- the spectrum / waterfall estimate (`Pipeline::dspThreadBody`: `specBlock_->process`, or the legacy estimator and its frame
-  copy) - for seven blocks in eight; one block in eight still computes it, so everything that reads a frame (the window, the
-  scanner, the stitcher, tune-to-peak, the health watch) keeps getting fresh ones, fewer of them, and never one that is stale
-  for as long as the machine is behind;
-- the zoom FFT of the passband (`processAudioBlock`, `zoom_->push`), every block.
-
-NEVER shed: the I/Q correction, the recorders (I/Q, IF, multiplex, audio, replay), the network I/Q sink, every plugin's I/Q tap
-and audio tap, the patch graph, the VFO, AFC, passband, the S-meter (squelch reads it), the demodulator, RDS and every
-decoder, the whole audio chain and the sink. The scope taps (`scopeIq_`, `scopeMpx_`, `scopeAudio_`) are display-only too
-but are lock-free copies that cost a few microseconds; they are left alone.
-
-Shedding is not a fault and files nothing. A minute with any shedding says so, loss or not:
-
-    dsp: display work skipped for 4152 of 5792 blocks to keep up (ring up to 53% full)
-
-and the first line of a loss minute gains `shed_blocks=N`. Samples that are STILL dropped are counted and filed exactly as
-before: shedding cannot save a chain whose demodulator or plugins cost more than the block lasts, and then the loss minute
-carries both `shed_blocks=` and the `phase_ms=` line that says where the time went.
-
-**"This computer is not keeping up."** After two consecutive minutes that lost more than 1% of the samples although display work
-was being shed, the engine sets one note, once per session: "This computer is not keeping up with the radio at this sample
-rate: samples are being lost. Choose a lower sample rate, or switch off decoders you are not using." It is shown in the audio
-health row (`fact.status.audioHealth`, `Engine::audioHealthLine`), which both windows already draw under the Sinks section's
-device combo, whenever the audio watchdog has no note of its own; a minute that loses nothing clears it, and it is not raised
-a second time in the session. One log line goes with it: `dsp: over 1% of the samples lost two minutes running although
-display work was skipped: the computer is not keeping up; the window says so`. No new drawing code and no new element.
+**Shedding display work, and the "not keeping up" note: removed (review of 2026-11-23).** An earlier version of this
+branch skipped the spectrum for seven blocks in eight, and the zoom, while the ring held more than half its capacity, and
+raised a note after two lossy minutes. An independent review found that on the spectrum-block path (any FFT size, window or
+frame rate other than the default) the survivors were fed to the estimator as if they were contiguous, so every frame was
+wrong (carriers displaced by up to fs/2048 with comb images, read by tune-to-peak, the FFT scan, the band stitcher and the
+mask monitor), that on the default path the saving was about 7% of a block, and that the note's trigger, placement, wording
+and translation were wrong. Neither ships in this release. The design that was removed, and what it would need to be
+correct, are described in the review (`D:/foxsdr-build/prep/REVIEW-ringdrop-shed-2026-11-23.md`, sections 1, 2, 3 and 8) for
+a later release. The spectrum path is as it was before the measurement was added; only the accounting touches it.
 
 **The machine line gains the clock and the memory.** `clock=NOW/MAX` is the processor's clock now (the highest of any logical
 processor) and at its maximum, in MHz, as Windows reports them (`CallNtPowerInformation(ProcessorInformation)` from
@@ -2700,23 +2678,22 @@ open takes; a second request is queued, never raced.)
 | Legacy window, 131072-point FFT at 120 Hz | 169.7 | 3.0 | spectrum 50%, demod 48% |
 | Slint window, 131072-point FFT at 120 Hz | 126.6 | 4.0 | demod 52%, spectrum 47% |
 
-So the largest FFT at the fastest refresh adds 50 to 95 microseconds a block - the spectrum is a stage a slow PC pays for, and the one
-shedding cuts first. The idle generator's chain (the pipeline alone, `tests/test_dsp_shed.cpp` section g): 71.6 microseconds a block
+So the largest FFT at the fastest refresh adds 50 to 95 microseconds a block - the spectrum is a stage a slow PC pays for. The idle
+generator's chain (the pipeline alone, `tests/test_dsp_phase_time.cpp` section g): 71.6 microseconds a block
 at 2 MS/s (budget 512, headroom 7.2), 101.9 at 1 MS/s (budget 1024, headroom 10.0), 219.3 at 500 kS/s (budget 2048, headroom 9.3):
 the work per block grows as the block lasts longer (probably the audio stages, which run per output frame; not separated here), so halving the generator's rate buys
 about 1.4 times the headroom, not 2.
 
-**Test seams.** `Pipeline::setDspPhaseLoadForTest(phase, microseconds)` burns that much processor in one named phase of every
-block (the spectrum's only in a block that computes it); `Pipeline::setDspShedEnabledForTest(false)` switches shedding off. For a
-bounded run (`--frames`) `FOXSDR_TEST_DSP_PHASE_LOAD=<phase>=<microseconds>` arms the first (`windowServiceOptions`); a real
-session never reads it.
+**Test seam.** `Pipeline::setDspPhaseLoadForTest(phase, microseconds)` burns that much processor in one named phase of every
+block. For a bounded run (`--frames`) `FOXSDR_TEST_DSP_PHASE_LOAD=<phase>=<microseconds>` arms it (`windowServiceOptions`); a
+real session never reads it.
 
 **Tests:** `tests/test_ringdrop_measure.cpp` (the events' names, absent samples and the 2 s bound, the machine line,
 the DSP accounting under a held mutex, `cpu_ms` both ways, the host-audio word, the source gap, the generator resync,
 the widest lines WITH the log's stamp through the upload scrub), `tests/test_dsp_drop_minute_app.cpp` (the order, an
 event minute IS filed, arming, the ten-second arm, a 5 s late DSP thread files a ringdrop),
 `tests/test_audio_lead_app.cpp` (no new excuses on the audio minute), `tests/test_radio_reports_engine.cpp` (the
-first stream window's rate), `tests/test_dsp_denormal_cost.cpp`, `tests/test_dsp_shed.cpp` (the shed rule and its hysteresis, shedding against a real-time source, the per-phase time, bit-identical spectrum frames with headroom), `tests/test_dsp_shed_app.cpp` (the engine's lines, the note, the baseline, the machine line, the widest forms), `tests/test_audio_open.cpp` (the no-wait re-open).
+first stream window's rate), `tests/test_dsp_denormal_cost.cpp`, `tests/test_dsp_phase_time.cpp` (the baseline text, the per-phase time against a real-time source, the idle generator's cost at three rates), `tests/test_dsp_phase_time_app.cpp` (the engine's loss-minute lines, the baseline, the machine and memory lines, the widest forms), `tests/test_audio_open.cpp` (the no-wait re-open).
 
 ### What a "no audio" report carries (0.99.61)
 

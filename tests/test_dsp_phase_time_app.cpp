@@ -1,18 +1,16 @@
-// THE ENGINE'S SIDE OF SHEDDING AND OF WHERE THE TIME GOES (2026-11-23, the ringdrop measurement; docs/DIAGNOSTICS.md).
+// THE ENGINE'S SIDE OF WHERE THE TIME GOES (2026-11-23, the ringdrop measurement; docs/DIAGNOSTICS.md).
 //
-// tests/test_dsp_shed.cpp proves the pipeline's half with a real-time source and a seam that burns microseconds in a chosen phase of every block.
-// This test drives the same through the real engine (an AppWindow's, as tests/test_dsp_drop_minute_app.cpp does), at 2 MS/s with a block of 1024
-// samples lasting 512 microseconds, and pins what the minute says:
+// tests/test_dsp_phase_time.cpp proves the pipeline's half with a real-time source and a seam that burns microseconds in a chosen phase of every
+// block. This test drives the same through the real engine (an AppWindow's, as tests/test_dsp_drop_minute_app.cpp does), at 2 MS/s with a block of
+// 1024 samples lasting 512 microseconds, and pins what the minute says:
 //
-//   1. a minute in which display work was shed and nothing was lost writes "dsp: display work skipped for N of M blocks to keep up (ring up to
-//      P% full)", is not a fault, and files nothing;
-//   2. a loss minute that shedding could not save (the demod costs more than the block lasts) writes the three accounting lines with
-//      shed_blocks=N on the first, a "dsp minute: phase_ms=" line that names the loaded phase first, and the ringdrop report is still FILED;
-//   3. TWO such minutes in a row raise the "this computer is not keeping up" note (once per session, in the audio health row both windows
-//      draw); a minute that loses nothing clears it; it is not raised a second time;
+//   2. a loss minute (the demod costs more than the block lasts) writes the three accounting lines, a "dsp minute: phase_ms=" line that names
+//      the loaded phase first, and the ringdrop report is FILED;
 //   4. the BASELINE line is said once, 15 s after the first drain, and again after an input-rate change;
-//   5. the machine line carries the processor clock ("clock=NOW/MAX" or "clock=unknown") and fits the log's line;
-//   6. every new line fits the log's line with its stamp and survives the upload scrub with every number intact.
+//   5. the machine line carries the processor clock ("clock=NOW/MAX" or "clock=unknown") and the memory words, and fits the log's line;
+//   6. every line fits the log's line with its stamp and survives the upload scrub with every number intact.
+//
+// (This file was test_dsp_shed_app.cpp; its sections about shedding and the "not keeping up" note were removed with them, review 2026-11-23.)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -72,7 +70,7 @@ void isolate() {
 #else
     const int pid = static_cast<int>(getpid());
 #endif
-    g_scratch = fs::temp_directory_path() / ("foxsdr_dsp_shed_app_" + std::to_string(pid));
+    g_scratch = fs::temp_directory_path() / ("foxsdr_dsp_phase_time_app_" + std::to_string(pid));
     std::error_code ec;
     fs::remove_all(g_scratch, ec);
     fs::create_directories(g_scratch, ec);
@@ -88,7 +86,7 @@ std::string readFile(const fs::path& p) {
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
-// A device that delivers in REAL TIME (as tests/test_dsp_shed.cpp's).
+// A device that delivers in REAL TIME (as tests/test_dsp_phase_time.cpp's).
 class PacedSource final : public cascade::source::IqSource {
 public:
     bool start() override { return true; }
@@ -162,7 +160,6 @@ struct AppWindowTestAccess {
             th::engine(a).rx().baselineStage_ = 0;
         });
     }
-    static std::string healthLine(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).audioHealthLine(); }); }
 };
 
 }  // namespace cascade::gui
@@ -203,50 +200,12 @@ int main() {
     p.setSource(std::make_unique<PacedSource>());
     p.start();
     CHECK(p.running());
-    const std::string kNote =
-        "This computer is not keeping up with the radio at this sample rate: samples are being lost. Choose a lower sample rate, or switch off decoders you are not using.";
 
     // THE MARKS: a minute with nothing in it, so what follows is this test's own.
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     Access::closeDspMinute(app);
 
-    std::size_t shedLines1 = 0;
-    // --- 1. SHED, NOTHING LOST: said, never a fault, never filed ---------------------------------------------------------------------------
-    {
-        const std::size_t dropLines0 = linesWith("samples dropped between the source and the DSP").size();
-        const std::size_t minuteLines0 = linesWith("dsp minute: dropped=").size();
-        Pipeline::setDspPhaseLoadForTest("spectrum", 1200);
-        std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-        Pipeline::setDspPhaseLoadForTest("spectrum", 0);
-        CHECK(p.dspShedBlocks() > 0u);
-        Access::closeDspMinute(app);
-        const std::vector<std::string> shed = linesWith("dsp: display work skipped for ");
-        CHECK(shed.size() == 1u);
-        if (!shed.empty()) {
-            std::printf("shed line: %s\n", shed.back().c_str());
-            const long long n = numberAfter(shed.back(), "skipped for ");
-            const long long m = numberAfter(shed.back(), " of ");
-            const long long pct = numberAfter(shed.back(), "(ring up to ");
-            CHECK(n > 0 && m >= n);
-            CHECK(pct > 50 && pct <= 100);   // it only starts above half
-            CHECK(shed.back().find(" blocks to keep up (ring up to ") != std::string::npos);
-            CHECK(shed.back().find("% full)") != std::string::npos);
-        }
-        CHECK(p.ringDroppedSamples() == 0u);
-        CHECK(linesWith("samples dropped between the source and the DSP").size() == dropLines0);
-        CHECK(linesWith("dsp minute: dropped=").size() == minuteLines0);   // a quiet minute writes no accounting lines
-        CHECK(ringdropReports() == 0u);
-        // the load is gone: the thread stops shedding once the ring has drained; a minute that closes after that says nothing about shedding
-        CHECK(waitFor([&] { return !p.dspShedding(); }));
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        Access::closeDspMinute(app);   // (this one may still hold the end of the shedding)
-        shedLines1 = linesWith("dsp: display work skipped for ").size();
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
-        Access::closeDspMinute(app);
-        CHECK(linesWith("dsp: display work skipped for ").size() == shedLines1);
-    }
-
-    // --- 2. LOSS THAT SHEDDING CANNOT SAVE: still counted, still filed --------------------------------------------------------------------
+    // --- 2. A LOSS MINUTE: counted, accounted per phase, filed --------------------------------------------------------------------
     std::vector<std::string> accounting;
     {
         const std::size_t first0 = linesWith("dsp minute: dropped=").size();
@@ -260,7 +219,6 @@ int main() {
         if (!a.empty()) {
             std::printf("minute line A: %s\n", a.back().c_str());
             CHECK(numberAfter(a.back(), "dropped=") > 0);
-            CHECK(numberAfter(a.back(), " shed_blocks=") > 0);
             accounting.push_back(a.back());
         }
         if (!ph.empty()) {
@@ -269,44 +227,13 @@ int main() {
             CHECK(numberAfter(ph.back(), "phase_ms=demod:") >= 1000);                     // a minute of 3 s with 1.2 ms in most blocks
             accounting.push_back(ph.back());
         }
-        CHECK(linesWith("dsp: display work skipped for ").size() == shedLines1 + 1u);
-        CHECK(ringdropReports() == 1u);   // shedding changed nothing about the filing
-        CHECK(Access::healthLine(app).empty());   // ONE such minute is not yet "cannot keep up"
+        CHECK(ringdropReports() == 1u);
     }
 
-    // --- 3. TWO IN A ROW RAISE THE NOTE; A CLEAN MINUTE CLEARS IT; NOT RAISED TWICE --------------------------------------------------------
-    {
-        const std::size_t said0 = linesWith("the computer is not keeping up").size();
-        std::this_thread::sleep_for(std::chrono::milliseconds(3000));   // the load is still on: a second bad minute
-        Access::closeDspMinute(app);
-        CHECK(Access::healthLine(app) == kNote);
-        CHECK(linesWith("the computer is not keeping up").size() == said0 + 1u);
-        // (a third bad minute leaves it as it is and does not say it again)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        Access::closeDspMinute(app);
-        CHECK(Access::healthLine(app) == kNote);
-        CHECK(linesWith("the computer is not keeping up").size() == said0 + 1u);
-        // the load goes, the ring drains, and a minute that loses nothing clears it
-        Pipeline::setDspPhaseLoadForTest("demod", 0);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        Access::closeDspMinute(app);   // (this minute still holds the end of the loss)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        Access::closeDspMinute(app);
-        CHECK(p.ringDroppedSamples() > 0u);
-        CHECK(Access::healthLine(app).empty());
-        // two more bad minutes: the note is NOT raised again this session
-        Pipeline::setDspPhaseLoadForTest("demod", 1200);
-        for (int i = 0; i < 2; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2500));
-            Access::closeDspMinute(app);
-        }
-        Pipeline::setDspPhaseLoadForTest("demod", 0);
-        CHECK(Access::healthLine(app).empty());
-        CHECK(linesWith("the computer is not keeping up").size() == said0 + 1u);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        Access::closeDspMinute(app);
-        Access::closeDspMinute(app);
-    }
+    Pipeline::setDspPhaseLoadForTest("demod", 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));   // the load is gone: the ring drains
+    Access::closeDspMinute(app);
+    Access::closeDspMinute(app);
 
     // --- 4. THE BASELINE: once, 15 s after the first drain; again after a rate change ---------------------------------------------------------
     {
@@ -439,12 +366,8 @@ int main() {
             CHECK(cascade::core::scrubUploadLine(l) == l);
         }
         char a[256];
-        std::snprintf(a, sizeof(a), "dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s shed_blocks=%llu [radio 8]", 9999999999ULL, "100.00",
-                      9999999999ULL, 100ULL, "rate|switch|plugins|audio", 9999999999ULL);
-        char s[256];
-        std::snprintf(s, sizeof(s), "dsp: display work skipped for %llu of %llu blocks to keep up (ring up to %llu%% full) [radio 8]", 9999999999ULL, 9999999999ULL, 100ULL);
-        char k[256];
-        std::snprintf(k, sizeof(k), "dsp: over 1%% of the samples lost two minutes running although display work was skipped: the computer is not keeping up; the window says so [radio 8]");
+        std::snprintf(a, sizeof(a), "dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s [radio 8]", 9999999999ULL, "100.00",
+                      9999999999ULL, 100ULL, "rate|switch|plugins|audio");
         // a phase line with every phase over 1% and the widest numbers, cut to what fits
         std::uint64_t ns[Pipeline::kDspPhases];
         const char* names[Pipeline::kDspPhases];
@@ -456,15 +379,13 @@ int main() {
                                                                  cascade::core::kDspLineTextBudget - 21u - cascade::core::kDspRadioTagBudget);
         const std::string ph = "dsp minute: phase_ms=" + phases + " [radio 8]";
         const std::string base = cascade::core::dspBaselineText(192000000.0, 1048576, 123456789ull, 9999999999999ull, "plugin-audio:100,plugin-chain:100") + " [radio 8]";
-        std::printf("widest: A %zu, shed %zu, note %zu, phase %zu, baseline %zu characters\n", std::strlen(a), std::strlen(s), std::strlen(k), ph.size(), base.size());
+        std::printf("widest: A %zu, phase %zu, baseline %zu characters\n", std::strlen(a), ph.size(), base.size());
         CHECK(fits(a));
-        CHECK(fits(s));
-        CHECK(fits(k));
         CHECK(fits(ph));
         CHECK(fits(base));
     }
 
     std::error_code gone;
     fs::remove_all(g_scratch, gone);
-    return testSummary("test_dsp_shed_app");
+    return testSummary("test_dsp_phase_time_app");
 }

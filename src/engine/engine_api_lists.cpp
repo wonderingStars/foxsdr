@@ -528,13 +528,11 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.value(exportLast_.seq);
     f.value(bookmarkImportPending());
     f.value(importLast_.seq);
-    // The status lines. (The audio health row also carries the "computer is not keeping up" note when the watchdog has nothing to say: see
-    // Engine::audioHealthLine.)
-    std::string healthLine = audioHealthLine();
+    // The status lines.
     for (const std::string* t : {&rx().sourceError_, &gpsRefusal_, &catalogError_, &bandPlanError_, &rx().tuneMismatchNote_,
                                  &transmitError_, &soundCardMissing_, &sdrPlayApiDetail_, &sdrPlayAdvice_,
                                  &rx().recordNotice_, &rx().recordError_, &presetNote_, &pluginEnforceError_,
-                                 &rx().restoreKeepLabel_, &healthLine,  // (audioHealth: API 0.3 8.4)
+                                 &rx().restoreKeepLabel_, &rx().audioHealthNote_,  // (audioHealth: API 0.3 8.4)
                                  &bookmarkImportNote_, &bookmarkError_,  // (the Bookmarks section's: 8.6)
                                  &installReport_, &installError_,  // (the plugin install/remove outcome: 8.8)
                                  &catalogStatus_, &addAllSummary_}) {  // (the store window's two more: 8.9)
@@ -1268,7 +1266,6 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     buildApiListsSource(b);
     // THE STATUS LINES, every one (the list shows the ones with text).
     {
-        std::string healthLine = audioHealthLine();
         struct Line {
             const char* key;
             const std::string* text;
@@ -1283,7 +1280,7 @@ void Engine::buildApiLists03(ApiListBlock& b) {
             {"recordError", &rx().recordError_, 3},        {"presetNote", &presetNote_, 1},
             {"pluginEnforceError", &pluginEnforceError_, 3}, {"restoreKeepLabel", &rx().restoreKeepLabel_, 1},
             // 8.4: the audio watchdog's note under the Sinks section's device combo, a warning.
-            {"audioHealth", &healthLine, 2},
+            {"audioHealth", &rx().audioHealthNote_, 2},
             // 8.6: the Bookmarks section's note (what an import, an export or a group removal did)
             // and its red line (the bookmark file could not be read or saved).
             {"bookmarkNote", &bookmarkImportNote_, 1},
