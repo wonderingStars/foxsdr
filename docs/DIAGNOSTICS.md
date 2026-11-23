@@ -2674,23 +2674,16 @@ making four things cheaper; three of them give the same bits as before and one d
 release; the modulator keeps its own phase accumulator and uses neither `Nco` nor `FastNco`, and nothing on a transmit path includes
 `nco_fast.hpp` or uses `FirDecimator`. A benchmark, `bench_demod_chain` (built by name, not shipped), measures each step.
 
-**The machine line gains the clock and the memory.** `clock=NOW/MAX` is, in MHz, the MAXIMUM clock multiplied by the operating
-system's CURRENT THROTTLE LIMIT, each taken as the highest over all logical processors (`CallNtPowerInformation(ProcessorInformation)`
-from powrprof.dll, loaded once and kept, from the Windows system folder only - `LOAD_LIBRARY_SEARCH_SYSTEM32` - so a DLL planted beside
-the program is never loaded; read-only; `unknown` where it fails). IT IS NOT A MEASURED CLOCK: Microsoft defines `CurrentMhz` as the
-maximum clock times the current throttle, a nominal figure from the operating system's own state. A core slowed by firmware or by the
-processor itself (thermal, power limit) still reads NOW equal to MAX, so `clock=3200/3200` does NOT rule out throttling, and taking the
-highest over all cores hides a mix of fast and limited ones. The direct measure of a slow core is `cost_us` itself. (The key is
-`clock=`, not `mhz=`: the upload scrub reads "hz" as a frequency and masks every number on the line.) `mem_load=` is the system memory
+**The machine line gains the clock and the memory.** `clock_pct=N` is the processor's clock now as a whole percentage of its maximum clock (100 = at its maximum, 25 = held at a quarter of it, above 100 = boosting past the stated maximum, `unknown` where the query fails or either figure is 0). It is a percentage and NEVER MHz, by the owner's decision of 2026-11-23: the privacy text says the processor model is sent "without its clock speed", and a clock figure in MHz would be one. The figures come from `CallNtPowerInformation(ProcessorInformation)` from powrprof.dll, loaded once and kept, from the Windows system folder only - `LOAD_LIBRARY_SEARCH_SYSTEM32` - so a DLL planted beside the program is never loaded; read-only. Now is the highest current clock over all logical processors and max the highest maximum; the MHz values are used for the division and then dropped, never logged, never in a report, never in the change key. IT IS NOT A MEASURED CLOCK: Microsoft defines `CurrentMhz` as the maximum clock times the current throttle, a nominal figure from the operating system's own state. A core slowed by firmware or by the processor itself (thermal, power limit) still reads 100, so `clock_pct=100` does NOT rule out throttling, and taking the highest over all cores hides a mix of fast and limited ones. The direct measure of a slow core is `cost_us` itself. (The key is `clock_pct=`, with no "hz" in it: the upload scrub reads "hz" as a frequency and masks every number on the line.) `mem_load=` is the system memory
 load in percent, `mem_avail_mb=` the available physical memory, `commit_mb=USED/LIMIT` the commit charge against the commit limit
 (`GlobalMemoryStatusEx`); each `unknown` on a failed query. These words do not fit the line the steady words already fill, so they are
-the `machine: clock=... mem_load=... mem_avail_mb=... commit_mb=...` line that follows it (inline when they fit). The steady words decide
+the `machine: clock_pct=... mem_load=... mem_avail_mb=... commit_mb=...` line that follows it (inline when they fit). The steady words decide
 whether the first line is "changed". The second line is said at the first call (the first drain) and after that only when a value in it
-CHANGED since it was last said - the clock pair, or the memory load in steps of ten percent (the available-memory and commit figures move
+CHANGED since it was last said - the clock percentage in steps of ten points, or the memory load in steps of ten percent (the available-memory and commit figures move
 on every read and are not part of the test) - not in every loss minute: the diagnostics ring holds 256 lines and a loss minute already
 writes about ten.
 
-    machine: clock=3200/3200 mem_load=47 mem_avail_mb=17080 commit_mb=40911/55199
+    machine: clock_pct=100 mem_load=47 mem_avail_mb=17080 commit_mb=40911/55199
 
 The I/Q corrector's time is counted: it has a phase of its own, `iq-corr`, and is inside `busy_ms` and `cost_us` (it used to be charged
 to `ring`, which is not work, so a session losing samples to it read as an idle thread).

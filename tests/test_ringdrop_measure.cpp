@@ -302,33 +302,71 @@ int main() {
     {
         // the second line (the clock words do not fit the line: the real budget)
         resetMachineStateLogForTest();
-        setMachineSampleForTest("1000/3000", 25, 30);
+        setMachineSampleForTest(1000, 3000, 25, 30);
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));    // first call: said
         CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));   // nothing changed
-        setMachineSampleForTest("1000/3000", 28, 33);                // inside the same ten-point steps: not a change
+        setMachineSampleForTest(1000, 3000, 28, 33);                // inside the same ten-point steps: not a change
         CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
-        setMachineSampleForTest("1000/3000", 28, 45);                // the commit charge reached the next ten-point step, the load did not: a change
+        setMachineSampleForTest(1000, 3000, 28, 45);                // the commit charge reached the next ten-point step, the load did not: a change
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
         CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
-        setMachineSampleForTest("1000/3000", 38, 45);                // the load moved a step: a change
+        setMachineSampleForTest(1000, 3000, 38, 45);                // the load moved a step: a change
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
-        setMachineSampleForTest("2000/3000", 38, 45);                // the clock moved: a change
+        setMachineSampleForTest(2000, 3000, 38, 45);                // the clock moved: a change
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
         CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
         // the clock words fit the line (a large budget): the one line is said again when the clock or the memory changed, and not otherwise
         setMachineLineBudgetForTest(100000);
         resetMachineStateLogForTest();
-        setMachineSampleForTest("1000/3000", 25, 30);
-        CHECK(machineStateText("mmcss", "mmcss").find(" clock=1000/3000 ") != std::string::npos);
+        setMachineSampleForTest(1000, 3000, 25, 30);
+        CHECK(machineStateText("mmcss", "mmcss").find(" clock_pct=33 ") != std::string::npos);
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
         CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
-        setMachineSampleForTest("2000/3000", 25, 30);                // the clock changed with the steady words unchanged: said
+        setMachineSampleForTest(2000, 3000, 25, 30);                // the clock moved a step (33 to 67 percent) with the steady words unchanged: said
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
         CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
-        setMachineSampleForTest("2000/3000", 25, 55);                // the commit step changed: said
+        setMachineSampleForTest(2000, 3000, 25, 55);                // the commit step changed: said
         CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
         setMachineLineBudgetForTest(0);
-        setMachineSampleForTest(nullptr, 0, 0);
+        setMachineSampleForTest(-1, 0, 0, 0);
+        resetMachineStateLogForTest();
+
+        // THE CLOCK IS A PERCENTAGE, NEVER MHZ (owner 2026-11-23): distinctive made-up MHz values must not appear anywhere in the line
+        setMachineLineBudgetForTest(100000);
+        setMachineSampleForTest(3187, 5800, 25, 30);                 // 3187 / 5800 = 54.9 percent, rounds to 55
+        {
+            const std::string t = machineStateText("mmcss", "mmcss");
+            std::printf("seeded 3187/5800: %s\n", t.c_str());
+            CHECK(t.find(" clock_pct=55 ") != std::string::npos);
+            CHECK(t.find("3187") == std::string::npos);
+            CHECK(t.find("5800") == std::string::npos);
+            CHECK(t.find("MHz") == std::string::npos && t.find("mhz") == std::string::npos);
+            CHECK(t.find(" clock=") == std::string::npos);
+        }
+        setMachineSampleForTest(5800, 5800, 25, 30);                 // at the maximum: 100
+        CHECK(machineStateText("mmcss", "mmcss").find(" clock_pct=100 ") != std::string::npos);
+        setMachineSampleForTest(6100, 5800, 25, 30);                 // boosting past the stated maximum: above 100, rounded
+        CHECK(machineStateText("mmcss", "mmcss").find(" clock_pct=105 ") != std::string::npos);
+        setMachineSampleForTest(800, 3200, 25, 30);                  // a throttled PC stays visible: 25
+        CHECK(machineStateText("mmcss", "mmcss").find(" clock_pct=25 ") != std::string::npos);
+        setMachineSampleForTest(3187, 0, 25, 30);                    // an unknown or zero maximum: the word "unknown", no division, no MHz
+        {
+            const std::string t = machineStateText("mmcss", "mmcss");
+            CHECK(t.find(" clock_pct=unknown ") != std::string::npos);
+            CHECK(t.find("3187") == std::string::npos);
+        }
+        setMachineSampleForTest(0, 3200, 25, 30);                    // an unknown current clock
+        CHECK(machineStateText("mmcss", "mmcss").find(" clock_pct=unknown ") != std::string::npos);
+        // the change key moves in ten-point steps: a few points of wobble is not a change, a throttle is
+        resetMachineStateLogForTest();
+        setMachineSampleForTest(3170, 3200, 25, 30);                 // 99 (step nine)
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest(3100, 3200, 25, 30);                 // 97: the same step (nine)
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineSampleForTest(1600, 3200, 25, 30);                 // 50: throttled, said again
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        setMachineLineBudgetForTest(0);
+        setMachineSampleForTest(-1, 0, 0, 0);
         resetMachineStateLogForTest();
     }
 

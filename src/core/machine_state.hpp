@@ -6,10 +6,11 @@
 // confined to a few processors, a thread's multimedia-scheduler registration was refused. Nothing here CHANGES a setting.
 //
 //   machine: power=ac|battery|unknown saver=on|off|unknown throttle=ctl:N,state:N|unknown timer_100ns=N|unknown cpus=N affinity=N
-//            window=visible|minimised|hidden|unknown display=on|off|dimmed|unknown prio=dsp:WORD,src:WORD clock=NOW/MAX|unknown
+//            window=visible|minimised|hidden|unknown display=on|off|dimmed|unknown prio=dsp:WORD,src:WORD clock_pct=N|unknown
 //
-// clock is (in MHz; the key avoids the letters "hz", which the upload scrub reads as a frequency) the processor's clock now (the highest of any logical processor) and at its maximum, in MHz, as Windows reports them
-// (CallNtPowerInformation, read-only); a core held at its lowest clock shows as NOW far below MAX. Left out when the line would not fit.
+// clock_pct is the processor's clock now (the highest of any logical processor) as a whole percentage of its maximum, as Windows reports them
+// (CallNtPowerInformation, read-only); a core held at its lowest clock shows far below 100. NEVER MHZ (owner 2026-11-23: the privacy text sends
+// the processor model without its clock speed). Left out when the line would not fit.
 //
 // Every value is a fixed word or a number: no device name, path, frequency or user text. WORD is the first word of the thread's
 // priority outcome ("mmcss", "above-normal", "sched-rr", "none"). Where a query is not available the word is "unknown" - never a guess.
@@ -40,10 +41,11 @@ bool logMachineStateIfChanged(const std::string& dspPrio, const std::string& src
 
 // TEST SEAM: forget the last logged text.
 void resetMachineStateLogForTest();
-// TEST SEAMS: replace what the machine says. setMachineSampleForTest(clock, memLoadPercent, commitPercent) makes the processor clock text, the system memory
-// load and the commit charge (percent of the limit) made-up values; clock == nullptr goes back to the real machine. setMachineLineBudgetForTest(n) sets the
-// character budget the clock words must fit in to be said inline (0 = the real one).
-void setMachineSampleForTest(const char* clock, int memLoadPercent, int commitPercent);
+// TEST SEAMS: replace what the machine says. setMachineSampleForTest(nowMhz, maxMhz, memLoadPercent, commitPercent) makes the processor clock (in MHz, which
+// only the percentage is ever made from), the system memory load and the commit charge (percent of the limit) made-up values; nowMhz < 0 goes back to the
+// real machine, and a zero now or max reads as unknown. setMachineLineBudgetForTest(n) sets the character budget the clock words must fit in to be said
+// inline (0 = the real one).
+void setMachineSampleForTest(long nowMhz, long maxMhz, int memLoadPercent, int commitPercent);
 void setMachineLineBudgetForTest(std::size_t chars);
 
 }  // namespace cascade::core

@@ -7,7 +7,7 @@
 //   2. a loss minute (the demod costs more than the block lasts) writes the three accounting lines, a "dsp minute: phase_ms=" line that names
 //      the loaded phase first, and the ringdrop report is FILED;
 //   4. the BASELINE line is said once, 15 s after the first drain, and again after an input-rate change;
-//   5. the machine line carries the processor clock ("clock=NOW/MAX" or "clock=unknown") and the memory words, and fits the log's line;
+//   5. the machine line carries the processor clock ("clock_pct=N" or "clock_pct=unknown", a percentage, never MHz) and the memory words, and fits the log's line;
 //   6. every line fits the log's line with its stamp and survives the upload scrub with every number intact.
 //
 // (This file was test_dsp_shed_app.cpp; its sections about shedding and the "not keeping up" note were removed with them, review 2026-11-23.)
@@ -298,10 +298,11 @@ int main() {
             CHECK(ml[i].size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
             CHECK(cascade::core::scrubUploadLine(ml[i]) == ml[i]);
         }
-        const std::size_t at = joined.find(" clock=");
+        const std::size_t at = joined.find(" clock_pct=");
         CHECK(at != std::string::npos);
-        const std::string clock = at == std::string::npos ? std::string() : joined.substr(at + 7);
-        CHECK(clock.rfind("unknown", 0) == 0 || (clock.find('/') != std::string::npos && std::atoi(clock.c_str()) > 0));
+        const std::string clock = at == std::string::npos ? std::string() : joined.substr(at + 11);
+        CHECK(clock.rfind("unknown", 0) == 0 || std::atoi(clock.c_str()) > 0);
+        CHECK(joined.find("MHz") == std::string::npos && joined.find("mhz") == std::string::npos);
         const long long load = numberAfter(joined, " mem_load=");
         const long long avail = numberAfter(joined, " mem_avail_mb=");
         const long long commit = numberAfter(joined, " commit_mb=");
