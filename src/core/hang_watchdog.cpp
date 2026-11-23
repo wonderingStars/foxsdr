@@ -1111,7 +1111,9 @@ void HangWatchdog::threadMain() {
                 }
                 const double began = reportedStallStartMs_.load(std::memory_order_relaxed);
                 if (!outcome.empty() && began > 0.0) {
-                    std::ofstream o(outcome, std::ios::binary | std::ios::app);
+                    std::error_code existsEc;
+                    std::ofstream o;
+                    if (std::filesystem::exists(outcome, existsEc)) { o.open(outcome, std::ios::binary | std::ios::app); }   // (a report the sweep has deleted is not made again by its outcome)
                     if (o) { o << "--- outcome ---\nrecovered-after-ms: " << static_cast<long long>(now - began) << "\n"; }
                 }
             }
@@ -1235,6 +1237,9 @@ void closeOutcome(const beats::Finding& f) {
         }
     }
     if (path.empty()) { return; }
+    // A REPORT THAT IS NOT THERE any more (the sweep sent and deleted it, or the folder was cleared) is not made again by its outcome: appending would create a file holding only this section.
+    std::error_code existsEc;
+    if (!std::filesystem::exists(path, existsEc)) { return; }
     std::ofstream o(path, std::ios::binary | std::ios::app);
     if (o) { o << "--- outcome ---\nrecovered-after-ms: " << static_cast<long long>(f.stalledMs) << "\n"; }
 }
@@ -1360,6 +1365,11 @@ void HangWatchdog::pollThreadBeats(double pollIntervalMs) {
         closeOutcome(f);
     }
     for (const beats::Finding& f : r.callsReturned) { closeOutcome(f); }
+    // A THREAD THAT ENDED with its report open (a one-shot worker finishing): the stall is over, so the report is closed as recovered-after-ms, the format's own word (no new word).
+    for (const beats::Finding& f : r.ended) {
+        DiagLog::instance().writef("warn", "thread %s ended after a stall of %lld ms (budget %u ms)", f.name.c_str(), static_cast<long long>(f.stalledMs), f.budgetMs);
+        closeOutcome(f);
+    }
     for (const beats::Finding& f : r.wedged) { reportThreadWedge(f); }
     // A CALL INTO A PLUGIN that overran its budget (stage 1) or never returned (stage 2): counted per plugin and entry by the
     // containment (core/plugin_fault.hpp: a wedge quarantines the plugin), then reported like any worker wedge - the calling thread's

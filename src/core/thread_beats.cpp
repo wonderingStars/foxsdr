@@ -77,6 +77,8 @@ struct State {
     // The calls poll() has returned as overrun and has not yet seen end (guarded by `poll`).
     struct ReportedCall { int index; std::uint32_t epoch; std::int64_t startMs; Finding finding; };
     std::vector<ReportedCall> reportedCalls;
+    // The registrations that were REMOVED (their thread's work ended) while a freeze report for them was still open: poll() hands them back as `ended`, once (guarded by `poll`).
+    std::vector<Finding> ended;
 };
 
 State& state() {
@@ -295,7 +297,18 @@ void Registry::add(const std::shared_ptr<detail::Slot>& s) {
 }
 
 void Registry::remove(const detail::Slot* s) {
+    // A REGISTRATION THAT ENDS WITH A REPORT STILL OPEN (a one-shot worker: the device open, a scan) leaves nothing for poll() to see recover, and its file would stay `outcome: pending`
+    // for the whole session and be sent next start as `not-recovered`, which is false for a thread that finished (review of fix/freezes, must-fix 2). Taken under the poll lock,
+    // which is what guards `reported`; poll never waits for a worker, so a worker's exit waits at most for one look at the table.
+    std::lock_guard<std::mutex> pollLk(state().poll);
     std::lock_guard<std::mutex> lk(state().reg);
+    for (const auto& sp : state().slots) {
+        if (sp.get() == s && sp->reported) {
+            sp->reported = false;
+            state().ended.push_back(makeFinding(*sp, clockMs() - sp->episodeStartMs, budgetFor(sp->spec->kind), nullptr));
+            break;
+        }
+    }
     state().slots.erase(std::remove_if(state().slots.begin(), state().slots.end(),
                                  [s](const std::shared_ptr<detail::Slot>& p) { return p.get() == s; }),
                   state().slots.end());
@@ -317,6 +330,7 @@ PollResult Registry::poll() {
     }
     PollResult out;
     const std::int64_t now = clockMs();
+    out.ended.swap(state().ended);
     for (const auto& sp : copy) {
         detail::Slot& s = *sp;
         // A generation its owner abandoned and counted is not this table's business.

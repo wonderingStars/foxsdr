@@ -711,6 +711,53 @@ void testEveryReportGetsItsOutcome() {
     fs::remove_all(dir, ec);
 }
 
+// A ONE-SHOT WORKER THAT ENDS WITH ITS REPORT OPEN (review of fix/freezes, must-fix 2): the registration is removed when the thread's work ends, there is nothing left to beat again,
+// and the report stayed `outcome: pending` for the whole session (sent next start as `not-recovered`, false for a thread that finished). The stall is over when the thread ends, so
+// the report is closed with `recovered-after-ms`, the format's own word.
+void testEndedRegistrationClosesItsReport() {
+    auto& reg = beats::Registry::instance();
+    const fs::path dir = scratchDir("ended");
+    HangWatchdog::resetWedgeFileCountForTest();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    HangWatchdog w;
+    w.setSuppressionForTest(HangWatchdog::SuppressionForTest::NeverSuppress);
+    w.start(dir.string(), 600000);
+    reg.setBudgetOverrideForTest(beats::Kind::Disk, kShortBudgetMs);
+    static const char* const kMark = "--- outcome ---\nrecovered-after-ms: ";
+    std::string path;
+    {
+        auto r = std::make_unique<beats::Registration>(beats::kThreadDiskJob);
+        r->beat("write");
+        const auto until = Clock::now() + std::chrono::milliseconds(kShortBudgetMs + 4 * HangWatchdog::kPollMs + 2500);
+        while (Clock::now() < until && w.reportsWritten() < 1u) { sleepMs(10); }
+        CHECK(w.reportsWritten() == 1u);
+        sleepMs(400);
+        path = w.lastReportPath();
+        CHECK(!path.empty());
+        CHECK(readFile(fs::path(path)).find("outcome: pending") != std::string::npos);
+        CHECK(readFile(fs::path(path)).find(kMark) == std::string::npos);   // open while the thread is late
+        r.reset();                                                            // the work ends: the registration goes, with no beat after the report
+    }
+    sleepMs(HangWatchdog::kPollMs * 2 + 200);
+    const std::string text = readFile(fs::path(path));
+    const std::size_t at = text.find(kMark);
+    std::printf("ended-registration report outcome: %lld ms\n", at == std::string::npos ? -1LL : std::atoll(text.c_str() + at + std::strlen(kMark)));
+    CHECK(at != std::string::npos);                                           // closed, not left pending
+    CHECK(text.find("--- outcome ---") == text.rfind("--- outcome ---"));    // once
+    // A registration that ends WITHOUT a report opens nothing.
+    {
+        beats::Registration quiet(beats::kThreadDiskJob);
+        quiet.beat("write");
+    }
+    sleepMs(HangWatchdog::kPollMs * 2 + 200);
+    CHECK(w.reportsWritten() == 1u);
+    w.stop();
+    reg.clearOverridesForTest();
+    fs::remove_all(dir, ec);
+}
+
 // Lost time and a debugger never accuse a worker (the two rules the frame loop's watchdog already keeps), and a worker's report is
 // not the frame loop's: the sentinel's "the watchdog filed a freeze report after the last sign of life" match does not see it.
 void testLostTimeAndDebuggerNeverReport() {
@@ -744,6 +791,11 @@ void testLostTimeAndDebuggerNeverReport() {
 #else
                 const unsigned long pid = 0;
 #endif
+                if (reportsIn(dir) != 1) {
+                    std::printf("the folder holds:");
+                    for (const auto& e : fs::directory_iterator(dir)) { std::printf(" %s", e.path().filename().string().c_str()); }
+                    std::printf("\n");
+                }
                 CHECK(reportsIn(dir) == 1);
                 CHECK(!cascade::core::freezeReportWrittenSince(dir.string(), pid, since));
                 // the control: a frame-loop-style name IS seen
@@ -1100,6 +1152,7 @@ int main() {
     testWedgedWorkerOfEachKind();
     testSecondWedgeOfTheSameThread();
     testEveryReportGetsItsOutcome();
+    testEndedRegistrationClosesItsReport();
     testWedgeFilesAreCapped();
     testLostTimeAndDebuggerNeverReport();
     testLostTimeRearmsRegistrations();
