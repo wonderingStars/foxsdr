@@ -204,6 +204,11 @@ public:
     // TEST SEAM: called by every listing of the reports folder, on whichever thread lists, immediately before the file-system call (a test binds one that
     // sleeps: a slow disk as far as the caller can tell). Empty (the default) in the product.
     static void setDiskHookForTest(std::function<void()> hook);
+    // TEST SEAM: asked before every delete ("remove") and every replace ("rename") of a file in the reports folder; true makes that call fail as a sharing violation does when another
+    // thread has the file open. Empty (the default) in the product.
+    static void setFileFaultHookForTest(std::function<bool(const char* op, const std::string& path)> hook);
+    // TEST SEAM: the folder's atomic write (a uniquely named temporary file, then a replace that is retried), callable from several threads at once.
+    static bool writeAtomicForTest(const std::string& path, const std::string& data);
     // Releases what the daily bound held and tries one last bounded send; returns after `maxMs` at the latest. Quit is never delayed by a stuck send.
     void flushAtQuit(int maxMs);
     // Runs one batch on the calling thread (tests, and flushAtQuit). Returns the number of requests accepted.

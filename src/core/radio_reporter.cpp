@@ -8,6 +8,7 @@
 #include "core/report_send_guard.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -53,6 +55,21 @@ void diskHook() {
     std::function<void()> h;
     { std::lock_guard<std::mutex> lk(g_hookMu); h = g_diskHook; }
     if (h) { h(); }
+}
+
+// TEST SEAM (Reporter::setFileFaultHookForTest): a delete or a replace that fails, as one does on Windows while another thread has the file open.
+std::function<bool(const char*, const std::string&)> g_fileFaultHook;
+bool fileFault(const char* op, const fs::path& p) {
+    std::function<bool(const char*, const std::string&)> h;
+    { std::lock_guard<std::mutex> lk(g_hookMu); h = g_fileFaultHook; }
+    return h && h(op, p.string());
+}
+// Deletes a file; true when it is gone (or never was).
+bool removeFile(const fs::path& p, std::error_code& ec) {
+    if (fileFault("remove", p)) { ec = std::make_error_code(std::errc::permission_denied); return false; }
+    ec.clear();
+    (void)fs::remove(p, ec);
+    return !ec;
 }
 
 fs::path pathOf(const std::string& utf8) { return fs::path(std::u8string(utf8.begin(), utf8.end())); }
@@ -92,20 +109,34 @@ bool appendDurable(const fs::path& p, const std::string& data) {
 }
 
 // Replaces the file whole: a temporary file, forced to disk, then renamed over it.
+// THE TEMPORARY NAME IS UNIQUE TO THIS CALL (review of fix/freezes, must-fix 3): it used to be `<name>.tmp`, so two writers of one file (the caller's state save and the batch thread's
+// position, or a retry) removed and renamed each other's temporary file. The replace is retried a few times, because on Windows it fails while another thread has the target open (the
+// caller reading a position file the batch thread is replacing); only then the old delete-and-rename. False when the file could not be replaced: the caller must look at it.
+std::atomic<unsigned long long> g_tmpSeq{0};
 bool writeAtomic(const fs::path& p, const std::string& data) {
     fs::path tmp = p;
-    tmp += ".tmp";
+    tmp += "." + std::to_string(g_tmpSeq.fetch_add(1, std::memory_order_relaxed)) + "." +
+           std::to_string(static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000ull)) + ".tmp";
     std::error_code ec;
-    fs::remove(tmp, ec);
-    if (!appendDurable(tmp, data)) { return false; }
-    fs::rename(tmp, p, ec);
-    if (ec) {
-        fs::remove(p, ec);
-        std::error_code ec2;
-        fs::rename(tmp, p, ec2);
-        return !ec2;
+    (void)fs::remove(tmp, ec);
+    if (!appendDurable(tmp, data)) { (void)fs::remove(tmp, ec); return false; }
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        if (fileFault("rename", p)) {
+            ec = std::make_error_code(std::errc::permission_denied);
+        } else {
+            ec.clear();
+            fs::rename(tmp, p, ec);
+        }
+        if (!ec) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(3 + (attempt % 7)));
     }
-    return true;
+    std::error_code ec2;
+    if (!fileFault("remove", p) && fs::remove(p, ec2) && !fileFault("rename", p)) {
+        fs::rename(tmp, p, ec2);
+        if (!ec2) { return true; }
+    }
+    (void)fs::remove(tmp, ec);
+    return false;
 }
 
 std::string dayOf(std::int64_t epoch) {
@@ -236,6 +267,54 @@ struct Reporter::Impl {
 
     mutable stall::TaggedMutex mu{"radio-reporter"};   // all state and all file work; tagged: a freeze report names who holds it (core/stall_context.hpp)
     std::mutex batchMu;          // one batch at a time
+    // DELETES THAT COULD NOT BE DONE and positions that could not be saved (review of fix/freezes, must-fix 3). A file whose delete failed (another thread had it open) is never listed
+    // for sending while it waits here, and the delete is tried again at the start of every batch; a position that could not be written is kept in memory and read before the file.
+    std::mutex retryMu;
+    std::set<fs::path> deferredDeletes;
+    std::map<fs::path, std::size_t> unsavedPos;
+    // Raised when Usage reporting goes OFF: a batch that began before it sends no journal line that was read before it.
+    std::atomic<unsigned long long> optOutGen{0};
+
+    bool isDeferred(const fs::path& p) {
+        std::lock_guard<std::mutex> lk(retryMu);
+        return deferredDeletes.count(p) != 0;
+    }
+    // Deletes `p`, or - when it cannot be deleted now - holds it back from every listing until it can be. True when it is gone.
+    bool removeOrDefer(const fs::path& p) {
+        std::error_code ec;
+        if (removeFile(p, ec)) { return true; }
+        std::lock_guard<std::mutex> lk(retryMu);
+        deferredDeletes.insert(p);
+        return false;
+    }
+    void retryDeferred() {
+        std::vector<fs::path> todo;
+        {
+            std::lock_guard<std::mutex> lk(retryMu);
+            todo.assign(deferredDeletes.begin(), deferredDeletes.end());
+        }
+        for (const fs::path& p : todo) {
+            std::error_code ec;
+            if (removeFile(p, ec)) {
+                std::lock_guard<std::mutex> lk(retryMu);
+                deferredDeletes.erase(p);
+            }
+        }
+    }
+    void retryUnsaved() {
+        std::map<fs::path, std::size_t> todo;
+        {
+            std::lock_guard<std::mutex> lk(retryMu);
+            todo = unsavedPos;
+        }
+        for (const auto& kv : todo) {
+            if (writeAtomic(posPathOf(kv.first), std::to_string(kv.second))) {
+                std::lock_guard<std::mutex> lk(retryMu);
+                const auto it = unsavedPos.find(kv.first);
+                if (it != unsavedPos.end() && it->second <= kv.second) { unsavedPos.erase(it); }
+            }
+        }
+    }
     Identity id;
     std::string sessionId;
     std::int64_t sessionStart = 0;
@@ -414,6 +493,7 @@ struct Reporter::Impl {
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             const std::string name = utf8Of(it->path().filename());
             if (name.rfind("journal-", 0) != 0 || it->path().extension() != ".jsonl") { continue; }
+            if (isDeferred(it->path())) { continue; }   // a delete is waiting for it to be closed: it is not a queue any more
             Seg s;
             s.path = it->path();
             const std::string text = readAll(s.path);
@@ -435,6 +515,11 @@ struct Reporter::Impl {
             s.lines = lines;
             const std::string pos = readAll(posPathOf(s.path));
             s.pos = pos.empty() ? 0 : static_cast<std::size_t>(std::strtoull(pos.c_str(), nullptr, 10));
+            {
+                std::lock_guard<std::mutex> lk(retryMu);
+                const auto u = unsavedPos.find(s.path);
+                if (u != unsavedPos.end() && u->second > s.pos) { s.pos = u->second; }   // a position that could not be written is still taken
+            }
             out.push_back(std::move(s));
         }
         std::sort(out.begin(), out.end(), [](const Seg& a, const Seg& b) {
@@ -451,7 +536,7 @@ struct Reporter::Impl {
         std::error_code ec;
         for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
             const std::string name = utf8Of(it->path().filename());
-            if (name.rfind("fail-", 0) == 0 && it->path().extension() == ".json") { out.push_back(it->path()); }
+            if (name.rfind("fail-", 0) == 0 && it->path().extension() == ".json" && !isDeferred(it->path())) { out.push_back(it->path()); }
         }
         std::sort(out.begin(), out.end());
         return out;
@@ -476,9 +561,8 @@ struct Reporter::Impl {
             ++idx;
             nl = next;
         }
-        std::error_code ec;
-        fs::remove(s.path, ec);
-        fs::remove(posPathOf(s.path), ec);
+        removeOrDefer(s.path);
+        removeOrDefer(posPathOf(s.path));
     }
 
     void dropFailFile(const fs::path& f) {
@@ -486,8 +570,7 @@ struct Reporter::Impl {
         std::string key;
         if (w.is_object() && w.contains("msg") && w["msg"].is_object()) { key = w["msg"].value("radioKey", std::string()); }
         countDropped(key);
-        std::error_code ec;
-        fs::remove(f, ec);
+        removeOrDefer(f);
     }
 
     std::string currentSegmentName() const {
@@ -512,9 +595,8 @@ struct Reporter::Impl {
         for (const Seg& s : segs) {
             if (utf8Of(s.path.filename()) == active) { continue; }
             if (s.pos >= s.lines) {   // fully taken
-                std::error_code ec;
-                fs::remove(s.path, ec);
-                fs::remove(posPathOf(s.path), ec);
+                removeOrDefer(s.path);
+                removeOrDefer(posPathOf(s.path));
                 continue;
             }
             if (s.ss > 0 && t - s.ss > o.maxAgeSec + 1) { st.expired += s.lines - s.pos; dropSegment(s); }
@@ -554,8 +636,13 @@ struct Reporter::Impl {
         w["q"] = atEpoch;
         w["deg"] = 0;
         w["msg"] = env;
+        // A NAME NOTHING HOLDS YET: two failures of one second must never share a file (the replace would overwrite the first); a taken name is drawn again.
         char name[96];
-        std::snprintf(name, sizeof(name), "fail-%012lld-%s.json", static_cast<long long>(atEpoch), randomHex(8).c_str());
+        std::error_code ec;
+        for (int draw = 0; draw < 16; ++draw) {
+            std::snprintf(name, sizeof(name), "fail-%012lld-%s.json", static_cast<long long>(atEpoch), randomHex(8).c_str());
+            if (!fs::exists(dir / name, ec)) { break; }
+        }
         return writeAtomic(dir / name, dumpJson(w));
     }
 
@@ -755,13 +842,17 @@ struct Reporter::Impl {
         return items;
     }
 
-    void advance(const Item& it) {
-        if (it.isFail) {
-            std::error_code ec;
-            fs::remove(it.file, ec);
-            return;
-        }
-        writeAtomic(posPathOf(it.file), std::to_string(it.line + 1));
+    // Marks one item as taken: a failure file is deleted, a journal line's position is written. FALSE when that could not be done now (review of fix/freezes, must-fix 3): a delete that
+    // failed is held back from every listing and retried (removeOrDefer); a position that could not be written is kept in memory, read before the file, and retried at the next batch.
+    // Either way the item is not sent a second time by this process; a batch that cannot save its place stops (see runBatch).
+    bool advance(const Item& it) {
+        if (it.isFail) { return removeOrDefer(it.file); }
+        const std::size_t next = it.line + 1;
+        if (writeAtomic(posPathOf(it.file), std::to_string(next))) { return true; }
+        std::lock_guard<std::mutex> lk(retryMu);
+        std::size_t& held = unsavedPos[it.file];
+        held = std::max(held, next);
+        return false;
     }
 
     void backoff(std::int64_t t) {
@@ -787,6 +878,10 @@ struct Reporter::Impl {
             t = now();
             if (t < backoffUntil) { return 0; }
         }
+        // What an earlier batch could not delete or save is done first (file calls: not under `mu`).
+        retryDeferred();
+        retryUnsaved();
+        const unsigned long long optOutAtStart = optOutGen.load(std::memory_order_acquire);
         // THE FOLDER IS LISTED AND READ WITHOUT `mu` (review of fix/freezes, finding 4): this is the batch thread, and Reporter::event() on the calling thread (the engine's
         // pass, once a minute per open radio) waited for `mu` behind its directory listing and file reads - a pass stopped behind a slow disk. Safe without the lock: the
         // directory and options are fixed once configure() has run (it joins this thread first), a failure file appears whole (written to .tmp and renamed), a journal line
@@ -802,9 +897,11 @@ struct Reporter::Impl {
                 sendNow = now();
                 if (it.env.is_object() && sendNow - it.eventEpoch > o.maxAgeSec) { ++st.expired; expired = true; }
             }
-            if (!it.env.is_object() || expired) { advance(it); continue; }   // (a file call: not under `mu`)
+            if (!it.env.is_object() || expired) { if (!advance(it)) { return accepted; } continue; }   // (a file call: not under `mu`)
             bool resent = false;
             for (;;) {
+                // USAGE REPORTING WENT OFF since this batch read its lines: a journal line carries the install id and is not sent (a failure file is the anonymous form and still is).
+                if (!it.isFail && optOutGen.load(std::memory_order_acquire) != optOutAtStart) { break; }
                 json env = it.env;
                 if (it.degraded) { env = degrade(env); }
                 env["age"] = std::clamp<std::int64_t>(sendNow - it.eventEpoch, 0, kMaxT);
@@ -819,7 +916,7 @@ struct Reporter::Impl {
                     ++accepted;
                     failStreak = 0;
                     lk.unlock();
-                    advance(it);
+                    if (!advance(it)) { return accepted; }
                     break;
                 }
                 if (res.status == 429) { backoffUntil = after + static_cast<std::int64_t>(std::max<std::uint64_t>(res.retryAfterSec, 1)); return accepted; }
@@ -849,7 +946,7 @@ struct Reporter::Impl {
                     ++st.refused;
                     ++refusedTotal;
                     lk.unlock();
-                    advance(it);
+                    if (!advance(it)) { return accepted; }
                     break;
                 }
                 // any other answer (a 400 that is not ours, a 403, a 404): the route is wrong or the service is not what we think; keep and back off
@@ -1100,8 +1197,10 @@ void Reporter::setIdentity(const Identity& idn) {
     if (hadId && idn.installId.empty()) {
         // Usage reporting went OFF: the install id is deleted, so everything that carries it goes with it. A queued failure is kept, as the
         // anonymous form (the owner's rule is that every failure reaches him); the journal and first-session lines are deleted.
-        std::error_code ec;
-        for (const Impl::Seg& g : s.listSegments()) { fs::remove(g.path, ec); fs::remove(Impl::posPathOf(g.path), ec); }
+        // A segment that cannot be deleted now (the batch thread has it open) is held back from every listing and deleted when it can be (removeOrDefer), and a batch that already read
+        // lines before this point sends none of them (optOutGen): nothing carrying the install id is sent after the opt-out (review of fix/freezes, must-fix 3).
+        s.optOutGen.fetch_add(1, std::memory_order_acq_rel);
+        for (const Impl::Seg& g : s.listSegments()) { s.removeOrDefer(g.path); s.removeOrDefer(Impl::posPathOf(g.path)); }
         s.segReady = false;
         for (const fs::path& f : s.listFailFiles()) {
             json w = json::parse(readAll(f), nullptr, false);
@@ -1219,6 +1318,13 @@ void Reporter::setDiskHookForTest(std::function<void()> hook) {
     std::lock_guard<std::mutex> lk(g_hookMu);
     g_diskHook = std::move(hook);
 }
+
+void Reporter::setFileFaultHookForTest(std::function<bool(const char* op, const std::string& path)> hook) {
+    std::lock_guard<std::mutex> lk(g_hookMu);
+    g_fileFaultHook = std::move(hook);
+}
+
+bool Reporter::writeAtomicForTest(const std::string& path, const std::string& data) { return writeAtomic(pathOf(path), data); }
 
 void Reporter::poll() {
     Impl& s = *p_;
