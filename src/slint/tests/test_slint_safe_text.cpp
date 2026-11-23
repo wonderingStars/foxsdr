@@ -9,12 +9,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "safe_text.hpp"
 
+#include "core/diag_log.hpp"
+
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -43,6 +48,81 @@ unsigned long runChild(const char* mode) {
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(pi.hThread);
     return code;
+}
+#endif
+
+#if defined(_WIN32)
+// Runs `--raw` with its stderr written to `stderrFile` and RUST_BACKTRACE set to `backtrace` (nullptr: unset); returns the child's process id (0 on failure).
+unsigned long runRawCapturingStderr(const std::string& stderrFile, const char* backtrace, unsigned long* exitCode) {
+    char self[MAX_PATH] = {0};
+    ::GetModuleFileNameA(nullptr, self, MAX_PATH);
+    std::string cmd = std::string("\"") + self + "\" --raw";
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE file = ::CreateFileA(stderrFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) { return 0; }
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdError = file;
+    si.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+    char* saved = nullptr;
+    size_t savedLen = 0;
+    _dupenv_s(&saved, &savedLen, "RUST_BACKTRACE");
+    if (backtrace != nullptr) { _putenv_s("RUST_BACKTRACE", backtrace); } else { _putenv_s("RUST_BACKTRACE", ""); }
+    PROCESS_INFORMATION pi{};
+    const BOOL ok = ::CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    _putenv_s("RUST_BACKTRACE", saved != nullptr ? saved : "");
+    free(saved);
+    if (!ok) { ::CloseHandle(file); return 0; }
+    ::WaitForSingleObject(pi.hProcess, 60000);
+    DWORD code = 0xDEADBEEFu;
+    ::GetExitCodeProcess(pi.hProcess, &code);
+    *exitCode = code;
+    const unsigned long pid = pi.dwProcessId;
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(pi.hThread);
+    ::CloseHandle(file);
+    return pid;
+}
+
+// A REAL Slint panic, end to end: the child's real stderr, through the real tail builder the crash report uses.
+void testRealPanicInReportTail() {
+    std::printf("  a real Slint panic: its message and location survive into the report's stderr tail, with no path or user name\n");
+    namespace fs = std::filesystem;
+    const char* tmp = std::getenv("TEMP");
+    const fs::path dir = (tmp != nullptr && *tmp != '\0' ? fs::path(tmp) : fs::path(".")) / ("foxsdr-safe-text-panic-" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const char* user = std::getenv("USERNAME");
+    for (const char* backtrace : {static_cast<const char*>(nullptr), "1"}) {
+        // the child names its own pid, which names the file the tail builder reads: capture to a temp name, then move to stderr-<pid>.txt
+        const std::string tmpName = (dir / "capture.txt").string();
+        unsigned long code = 0;
+        const unsigned long pid = runRawCapturingStderr(tmpName, backtrace, &code);
+        CHECK(pid != 0);
+        if (pid == 0) { continue; }
+        fs::rename(tmpName, dir / cascade::core::stderrFileName(pid), ec);
+        const std::vector<std::string> tail = cascade::core::readStderrTailForReport(dir.string(), pid);
+        std::string all;
+        for (const std::string& l : tail) { all += l + "\n"; }
+        std::printf("    RUST_BACKTRACE=%s: exit 0x%lx, %zu tail lines, %zu bytes\n", backtrace != nullptr ? backtrace : "(unset)", code, tail.size(), all.size());
+        for (const std::string& l : tail) { std::printf("      %s\n", l.c_str()); }
+        CHECK(code != 0);
+        CHECK(!tail.empty() && tail.size() <= cascade::core::kStderrTailMaxLines);
+        CHECK(all.find("panicked at") != std::string::npos);
+        const std::size_t loc = all.find("string.rs:");   // the location of Rust's str::from_utf8().unwrap() call inside this Slint build
+        CHECK(loc != std::string::npos);
+        if (loc != std::string::npos) { CHECK(std::isdigit(static_cast<unsigned char>(all[loc + 10])) != 0); }
+        CHECK(all.find("unwrap()") != std::string::npos);
+        CHECK(all.find("Utf8Error") != std::string::npos);
+        CHECK(all.find(":\\") == std::string::npos);    // no drive-letter path
+        CHECK(all.find(":/") == std::string::npos);
+        CHECK(all.find("Users") == std::string::npos);
+        if (user != nullptr && *user != '\0') { CHECK(all.find(user) == std::string::npos); }
+        fs::remove(dir / cascade::core::stderrFileName(pid), ec);
+    }
+    fs::remove_all(dir, ec);
 }
 #endif
 
@@ -155,6 +235,9 @@ int main(int argc, char** argv) {
     testBoundary();
     testLoggedOncePerSite();
     testRawAborts();
+#if defined(_WIN32)
+    testRealPanicInReportTail();
+#endif
     if (argc > 1) { testSourcesUseTheBoundary(argv[1]); }
     return testSummary("test_slint_safe_text");
 }

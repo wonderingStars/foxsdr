@@ -198,6 +198,10 @@ struct PaletteAction { std::string kind, title, detail; std::function<void()> ru
 int main(int argc, char** argv) {
     using namespace cascade::engine;
 
+    // RUST_BACKTRACE is deliberately NOT set here: measured with RUST_BACKTRACE=1 on a real Slint panic in this build
+    // (test_slint_safe_text --raw), the backtrace is the single line "stack backtrace:" (no symbols), so it adds nothing to a
+    // report. The panic line and its message already carry the location.
+
     // EVERYTHING before the window: the console, the helper modes, the crash handlers, the instance claim, the argument parse, the tool
     // modes, the stderr capture, the console handler and the sentinel - in that order, in bootProcess (src/main.cpp). A helper, a tool
     // mode, a refused argument or a link handed to the instance already running ends the process here.

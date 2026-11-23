@@ -44,6 +44,15 @@ void testValidity() {
     CHECK(!isValidUtf8("\xFF"));
     CHECK(!isValidUtf8("\x80"));               // a stray continuation byte
     CHECK(isValidUtf8(std::string("a\0b", 3)));  // an embedded NUL is valid UTF-8
+    // The boundary byte on each side of every restricted second byte (Unicode table 3-7, what Rust's from_utf8 accepts).
+    CHECK(!isValidUtf8("\xE0\x9F\x80") && isValidUtf8("\xE0\xA0\x80"));
+    CHECK(isValidUtf8("\xED\x9F\xBF") && !isValidUtf8("\xED\xA0\x80"));
+    CHECK(!isValidUtf8("\xF0\x8F\xBF\xBF") && isValidUtf8("\xF0\x90\x80\x80"));
+    CHECK(isValidUtf8("\xF4\x8F\xBF\xBF") && !isValidUtf8("\xF4\x90\x80\x80"));
+    CHECK(!isValidUtf8("\xC1\x80") && isValidUtf8("\xC2\x80"));
+    CHECK(!isValidUtf8("\xF5\x80\x80\x80") && !isValidUtf8("\xF8\x88\x80\x80\x80"));
+    // A four-byte sequence cut after 1, 2 and 3 bytes.
+    CHECK(utf8ValidUpTo("ab\xF0") == 2 && utf8ValidUpTo("ab\xF0\x9F") == 2 && utf8ValidUpTo("ab\xF0\x9F\x93") == 2);
 }
 
 void testSanitize() {
@@ -68,7 +77,7 @@ void testSanitize() {
     for (int a = 0; a < 256; ++a) {
         const std::string one(1, static_cast<char>(a));
         CHECK(isValidUtf8(sanitizeUtf8(one)));
-        for (int b = 0; b < 256; b += 7) {
+        for (int b = 0; b < 256; ++b) {
             std::string two = one;
             two.push_back(static_cast<char>(b));
             CHECK(isValidUtf8(sanitizeUtf8(two)));
@@ -154,6 +163,18 @@ void testAnsiFirst() {
     CHECK(repairUtf8WithCodePage("Portugu\xC3\xAAs c\xF3" "digo", 1252) == "Portugu\xC3\xAAs c\xC3\xB3" "digo");
     CHECK(repairUtf8WithCodePage("plain", 1252) == "plain");
     CHECK(isValidUtf8(repairUtf8WithCodePage(std::string(300, '\xF3'), 1252)));
+    // Double-byte code pages: each run is converted whole, and a lead byte takes its trail byte even when that is ASCII
+    // (0x7B here is '{' and is valid UTF-8 on its own).
+    CHECK(repairUtf8WithCodePage("\x93\xFA\x96\x7B\x8C\xEA", 932) == "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E");   // Shift-JIS, three kanji
+    CHECK(repairUtf8WithCodePage("A\x93\xFA\x96\x7B\x8C\xEA" "B", 932) == "A\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E" "B");
+    CHECK(repairUtf8WithCodePage("\xD6\xD0\xCE\xC4", 936) == "\xE4\xB8\xAD\xE6\x96\x87");                         // GBK, two hanzi
+    CHECK(repairUtf8WithCodePage("ab\x93", 932) == "ab\xEF\xBF\xBD");   // a lone lead byte at the end: refused, U+FFFD
+    CHECK(codePageToUtf8("\x93\xFA\x96\x7B", 932) == "\xE6\x97\xA5\xE6\x9C\xAC");
+    // Code page 1251 inside text, and 65001 (nothing to read: U+FFFD).
+    CHECK(repairUtf8WithCodePage("x \xCF\xF0\xE8\xE2\xE5\xF2 y", 1251) == "x \xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82 y");
+    CHECK(repairUtf8WithCodePage(kBad8, 65001) == sanitizeUtf8(kBad8));
+    CHECK(repairUtf8WithCodePage("abc\xC3", 65001) == "abc\xEF\xBF\xBD");
+    CHECK(codePageToUtf8(kBad17, 65001) == sanitizeUtf8(kBad17));
     if (::GetACP() == 1252) {
         CHECK(utf8OrAnsiToUtf8(sp) == repairUtf8WithCodePage(sp, 1252));
         diagLogf("ansi-first: %s", sp.c_str());

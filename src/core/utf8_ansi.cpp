@@ -17,47 +17,69 @@
 
 namespace cascade::core {
 
-std::string codePageToUtf8(std::string_view s, unsigned codePage) {
-    if (s.empty()) { return std::string(); }
+namespace {
+
+constexpr unsigned kUtf8CodePage = 65001;
+
+// One run of bytes in a code page as UTF-8, or false when the code page refuses it (MB_ERR_INVALID_CHARS): the caller then
+// puts U+FFFD for the run. Windows only.
+bool convertRun(std::string_view s, unsigned codePage, std::string& out) {
 #if defined(_WIN32)
-    // No MB_ERR_INVALID_CHARS: a byte the code page has no letter for becomes a
-    // replacement character in the wide text, which is the right outcome.
-    const int wn = ::MultiByteToWideChar(codePage, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    if (wn > 0) {
-        std::vector<wchar_t> w(static_cast<std::size_t>(wn));
-        ::MultiByteToWideChar(codePage, 0, s.data(), static_cast<int>(s.size()), w.data(), wn);
-        const int un = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), wn, nullptr, 0, nullptr, nullptr);
-        if (un > 0) {
-            std::string out(static_cast<std::size_t>(un), '\0');
-            ::WideCharToMultiByte(CP_UTF8, 0, w.data(), wn, out.data(), un, nullptr, nullptr);
-            return sanitizeUtf8(out);
-        }
-    }
-    return sanitizeUtf8(s);
+    if (s.empty()) { out.clear(); return true; }
+    const int wn = ::MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    if (wn <= 0) { return false; }
+    std::vector<wchar_t> w(static_cast<std::size_t>(wn));
+    if (::MultiByteToWideChar(codePage, MB_ERR_INVALID_CHARS, s.data(), static_cast<int>(s.size()), w.data(), wn) != wn) { return false; }
+    const int un = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), wn, nullptr, 0, nullptr, nullptr);
+    if (un <= 0) { return false; }
+    out.assign(static_cast<std::size_t>(un), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, 0, w.data(), wn, out.data(), un, nullptr, nullptr) != un) { return false; }
+    return isValidUtf8(out);
 #else
     (void)codePage;
-    // No code pages off Windows: read each byte as Latin-1.
-    std::string out;
-    out.reserve(s.size());
-    for (const char c : s) { utf8Append(out, static_cast<unsigned char>(c)); }
-    return out;
+    out.clear();
+    for (const char c : s) { utf8Append(out, static_cast<unsigned char>(c)); }   // Latin-1 off Windows
+    return true;
 #endif
+}
+
+bool isLeadByte(unsigned codePage, unsigned char b) {
+#if defined(_WIN32)
+    return ::IsDBCSLeadByteEx(codePage, b) != FALSE;
+#else
+    (void)codePage; (void)b;
+    return false;
+#endif
+}
+
+}  // namespace
+
+std::string codePageToUtf8(std::string_view s, unsigned codePage) {
+    if (s.empty()) { return std::string(); }
+    if (codePage == kUtf8CodePage) { return sanitizeUtf8(s); }
+    std::string out;
+    if (convertRun(s, codePage, out)) { return out; }
+    // The whole text has a byte the code page refuses: take it run by run with the same rule as the repair.
+    return repairUtf8WithCodePage(s, codePage);
 }
 
 std::string ansiToUtf8(std::string_view s) {
 #if defined(_WIN32)
-    return codePageToUtf8(s, CP_ACP);
+    return codePageToUtf8(s, ::GetACP());
 #else
     return codePageToUtf8(s, 0);
 #endif
 }
 
-// Valid UTF-8 stays exactly as it is; each run of bytes that is not valid UTF-8 is read in the code page. A line that is
-// mostly UTF-8 with one stray byte keeps its accents, and a line that is wholly ANSI ("El sistema no puede encontrar el
-// archivo" with a 0xF3 in it) comes out as the right letters.
+// Valid UTF-8 stays exactly as it is; each RUN of bytes that is not valid UTF-8 is read in the code page, as a whole, with
+// MB_ERR_INVALID_CHARS. On a double-byte page (932, 936, 949, 950) the second byte of a character is often ASCII, which is
+// valid UTF-8 on its own, so a run is extended over every lead byte and the byte after it: a Japanese word in Shift-JIS is
+// converted as one piece, not as lead bytes among stray Latin letters. A run the code page refuses becomes U+FFFD per byte.
+// With the UTF-8 code page itself (65001) there is nothing to read: U+FFFD straight away.
 std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage) {
     const std::size_t ok = utf8ValidUpTo(s);
     if (ok == s.size()) { return std::string(s); }
+    if (codePage == kUtf8CodePage) { return sanitizeUtf8(s); }
     std::string out(s.substr(0, ok));
     std::size_t i = ok;
     while (i < s.size()) {
@@ -68,8 +90,21 @@ std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage) {
             continue;
         }
         std::size_t j = i;
-        while (j < s.size() && utf8SeqLen(s, j) == 0) { ++j; }
-        out += codePageToUtf8(s.substr(i, j - i), codePage);
+        while (j < s.size()) {
+            if (isLeadByte(codePage, static_cast<unsigned char>(s[j]))) {
+                j = (j + 2 <= s.size()) ? j + 2 : s.size();   // the lead byte and its trail byte, whatever the trail looks like
+            } else if (utf8SeqLen(s, j) == 0) {
+                ++j;
+            } else {
+                break;
+            }
+        }
+        std::string conv;
+        if (convertRun(s.substr(i, j - i), codePage, conv)) {
+            out += conv;
+        } else {
+            for (std::size_t k = i; k < j; ++k) { out += "\xEF\xBF\xBD"; }
+        }
         i = j;
     }
     return out;
@@ -77,7 +112,7 @@ std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage) {
 
 std::string utf8OrAnsiToUtf8(std::string_view s) {
 #if defined(_WIN32)
-    return repairUtf8WithCodePage(s, CP_ACP);
+    return repairUtf8WithCodePage(s, ::GetACP());
 #else
     return repairUtf8WithCodePage(s, 0);
 #endif

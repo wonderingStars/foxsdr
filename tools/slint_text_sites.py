@@ -21,10 +21,7 @@ import os, re, sys
 
 # (file, text of the construction's argument) -> reason
 ALLOW = {
-    ('safe_text.hpp', 's'): 'the boundary itself, after isValidUtf8()',
-    ('safe_text.hpp', 'std::string_view(valid(s, site))'): 'the boundary itself, after repair',
-    ('cjk_register.hpp', 'cascade::core::utf8OrAnsiToUtf8(face.path)'): 'a path from path::string() (ANSI on Windows) converted to UTF-8 first',
-    ('input_target.hpp', 't'): 'key text: the slint::platform::key_codes constants and the host key table (authored)',
+    ('safe_text_make.hpp', 's'): 'Make::from: the one unchecked route, used by safe_text.hpp after validation and by text valid by construction',
 }
 # a wrapper that makes an argument safe
 WRAPPED = re.compile(r'^(std::move\()?(ss|slintsafe::shared|foxsdr::slintsafe::shared)\(')
@@ -68,7 +65,7 @@ def split_args(text):
     parts.append(cur.strip())
     return parts
 
-CTOR = re.compile(r'\bSharedString\s*[({]')
+CTOR = re.compile(r'\bSharedString(?:\s+\w+)?\s*[({]')   # SharedString(x), SharedString{x} and the named declaration SharedString s(x)
 CALL = re.compile(r'\b(set_[a-z0-9_]+|push_back|set_row_data|insert|emplace_back)\s*\(')
 
 def scan(root, list_all=False):
@@ -82,7 +79,7 @@ def scan(root, list_all=False):
         for m in CTOR.finditer(src):
             arg = ' '.join(balanced(src, m.end() - 1).split())
             if re.match(r'^(const )?(slint::)?SharedString( &|&)?\s*\w*$', src[max(0, m.start() - 0):m.start()]): continue
-            if arg == '' or arg.startswith(('std::string_view s', 'const ', 'std::string&')): continue   # declarations, the empty string
+            if arg == '' or arg.startswith(('std::string_view s', 'const ', 'std::string&')) or re.match(r'^[A-Za-z_][\w:]*\s*[&*]?\s+\w+$', arg): continue   # declarations (a parameter list), the empty string
             ctor_found += 1
             if (fn, arg) in ALLOW: ctor_allowed += 1
             elif WRAPPED.match(arg) or re.match(r'^"', arg): ctor_allowed += 1

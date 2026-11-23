@@ -24,6 +24,8 @@
 #include <slint-testing.h>
 
 #include <algorithm>
+#include <string_view>
+#include "safe_text_make.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -334,8 +336,10 @@ private:
         w.dispatch_pointer_press_event(slint::LogicalPosition({x, y}), slint::PointerEventButton::Left);
         w.dispatch_pointer_release_event(slint::LogicalPosition({x, y}), slint::PointerEventButton::Left);
     }
-    void keyDown(std::u8string_view t) { ui_->window().dispatch_key_press_event(slint::SharedString(t)); }
-    void keyUp(std::u8string_view t) { ui_->window().dispatch_key_release_event(slint::SharedString(t)); }
+    // The key's text is the toolkit's own key code or a character from the host's key table: valid by construction (safe_text_make.hpp).
+    static slint::SharedString keyText(std::u8string_view t) { return foxsdr::slintsafe::Make::from(std::string_view(reinterpret_cast<const char*>(t.data()), t.size())); }
+    void keyDown(std::u8string_view t) { ui_->window().dispatch_key_press_event(keyText(t)); }
+    void keyUp(std::u8string_view t) { ui_->window().dispatch_key_release_event(keyText(t)); }
     void keyTap(std::u8string_view t) { keyDown(t); keyUp(t); }
     void typeText(const std::string& text) {
         // one key event per UTF-8 character (a multi-byte sequence stays one event)

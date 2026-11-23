@@ -236,6 +236,40 @@ int main(int argc, char** argv) {
     CHECK(!cascade::core::stderrCaptureActive());
 #endif
 
+    // --- A Rust panic keeps its source location; a user path loses everything but the file name (0.99.112: the Option::unwrap report
+    //     had lost its location to the path scrub, so the crash group could not be decided) ---
+    {
+        using cascade::core::keepPanicLocations;
+        CHECK(keepPanicLocations("thread 'main' panicked at internal\\core\\string.rs:581:85:") == "thread 'main' panicked at core\\string.rs:581:85:");
+        CHECK(keepPanicLocations("panicked at internal/core/model.rs:123:45") == "panicked at core/model.rs:123:45");
+        CHECK(keepPanicLocations("panicked at C:\\Users\\Zebulon\\proj\\src\\lib.rs:10:5") == "panicked at lib.rs:10:5");
+        CHECK(keepPanicLocations("at C:\\Users\\Zebulon\\.cargo\\registry\\src\\index.crates.io-abc\\foo-1.0\\src\\bar.rs:7:9") == "at src\\bar.rs:7:9");
+        CHECK(keepPanicLocations("at /home/zeb/code/x.rs:3:4") == "at x.rs:3:4");
+        CHECK(keepPanicLocations("no location here, and file.rs mentioned without numbers") == "no location here, and file.rs mentioned without numbers");
+        CHECK(keepPanicLocations("a.rs:12 only a line") == "a.rs:12 only a line");
+        CHECK(keepPanicLocations("") == "");
+        const fs::path dir = scratchDir();
+        const unsigned long pid = 424243;
+        const fs::path file = dir / cascade::core::stderrFileName(pid);
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << "thread 'main' panicked at internal\\core\\string.rs:581:85:\n";
+            out << "called `Result::unwrap()` on an `Err` value: Utf8Error { valid_up_to: 8, error_len: Some(1) }\n";
+            out << "stack backtrace:\n";
+            for (int i = 0; i < 100; ++i) { out << "   " << i << ": frame at C:\\Users\\Zebulon\\build\\f" << i << ".rs:1:2\n"; }
+        }
+        const std::vector<std::string> tail = cascade::core::readStderrTailForReport(dir.string(), pid);
+        CHECK(tail.size() == cascade::core::kStderrTailMaxLines);
+        std::string all;
+        for (const std::string& l : tail) { all += l + "\n"; }
+        CHECK(all.find("panicked at core\\string.rs:581:85") != std::string::npos);   // the panic survives 100 backtrace lines
+        CHECK(all.find("Utf8Error { valid_up_to: 8") != std::string::npos);
+        CHECK(all.find("Zebulon") == std::string::npos);
+        CHECK(all.find("Users") == std::string::npos);
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
     // --- The last-words tail the sentinel carries (readStderrTailForReport) ---
     {
         const fs::path dir = scratchDir();
