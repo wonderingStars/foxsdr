@@ -1,6 +1,7 @@
 // lanec_publish.cpp - see lanec_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanec_publish.hpp"
+#include "safe_text.hpp"
 
 #include "desk_logic.hpp"
 
@@ -40,7 +41,7 @@ std::string fmt(const char* f, double v) {   // one double into one of this unit
     const int n = std::snprintf(b.data(), b.size(), f, v);
     return n > 0 ? std::string(b.data(), static_cast<std::size_t>(std::min<int>(n, 63))) : std::string();
 }
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 }  // namespace
 
 std::uint32_t deltaMaskNow() { return g_deltaMask.load(std::memory_order_relaxed); }

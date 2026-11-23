@@ -1,6 +1,7 @@
 // signal_publish.cpp - the SIGNAL bank's publisher (signal_publish.hpp): the host's models (signal_logic.hpp) as the window's generated structs, the
 // window's gestures as the ImGui drawers' own commands. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "signal_publish.hpp"
+#include "safe_text.hpp"
 
 #include "desk_logic.hpp"
 
@@ -61,7 +62,7 @@ using cascade::i18n::tr;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {

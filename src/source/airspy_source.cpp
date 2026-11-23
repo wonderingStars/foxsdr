@@ -8,6 +8,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/radio_events.hpp"
+#include "core/utf8_text.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
 #include "source/hydrasdr_protocol.hpp"
@@ -685,7 +686,11 @@ bool AirspySource::open(const std::string& args) {
     }
     if (moved > kVersionBytes) { moved = kVersionBytes; }
     version[moved] = 0;
-    firmwareVersion_ = reinterpret_cast<const char*>(version);
+    // CLEANED: the answer is a counted field, not a C string, and what follows
+    // the real text can be junk. That text is logged and shown in the new
+    // window, whose strings must be UTF-8 (0.99.112 crash groups 6CCFD0C0E58FC30C
+    // and 104F425230C2A742): cut at the first NUL, no control bytes, valid UTF-8.
+    firmwareVersion_ = core::cleanDeviceText(std::string_view(reinterpret_cast<const char*>(version), moved));
     // A DEVICE THAT DOES NOT SAY WHAT THE PROFILE EXPECTS is not ours: the
     // HydraSDR host refuses one whose version string does not begin "HydraSDR RF"
     // (hydrasdr.c:187). Nothing has been programmed yet, and the device is

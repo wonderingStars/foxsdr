@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "scope_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +25,7 @@ namespace foxsdr::slintscope {
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 // the table's read_scope as the seam's reader
 struct LiveTaps : ScopeTapReader {

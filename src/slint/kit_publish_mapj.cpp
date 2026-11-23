@@ -4,6 +4,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "kit_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -27,7 +28,7 @@ namespace access = cascade::core::access;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }
 template <class T> std::shared_ptr<slint::Model<T>> model(std::vector<T> v) { return std::make_shared<slint::VectorModel<T>>(std::move(v)); }
 std::string tr(const std::string& s) { return std::string(cascade::i18n::tr(s.c_str())); }

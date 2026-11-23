@@ -27,6 +27,7 @@
 // finish(), the service's stop(), closed() (tests/test_slint_duties.cpp holds this file's order from its text).
 
 #include <algorithm>
+#include "safe_text.hpp"
 #include <array>
 #include "frame_meter.hpp"
 #include "gaps_logic.hpp"
@@ -153,7 +154,7 @@ std::string lower(std::string s) {
 }
 
 std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }   // a std::string, never a fixed buffer (test_i18n)
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 // (Signatures - publish a model only when its content changed - is signatures.hpp, shared with the plugin kit's publisher.)
 std::string sigOf(const std::vector<Tick>& t) { std::string s; for (const auto& k : t) { s += fmt("%.6f|", k.frac) + k.label + ";"; } return s; }

@@ -1,6 +1,7 @@
 // extend_publish.cpp - the EXTEND bank's publisher and the Plugin store page's (extend_publish.hpp): the host's models (extend_logic.hpp) as the window's generated
 // structs, the window's gestures as the Effects extend_logic.hpp names for them. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "extend_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -29,7 +30,7 @@ using cascade::i18n::tr;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {

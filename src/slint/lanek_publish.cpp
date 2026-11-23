@@ -1,6 +1,7 @@
 // lanek_publish.cpp - see lanek_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanek_publish.hpp"
+#include "safe_text.hpp"
 
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
@@ -56,7 +57,7 @@ namespace acc = cascade::core::access;
 using cascade::i18n::tr;
 using cc::formatText;
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 // A SOUND OUTPUT THAT WOULD NOT OPEN, OR DIED WHILE THE TONE PLAYED, is counted as every refused output is (core/health_events.hpp noteSoundFail: the host API and one of five
 // reasons, never what the system said). The person is told in the section; the owner by this count.

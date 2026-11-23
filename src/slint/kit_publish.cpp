@@ -1,6 +1,7 @@
 // kit_publish.cpp - the plugin kit's publisher (kit_publish.hpp): the kit's state as the window's models, the window's gestures as the
 // kit's commands. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "kit_publish.hpp"
+#include "safe_text.hpp"
 #include "tools_logic.hpp"
 #include "gui/module_census.hpp"
 
@@ -33,7 +34,7 @@ namespace foxsdr::slintkit {
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }   // a std::string, never a fixed buffer (test_i18n)
 std::string n(std::size_t v) { return std::to_string(v); }
 std::int64_t clockMs() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }

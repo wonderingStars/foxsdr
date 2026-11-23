@@ -1,6 +1,7 @@
 // patch_publish.cpp - the PATCH page's publisher (patch_publish.hpp): patch_logic.hpp's models as the window's generated structs, the window's gestures as calls on the PatchPage
 // that name them. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "patch_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,7 +29,7 @@ using cascade::i18n::tr;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {

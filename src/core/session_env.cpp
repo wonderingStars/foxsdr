@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "core/radio_report.hpp"
+#include "core/utf8_text.hpp"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -32,7 +33,11 @@ std::string trimmed(const std::string& s) {
     std::size_t b = s.size();
     while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) { ++a; }
     while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) { --b; }
-    return s.substr(a, b - a);
+    // Every caller reads an "A" API (the ANSI code page: 1252, 1251 ...) or a
+    // file, and the text is shown in the new window, whose strings must be
+    // UTF-8: valid UTF-8 stays, anything else is converted from the ANSI code
+    // page, so a localised "Controlador de host USB" keeps its accents.
+    return utf8OrAnsiToUtf8(s.substr(a, b - a));
 }
 
 #if defined(_WIN32)

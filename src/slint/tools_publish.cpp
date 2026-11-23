@@ -2,6 +2,7 @@
 // gestures as the Effects tools_logic.hpp names for them, and the work the Effects hand to the publisher (the disk workers, the answers the airband section
 // waits for, the paced Tick all). SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "tools_publish.hpp"
+#include "safe_text.hpp"
 
 #include "desk_logic.hpp"
 
@@ -50,7 +51,7 @@ constexpr int kTickSettleFrames = 3;       // frames after the last row went out
 constexpr std::int64_t kSquelchEveryMs = 100;   // a drag of the squelch slider reaches the engine ten times a second at most, the last position always
 constexpr double kRenameWantS = 4.0;       // a group just renamed: the filter follows it for this long, then gives up
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {

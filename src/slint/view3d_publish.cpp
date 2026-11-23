@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "view3d_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -24,7 +25,7 @@ namespace foxsdr::slintview3d {
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 constexpr int kDefaultW = 960, kDefaultH = 400;    // before the well has reported its size
 constexpr int kMaxW = 1280, kMaxH = 800;           // a well bigger than this is painted at this and scaled up (image-fit fill)

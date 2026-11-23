@@ -1,6 +1,7 @@
 // The radio workspace's publisher - see workspace_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "workspace_publish.hpp"
+#include "safe_text.hpp"
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -19,7 +20,7 @@ using namespace foxsdr::slinthost;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 std::string f5(double v) {
     char b[32];

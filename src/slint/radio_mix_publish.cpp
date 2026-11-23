@@ -1,6 +1,7 @@
 // The strip, audio mix, card and remove question published into the window - see radio_mix_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "radio_mix_publish.hpp"
+#include "safe_text.hpp"
 
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -14,7 +15,7 @@ namespace foxsdr::slintworkspace {
 using namespace foxsdr::slinthost;
 
 namespace {
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 template <class T>
 std::shared_ptr<slint::Model<T>> modelOf(std::vector<T> rows) { return std::make_shared<slint::VectorModel<T>>(std::move(rows)); }
 }  // namespace

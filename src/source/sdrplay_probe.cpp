@@ -120,7 +120,7 @@ std::string fmt(const char* f, ...) {
 
 std::string errName(const abi::Api& api, abi::ErrT err) {
     const char* s = (api.GetErrorString != nullptr) ? api.GetErrorString(err) : nullptr;
-    return fmt("%s (%d)", (s != nullptr) ? s : "error", static_cast<int>(err));
+    return fmt("%s (%d)", (s != nullptr) ? core::utf8OrAnsiToUtf8(s).c_str() : "error", static_cast<int>(err));
 }
 
 // EVERYTHING THE SERVICE'S THREADS TOUCH, held by shared_ptr so an abandoned

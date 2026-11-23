@@ -52,6 +52,153 @@ inline std::size_t utf8CharLen(const char* p) {
     return len;
 }
 
+// --- STRICT VALIDATION AND REPAIR ------------------------------------------
+// WHY THIS EXISTS (0.99.112, field crash groups 6CCFD0C0E58FC30C and
+// 104F425230C2A742): the Slint window's slint::SharedString checks its bytes
+// with Rust's str::from_utf8().unwrap(), so ONE byte that is not UTF-8 (a
+// Windows-1252 0xF3 in a localised Windows text, trailing junk in a firmware
+// answer) aborts the whole process. The helpers below say whether text is
+// well formed, and make it so - invalid bytes become U+FFFD - without ever
+// touching text that is already valid.
+
+// The length of the well-formed UTF-8 sequence that starts at s[i], or 0 when
+// the bytes there are not one. Strict as Rust is: no overlong forms, no
+// surrogates (U+D800-DFFF), nothing above U+10FFFF.
+inline std::size_t utf8SeqLen(std::string_view s, std::size_t i) {
+    const auto b = [&](std::size_t k) { return static_cast<unsigned char>(s[k]); };
+    const unsigned c = b(i);
+    if (c < 0x80) { return 1; }
+    std::size_t len = 0;
+    unsigned lo = 0x80;
+    unsigned hi = 0xBF;
+    if (c >= 0xC2 && c <= 0xDF) {
+        len = 2;
+    } else if (c >= 0xE0 && c <= 0xEF) {
+        len = 3;
+        if (c == 0xE0) { lo = 0xA0; }
+        if (c == 0xED) { hi = 0x9F; }
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        len = 4;
+        if (c == 0xF0) { lo = 0x90; }
+        if (c == 0xF4) { hi = 0x8F; }
+    } else {
+        return 0;
+    }
+    if (i + len > s.size()) { return 0; }
+    const unsigned second = b(i + 1);
+    if (second < lo || second > hi) { return 0; }
+    for (std::size_t k = 2; k < len; ++k) {
+        if ((b(i + k) & 0xC0u) != 0x80u) { return 0; }
+    }
+    return len;
+}
+
+// How many leading bytes of `s` are well-formed (Rust's Utf8Error::valid_up_to
+// when it is not all of them). s.size() when the whole text is valid.
+inline std::size_t utf8ValidUpTo(std::string_view s) {
+    std::size_t i = 0;
+    while (i < s.size()) {
+        const std::size_t n = utf8SeqLen(s, i);
+        if (n == 0) { break; }
+        i += n;
+    }
+    return i;
+}
+
+inline bool isValidUtf8(std::string_view s) { return utf8ValidUpTo(s) == s.size(); }
+
+// What sanitizeUtf8 found, for a caller that wants to log it.
+struct Utf8Repair {
+    std::size_t firstBad = 0;  // offset of the first invalid byte (valid when badBytes > 0)
+    std::size_t badBytes = 0;  // how many bytes were replaced
+};
+
+// `s` as well-formed UTF-8: every byte that is not part of a valid sequence is
+// replaced by U+FFFD (one per byte). Valid text, including embedded NULs, comes
+// back unchanged.
+inline std::string sanitizeUtf8(std::string_view s, Utf8Repair* repair = nullptr) {
+    if (repair != nullptr) { *repair = Utf8Repair{}; }
+    const std::size_t ok = utf8ValidUpTo(s);
+    if (ok == s.size()) { return std::string(s); }
+    std::string out;
+    out.reserve(s.size() + 8);
+    out.append(s.data(), ok);
+    std::size_t i = ok;
+    if (repair != nullptr) { repair->firstBad = ok; }
+    while (i < s.size()) {
+        const std::size_t n = utf8SeqLen(s, i);
+        if (n == 0) {
+            out += "�";
+            if (repair != nullptr) { ++repair->badBytes; }
+            ++i;
+        } else {
+            out.append(s.data() + i, n);
+            i += n;
+        }
+    }
+    return out;
+}
+
+// In place, same length: every invalid byte becomes '?'. For a fixed buffer
+// that cannot grow (the log ring's line). Returns how many bytes were changed.
+inline std::size_t utf8ReplaceInvalidInPlace(char* buf, std::size_t len) {
+    if (buf == nullptr) { return 0; }
+    const std::string_view s(buf, len);
+    std::size_t changed = 0;
+    std::size_t i = utf8ValidUpTo(s);
+    while (i < len) {
+        const std::size_t n = utf8SeqLen(s, i);
+        if (n == 0) {
+            buf[i++] = '?';
+            ++changed;
+        } else {
+            i += n;
+        }
+    }
+    return changed;
+}
+
+// Up to `maxBytes` bytes of `s` from `from` on, as lower-case hex pairs
+// separated by spaces: what a fault log line may say of text it must not quote.
+inline std::string hexOfBytes(std::string_view s, std::size_t from, std::size_t maxBytes = 32) {
+    static const char* const kDigits = "0123456789abcdef";
+    std::string out;
+    for (std::size_t i = from; i < s.size() && i - from < maxBytes; ++i) {
+        if (!out.empty()) { out.push_back(' '); }
+        const auto c = static_cast<unsigned char>(s[i]);
+        out.push_back(kDigits[c >> 4]);
+        out.push_back(kDigits[c & 0xF]);
+    }
+    return out;
+}
+
+// Text a DEVICE or the OS handed over, made fit to show: cut at the first NUL
+// (a fixed field that was never terminated carries junk after it), control
+// characters turned into spaces, ends trimmed, and what is left made valid
+// UTF-8.
+inline std::string cleanDeviceText(std::string_view s) {
+    const std::size_t nul = s.find('\0');
+    if (nul != std::string_view::npos) { s = s.substr(0, nul); }
+    std::string t(s);
+    for (char& c : t) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7F) { c = ' '; }
+    }
+    const std::size_t a = t.find_first_not_of(' ');
+    if (a == std::string::npos) { return std::string(); }
+    const std::size_t z = t.find_last_not_of(' ');
+    return sanitizeUtf8(std::string_view(t).substr(a, z - a + 1));
+}
+
+// Text in a Windows code page (what every "A" function answers in the
+// machine's ANSI code page: Windows-1252 on an English or Western European
+// PC, 1251 on a Russian one) as UTF-8. Implemented in utf8_ansi.cpp.
+std::string codePageToUtf8(std::string_view s, unsigned codePage);
+// The same for the machine's own ANSI code page (CP_ACP).
+std::string ansiToUtf8(std::string_view s);
+// Valid UTF-8 is returned as it is; anything else is taken to be ANSI.
+std::string utf8OrAnsiToUtf8(std::string_view s);
+
 // The character after the one at `p`.
 inline const char* utf8Next(const char* p) { return p + utf8CharLen(p); }
 

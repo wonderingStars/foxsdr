@@ -1,6 +1,7 @@
 // s5_publish.cpp - see s5_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "s5_publish.hpp"
+#include "safe_text.hpp"
 
 #include <string>
 #include <vector>
@@ -14,7 +15,7 @@ namespace foxsdr::slints5 {
 namespace {
 namespace slk = foxsdr::slintlanek;
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 KRow toK(const slk::Row& r) {
     KRow k;

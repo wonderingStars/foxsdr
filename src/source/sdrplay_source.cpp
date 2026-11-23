@@ -153,7 +153,12 @@ std::string errText(const abi::Api& api, abi::ErrT err) {
     char buf[128];
     const char* s = (api.GetErrorString != nullptr) ? api.GetErrorString(err) : nullptr;
     if (s != nullptr) {
-        std::snprintf(buf, sizeof(buf), "%s (%d)", s, static_cast<int>(err));
+        // The vendor library's own sentence, in whatever code page it was written in: made UTF-8
+        // before it reaches the log (shown in the new window) or lastError() (0.99.112 crash groups
+        // 6CCFD0C0E58FC30C and 104F425230C2A742).
+        const std::string text = core::utf8OrAnsiToUtf8(s);
+        std::snprintf(buf, sizeof(buf), "%s (%d)", text.c_str(), static_cast<int>(err));
+        buf[core::utf8Floor(buf, sizeof(buf) - 1)] = '\0';
     } else {
         std::snprintf(buf, sizeof(buf), "error %d", static_cast<int>(err));
     }

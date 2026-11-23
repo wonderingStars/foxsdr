@@ -1,5 +1,6 @@
 // globe_publish.cpp - see globe_publish.hpp. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "globe_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -17,7 +18,7 @@ using namespace foxsdr::globe;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 template <class T> std::shared_ptr<slint::Model<T>> model(std::vector<T> v) { return std::make_shared<slint::VectorModel<T>>(std::move(v)); }
 std::shared_ptr<slint::Model<slint::SharedString>> strings(const std::vector<std::string>& v) {
     std::vector<slint::SharedString> out;

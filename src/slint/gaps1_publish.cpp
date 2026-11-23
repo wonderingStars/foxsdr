@@ -1,6 +1,7 @@
 // gaps1_publish.cpp - see gaps1_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "gaps1_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -13,7 +14,7 @@ namespace foxsdr::slintgaps1 {
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 // THE LIVE ANSWER: the site is asked on a detached worker (core::BetaLinkNameSender); a bounded run never gets this one.
 class LiveNet final : public LinkNet {

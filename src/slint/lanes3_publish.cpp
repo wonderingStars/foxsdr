@@ -1,6 +1,7 @@
 // lanes3_publish.cpp - see lanes3_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanes3_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -46,7 +47,7 @@ using sll::trim;
 // the screen's words: every literal below goes through the string tables (tools/i18n_keys.py finds the tr("...") calls)
 std::string tr(const char* s) { return cascade::i18n::tr(s); }
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 KRow toK(const Row& r) {
     KRow k;

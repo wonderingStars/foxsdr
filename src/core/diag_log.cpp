@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/diag_log.hpp"
 #include "core/radio_report.hpp"
+#include "core/utf8_text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -183,8 +184,17 @@ void DiagLog::write(const char* level, const char* msg) {
     std::size_t len = at + ((n > 0) ? static_cast<std::size_t>(n) : 0u);
     // Truncated, never grown: a log line is a diagnostic, not a data channel.
     const std::size_t maxLen = static_cast<std::size_t>(kLineBytes) - 1u;
-    if (len > maxLen) { len = maxLen; }
+    // ...at a whole character: the line is shown in the new window, and the
+    // text of one that ends half way through a letter is not valid UTF-8.
+    if (len > maxLen) { len = utf8Floor(line, maxLen); }
     line[len] = '\0';
+    // The line may carry text the program did not write (a device's own
+    // answer, a localised Windows sentence in the ANSI code page). Slint aborts
+    // the process on a text that is not UTF-8 (0.99.112, crash groups
+    // 6CCFD0C0E58FC30C and 104F425230C2A742), so a byte that is not part of a
+    // valid sequence is made '?' here, once, for the ring, the file and every
+    // report built from them. Valid lines are only scanned.
+    utf8ReplaceInvalidInPlace(line, len);
 
     {
         // THE RING FIRST, under its own lock, released before the file is touched:

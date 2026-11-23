@@ -1,6 +1,7 @@
 // lanex_publish.cpp - see lanex_publish.hpp.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "lanex_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -23,7 +24,7 @@ namespace slk = foxsdr::slintlanek;
 using slk::Row;
 
 std::string tr(const char* s) { return cascade::i18n::tr(s); }
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 KRow toK(const Row& r) {
     KRow k;

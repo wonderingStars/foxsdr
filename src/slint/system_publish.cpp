@@ -1,6 +1,7 @@
 // system_publish.cpp - the SYSTEM bank's publisher (system_publish.hpp): the host's models (system_logic.hpp) as the window's generated structs, the
 // window's gestures as the Effects system_logic.hpp names for them. SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "system_publish.hpp"
+#include "safe_text.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -45,7 +46,7 @@ namespace cc = cascade::core;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return slint::SharedString(s); }
+slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {
@@ -409,7 +410,7 @@ void SystemPublisher::applyWindow(const Effect& e) {
         const bool ok = slint::select_bundled_translation(inForce);
         std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), ok ? (inForce == "en" ? "english" : "bundled") : "not bundled");
         const foxsdr::slintfonts::Registered faces = foxsdr::slintfonts::registerForLanguage(ui_.window(), inForce);   // docs 6.62: the system's CJK face for the new language, or Inter again
-        ui_.global<Theme>().set_cjk_family(slint::SharedString(faces.family));
+        ui_.global<Theme>().set_cjk_family(ss(faces.family));
         if (!faces.labels.empty()) { std::fprintf(stderr, "foxsdr-slint: CJK faces %s, font-family \"%s\"\n", faces.labels.c_str(), faces.family.c_str()); }
     }
     if ((e.apply & kApplyDiagnostics) != 0u) { duties_.diagnosticsChanged(); }
