@@ -253,6 +253,12 @@ public:
     // fallback (plain overlapped reads because the pipe refused RAW_IO). Returned
     // once and cleared; the driver logs it and counts it in the radio report.
     virtual std::string takeStreamNote() { return std::string(); }
+    // streamAccount(): one line saying how each call of the last stream end and start went ("abort: ok; auto-clear-stall: ok; auto-suspend off: ok;
+    // pipe reset: refused, Windows error 6"), for the line a driver writes when a restart fails. Not cleared by reading. No serial number, no path.
+    virtual std::string streamAccount() { return std::string(); }
+    // TEST SEAM (the re-open's bench tool): from now on every call on this transport fails as one on a handle that a re-enumeration invalidated does
+    // ("Windows error 6"), WITHOUT freeing anything a thread may be inside. False when the transport cannot.
+    virtual bool invalidateForTest() { return false; }
 
     // Selects alternate setting `setting` (the descriptor's bAlternateSetting
     // value) of interface `interfaceIndex` (0 = the interface the transport

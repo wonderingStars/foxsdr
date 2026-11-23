@@ -64,12 +64,22 @@ void Rtl2832u::note(const char* what) {
     }
 }
 
+// The only two places a transfer reaches the transport, so the keep-going token (rtl2832u.hpp) is honoured by every one.
+int Rtl2832u::ctlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, const std::uint8_t* data, std::size_t len) {
+    if (stopped()) { return -1; }
+    return dev_.controlOut(requestType, request, value, index, data, len, controlTimeoutMs_);
+}
+
+int Rtl2832u::ctlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, std::uint8_t* data, std::size_t len) {
+    if (stopped()) { return -1; }
+    return dev_.controlIn(requestType, request, value, index, data, len, controlTimeoutMs_);
+}
+
 // --- raw register access ----------------------------------------------------
 
 bool Rtl2832u::writeArray(RtlBlock block, std::uint16_t addr, const std::uint8_t* data,
                           std::uint8_t len) {
-    const int r = dev_.controlOut(usb::kRequestTypeVendorOut, 0, addr, blockIndexWrite(block),
-                                  data, len, controlTimeoutMs_);
+    const int r = ctlOut(usb::kRequestTypeVendorOut, 0, addr, blockIndexWrite(block), data, len);
     if (r != static_cast<int>(len)) {
         note("writing a register block");
         return false;
@@ -79,8 +89,7 @@ bool Rtl2832u::writeArray(RtlBlock block, std::uint16_t addr, const std::uint8_t
 
 bool Rtl2832u::readArray(RtlBlock block, std::uint16_t addr, std::uint8_t* data,
                          std::uint8_t len) {
-    const int r = dev_.controlIn(usb::kRequestTypeVendorIn, 0, addr, blockIndexRead(block), data,
-                                 len, controlTimeoutMs_);
+    const int r = ctlIn(usb::kRequestTypeVendorIn, 0, addr, blockIndexRead(block), data, len);
     if (r != static_cast<int>(len)) {
         note("reading a register block");
         return false;
@@ -114,8 +123,7 @@ bool Rtl2832u::demodWriteReg(std::uint8_t page, std::uint16_t addr, std::uint16_
     data[1] = static_cast<std::uint8_t>(value & 0xff);
     const std::uint16_t wValue = static_cast<std::uint16_t>((addr << 8) | 0x20);
     const std::uint16_t wIndex = static_cast<std::uint16_t>(0x10 | page);
-    const int r = dev_.controlOut(usb::kRequestTypeVendorOut, 0, wValue, wIndex, data, len,
-                                  controlTimeoutMs_);
+    const int r = ctlOut(usb::kRequestTypeVendorOut, 0, wValue, wIndex, data, len);
     if (r != static_cast<int>(len)) {
         note("writing a demodulator register");
         return false;
@@ -131,8 +139,7 @@ bool Rtl2832u::demodWriteReg(std::uint8_t page, std::uint16_t addr, std::uint16_
 int Rtl2832u::demodReadReg(std::uint8_t page, std::uint16_t addr, std::uint8_t len) {
     std::uint8_t data[2] = {0, 0};
     const std::uint16_t wValue = static_cast<std::uint16_t>((addr << 8) | 0x20);
-    const int r = dev_.controlIn(usb::kRequestTypeVendorIn, 0, wValue, page, data, len,
-                                 controlTimeoutMs_);
+    const int r = ctlIn(usb::kRequestTypeVendorIn, 0, wValue, page, data, len);
     if (r != static_cast<int>(len)) { return -1; }
     return (static_cast<int>(data[1]) << 8) | data[0];
 }
@@ -475,8 +482,7 @@ std::string Rtl2832u::stringDescriptor(std::uint8_t index) {
     // assumption from the one decision a V4 depends on.
     std::uint8_t langs[kMaxDescriptorRequest] = {0};
     std::uint16_t langId = 0x0409;
-    const int lr = dev_.controlIn(0x80, 0x06, 0x0300, 0x0000, langs, sizeof(langs),
-                                  controlTimeoutMs_);
+    const int lr = ctlIn(0x80, 0x06, 0x0300, 0x0000, langs, sizeof(langs));
     if (lr >= 4 && langs[1] == 0x03) {
         langId = static_cast<std::uint16_t>(static_cast<unsigned>(langs[2]) |
                                             (static_cast<unsigned>(langs[3]) << 8));
@@ -486,8 +492,7 @@ std::string Rtl2832u::stringDescriptor(std::uint8_t index) {
     // bRequest 6 (GET_DESCRIPTOR), wValue = (STRING << 8) | index,
     // wIndex = language id.
     std::uint8_t buf[kMaxDescriptorRequest] = {0};
-    const int r = dev_.controlIn(0x80, 0x06, static_cast<std::uint16_t>((0x03 << 8) | index),
-                                 langId, buf, sizeof(buf), controlTimeoutMs_);
+    const int r = ctlIn(0x80, 0x06, static_cast<std::uint16_t>((0x03 << 8) | index), langId, buf, sizeof(buf));
     if (r < 4 || buf[1] != 0x03) { return std::string(); }
     const int bytes = (buf[0] < r) ? buf[0] : r;
     // UTF-16LE, and every string this is used for is ASCII, so the low byte
@@ -512,7 +517,7 @@ std::string Rtl2832u::stringDescriptor(std::uint8_t index) {
 // that cannot be read at all.
 std::uint8_t Rtl2832u::stringIndex(int offset, std::uint8_t fallback) {
     std::uint8_t dd[18] = {0};
-    const int r = dev_.controlIn(0x80, 0x06, 0x0100, 0x0000, dd, sizeof(dd), controlTimeoutMs_);
+    const int r = ctlIn(0x80, 0x06, 0x0100, 0x0000, dd, sizeof(dd));
     if (r < offset + 1 || dd[1] != 0x01 || dd[offset] == 0) { return fallback; }
     return dd[offset];
 }

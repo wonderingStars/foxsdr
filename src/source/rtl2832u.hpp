@@ -49,6 +49,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -225,7 +226,16 @@ public:
     // True once a transfer has failed. The owner turns this into faulted().
     bool failed() const { return failed_; }
 
+    // THE KEEP-GOING TOKEN (the re-open, rtlsdr_source.cpp). When set and it reads false, every transfer this object would make returns failure at
+    // once without calling the transport, so a bring-up in progress when stop() is called ends within the one transfer already in flight. Null
+    // (the default) means no token: nothing changes for any other user of this class.
+    void setKeepGoing(const std::atomic<bool>* token) { keepGoing_ = token; }
+
 private:
+    bool stopped() const { return keepGoing_ != nullptr && !keepGoing_->load(std::memory_order_relaxed); }
+    int ctlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, const std::uint8_t* data, std::size_t len);
+    int ctlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, std::uint8_t* data, std::size_t len);
+    const std::atomic<bool>* keepGoing_ = nullptr;
     void note(const char* what);
     // One tuner transfer with the bounded retry described above.
     bool i2cTransfer(bool out, std::uint8_t slave, std::uint8_t* data, std::uint8_t len);
