@@ -172,7 +172,19 @@ int main(int argc, char** argv) {
     std::string why;
     const int rc = sendWait(makeCmd(FOXAPI_OP_SELECT_SOURCE, 0.0, 0, 1, b200.c_str()), &why);
     std::printf("select: status %d %s\n", rc, why.c_str());
-    for (int i = 0; i < 300 && fact("radio.1.source") == "siggen"; ++i) { sleepMs(100); }
+    // The open of a B200 loads its FPGA image and takes tens of seconds, on a worker: nothing is set until the radio is really the source.
+    bool opened = false;
+    for (int i = 0; i < 1800 && !opened; ++i) {
+        sleepMs(100);
+        const std::string dn = lower(state(1).deviceName);
+        opened = dn.find("generator") == std::string::npos && !dn.empty() && fact("radio.1.source") == "soapy";
+    }
+    std::printf("B200 is the source: %s (device '%s', source '%s')\n", opened ? "YES" : "NO", state(1).deviceName, fact("radio.1.source").c_str());
+    if (!opened) {
+        g_api->close_session(g_session);
+        eng->shutdown();
+        return 3;
+    }
     send(makeCmd(FOXAPI_OP_SET_ANTENNA, 0.0, 0, 1, "TX/RX"));   // the whip, a RECEIVE port
     send(makeCmd(FOXAPI_OP_SET_MODE, 0.0, FOXAPI_DEMOD_WFM, 1));
     send(makeCmd(FOXAPI_OP_SET_VOLUME, 0.0, 0, 1));            // volume zero: the audio path runs, nothing plays
