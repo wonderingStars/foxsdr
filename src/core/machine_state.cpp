@@ -28,7 +28,8 @@ namespace {
 
 constexpr std::size_t kMachineLineBudget = 172;   // DiagLog::kLineBytes (192) - NUL - the 18-character stamp - one spare
 std::atomic<int> g_display{-1};
-std::string g_lastLogged;   // the pass thread's (logMachineStateIfChanged)
+std::string g_lastLogged;      // the pass thread's (logMachineStateIfChanged)
+std::string g_lastClockKey;    // the clock and the memory load as last said (the second line); "" = not said yet
 
 std::string firstWord(const std::string& outcome) {
     std::string w;
@@ -66,7 +67,8 @@ std::string clockText() {
         ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState;
     };
     constexpr int kProcessorInformation = 11;   // POWER_INFORMATION_LEVEL::ProcessorInformation
-    const HMODULE lib = ::LoadLibraryW(L"powrprof.dll");
+    // From the Windows system folder ONLY (never the application's folder or the search path): a DLL planted beside the program must not be loaded.
+    const HMODULE lib = ::LoadLibraryExW(L"powrprof.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (lib == nullptr) { return out; }
     const auto fn = reinterpret_cast<CallNtPowerInformationFn>(reinterpret_cast<void*>(::GetProcAddress(lib, "CallNtPowerInformation")));
     const DWORD active = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
@@ -198,20 +200,44 @@ std::string machineStateText(const std::string& dspPrio, const std::string& srcP
     return text;
 }
 
+// WHAT "CHANGED" MEANS FOR THE CLOCK AND MEMORY WORDS: the processor clock pair as Windows reports it (NOW/MAX) or the system memory load in steps of
+// ten percent. The available-memory and commit figures move every time they are read and would make every call "changed", so they are not part of it.
+std::string clockMemoryKey() {
+    const int load = systemMemoryLoadPercent();
+    return clockText() + "|" + std::to_string(load < 0 ? -1 : load / 10);
+}
+
 bool logMachineStateIfChanged(const std::string& dspPrio, const std::string& srcPrio, bool force) {
     const std::string text = machineStateText(dspPrio, srcPrio);
     const bool clockInLine = text.find(" clock=") != std::string::npos;
-    const std::string clockLine = clockInLine ? std::string() : std::string("machine:") + " clock=" + clockText() + " " + memoryWords();
-    // CHANGE IS JUDGED ON THE STEADY WORDS ONLY: the clock and the memory figures move every time they are read and would make every call "changed".
+    const std::string clockLine = std::string("machine:") + " clock=" + clockText() + " " + memoryWords();
+    // CHANGE IS JUDGED ON THE STEADY WORDS ONLY for the first line: the clock and the memory figures move every time they are read.
     const std::size_t volatileAt = text.find(" clock=");
     const std::string key = volatileAt == std::string::npos ? text : text.substr(0, volatileAt);
-    if (!force && key == g_lastLogged) { return false; }
-    g_lastLogged = key;
-    diagLogf("%s", text.c_str());
-    if (!clockLine.empty()) { diagLogf("%s", clockLine.c_str()); }
-    return true;
+    bool said = false;
+    if (force || key != g_lastLogged) {
+        g_lastLogged = key;
+        diagLogf("%s", text.c_str());
+        said = true;
+        if (clockInLine) {
+            g_lastClockKey = clockMemoryKey();   // (said inline with the steady words)
+            return true;
+        }
+    }
+    // THE SECOND LINE, the clock and the memory, is said at the first call (nothing said yet) and after that only when a value in it CHANGED since it was
+    // last said (clockMemoryKey), not forced into every loss minute: the diagnostics ring holds 256 lines, and a loss minute already writes ten.
+    const std::string clockKey = clockMemoryKey();
+    if (!clockInLine && clockKey != g_lastClockKey) {
+        g_lastClockKey = clockKey;
+        diagLogf("%s", clockLine.c_str());
+        said = true;
+    }
+    return said;
 }
 
-void resetMachineStateLogForTest() { g_lastLogged.clear(); }
+void resetMachineStateLogForTest() {
+    g_lastLogged.clear();
+    g_lastClockKey.clear();
+}
 
 }  // namespace cascade::core

@@ -2561,10 +2561,10 @@ are several radios; every figure is capped at ten digits; tests hold each at its
 | `len_ms` | the minute's real length, so `busy_ms` and `cpu_ms` can be read against it (a late pass makes a minute longer than 60 s, and a block that began in the previous minute lands in this one) |
 | `ring_high_pct` | the ring's high-water mark as a share of its capacity |
 | `events` | `rate|switch|plugins|audio`, or `none`: context only |
-| `busy_ms` | the DSP thread's wall time inside blocks (the `noteDspBlock` span: includes a wait for `audioMutex_`, every plugin call, the audio write; excludes the ring read and the I/Q corrector) |
+| `busy_ms` | the DSP thread's wall time inside blocks (the `noteDspBlock` span: includes the I/Q corrector, a wait for `audioMutex_`, every plugin call, the audio write; excludes the ring read) |
 | `cpu_ms` | the DSP thread's OWN processor time (`GetThreadTimes`; `CLOCK_THREAD_CPUTIME_ID` on Linux and Android; `unknown` elsewhere), sampled every 256 blocks and when the thread ends. It can exceed `busy_ms` slightly: it also covers the ring read and the corrector |
 | `blocks` | blocks done (a block is 1024 samples: 128 microseconds of an 8 MS/s stream, which is why "longest block 1 ms" settles nothing) |
-| `longest_gap_ms`, `gap_phase` | the longest time between two ring reads, and the beat word the thread spent the most of it in: `ring` (the idle sleep: up to 15.6 ms on a process that has not asked for a finer timer, and says nothing is wrong), `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio` (the call into the plugins' audio taps ONLY), `host-audio` (the host's own AGC, squelch, resampler, notch, noise reduction and equaliser), `plugin-chain`, `sink`. The word is the last beat passed, not an exclusive span; the I/Q corrector is charged to `ring` |
+| `longest_gap_ms`, `gap_phase` | the longest time between two ring reads, and the beat word the thread spent the most of it in: `ring` (the idle sleep: up to 15.6 ms on a process that has not asked for a finer timer, and says nothing is wrong), `iq-corr` (the I/Q corrector, which is inside the busy time), `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio` (the call into the plugins' audio taps ONLY), `host-audio` (the host's own AGC, squelch, resampler, notch, noise reduction and equaliser), `plugin-chain`, `sink`. The word is the last beat passed, not an exclusive span |
 | `src_longest_gap_ms` | the source thread's longest time between two ring writes |
 | `gen_resyncs`, `gen_skipped_ms` | the free-running generator's "resync after a long stall" events (it fell more than 250 ms behind its own pacing) and the time they skipped |
 | `absent_discards` | the samples counted as absent in this minute (above) |
@@ -2611,7 +2611,7 @@ through a seam) and prints the timing, which it never asserts; on ARM64 it passe
 
 **Where the time goes (2026-11-23).** The three lines above say how long the DSP thread was busy; they did not say IN WHAT.
 A thread at half speed has no long gap and no phase to name. Every phase of the DSP loop (the heartbeat's words: `ring`,
-`spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio`, `host-audio`, `plugin-chain`, `sink`) now
+`iq-corr`, `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio`, `host-audio`, `plugin-chain`, `sink`) now
 adds the time it took to a per-phase total, from the two timestamps `dspBeat` already holds (no extra clock read; one relaxed
 load and store per beat; nothing allocates or locks, `tests/test_engine_publish_alloc.cpp` is green). `ring` is the ring read
 and the idle sleep, so it is not work and is never listed. A loss minute writes ONE more line beside the other three:
@@ -2637,7 +2637,8 @@ block kept the DSP thread busy over the last 5 s (the marks are taken at 10 s an
 budget over the cost to one decimal - BELOW 1 THE THREAD CANNOT KEEP UP, and the line is written all the same - and `top` the
 two largest phases as a percentage of the work. The line is said again, once per session, in the first loss minute whose cost
 per block is more than double the first baseline's (from that minute's own figures), so a machine that degrades during a
-session shows it. `rate=` carries no letters of a frequency unit, so the upload scrub leaves it alone.
+session shows it. That repeat is marked, so it is not mistaken for the first: `dsp baseline (again, cost doubled): rate=...`, and
+its figures are the whole loss minute's, not the 5 s window's. `rate=` carries no letters of a frequency unit, so the upload scrub leaves it alone.
 
 **Shedding display work, and the "not keeping up" note: removed (review of 2026-11-23).** An earlier version of this
 branch skipped the spectrum for seven blocks in eight, and the zoom, while the ring held more than half its capacity, and
@@ -2649,17 +2650,26 @@ and translation were wrong. Neither ships in this release. The design that was r
 correct, are described in the review (`D:/foxsdr-build/prep/REVIEW-ringdrop-shed-2026-11-23.md`, sections 1, 2, 3 and 8) for
 a later release. The spectrum path is as it was before the measurement was added; only the accounting touches it.
 
-**The machine line gains the clock and the memory.** `clock=NOW/MAX` is the processor's clock now (the highest of any logical
-processor) and at its maximum, in MHz, as Windows reports them (`CallNtPowerInformation(ProcessorInformation)` from
-powrprof.dll, resolved at run time, read-only; `unknown` where it fails): a core held at its lowest clock shows as NOW far below
-MAX. `mem_load=` is the system memory load in percent, `mem_avail_mb=` the available physical memory, `commit_mb=USED/LIMIT` the
-commit charge against the commit limit (`GlobalMemoryStatusEx`); each `unknown` on a failed query. (The key is `clock=`, not
-`mhz=`: the upload scrub reads "hz" as a frequency and masks every number on the line.) These words do not fit the line the
-steady words already fill, so they are the `machine: clock=... mem_load=... mem_avail_mb=... commit_mb=...` line that follows it
-(inline when they fit). The steady words decide whether the line is "changed"; every LOSS minute now says the machine again,
-because the clock and the memory are the figures it wants:
+**The machine line gains the clock and the memory.** `clock=NOW/MAX` is, in MHz, the MAXIMUM clock multiplied by the operating
+system's CURRENT THROTTLE LIMIT, each taken as the highest over all logical processors (`CallNtPowerInformation(ProcessorInformation)`
+from powrprof.dll, loaded by full path from the Windows system folder only - `LOAD_LIBRARY_SEARCH_SYSTEM32` - so a DLL planted beside
+the program is never loaded; read-only; `unknown` where it fails). IT IS NOT A MEASURED CLOCK: Microsoft defines `CurrentMhz` as the
+maximum clock times the current throttle, a nominal figure from the operating system's own state. A core slowed by firmware or by the
+processor itself (thermal, power limit) still reads NOW equal to MAX, so `clock=3200/3200` does NOT rule out throttling, and taking the
+highest over all cores hides a mix of fast and limited ones. The direct measure of a slow core is `cost_us` itself. (The key is
+`clock=`, not `mhz=`: the upload scrub reads "hz" as a frequency and masks every number on the line.) `mem_load=` is the system memory
+load in percent, `mem_avail_mb=` the available physical memory, `commit_mb=USED/LIMIT` the commit charge against the commit limit
+(`GlobalMemoryStatusEx`); each `unknown` on a failed query. These words do not fit the line the steady words already fill, so they are
+the `machine: clock=... mem_load=... mem_avail_mb=... commit_mb=...` line that follows it (inline when they fit). The steady words decide
+whether the first line is "changed". The second line is said at the first call (the first drain) and after that only when a value in it
+CHANGED since it was last said - the clock pair, or the memory load in steps of ten percent (the available-memory and commit figures move
+on every read and are not part of the test) - not in every loss minute: the diagnostics ring holds 256 lines and a loss minute already
+writes about ten.
 
     machine: clock=3200/3200 mem_load=47 mem_avail_mb=17080 commit_mb=40911/55199
+
+The I/Q corrector's time is counted: it has a phase of its own, `iq-corr`, and is inside `busy_ms` and `cost_us` (it used to be charged
+to `ring`, which is not work, so a session losing samples to it read as an idle thread).
 
 **The audio watchdog's re-open no longer holds the pass (item 7 of the diagnosis).** A dead output's re-open used
 `AudioOpen::request`, which waits up to 1.5 s for the worker; a device whose open always outlasted that held the engine's pass

@@ -338,7 +338,7 @@ public:
     //   dspCpuNs           the DSP thread's OWN processor time, sampled every 256 blocks and at the thread's end; dspCpuKnown() is false where the
     //                      platform cannot say. Busy near a minute with CPU far below it means the thread was descheduled or waited on a lock.
     //   dspBlocks          blocks done
-    //   takeDspGapLongest  the longest time between two successive ring reads, and the phase word (the heartbeat's: ring, spectrum, audio-lock,
+    //   takeDspGapLongest  the longest time between two successive ring reads, and the phase word (the heartbeat's: ring, iq-corr, spectrum, audio-lock,
     //                      taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink) the thread spent the most of that gap in. "ring" is the
     //                      idle sleep: on a Windows process that has not asked for a finer timer it is up to 15.6 ms and says nothing is wrong.
     //   takeSrcGapLongestNs  the source thread's longest time between two ring writes
@@ -353,10 +353,10 @@ public:
     std::uint64_t genResyncs() const { return genResyncs_.load(std::memory_order_relaxed); }
     std::uint64_t genSkippedNs() const { return genSkippedNs_.load(std::memory_order_relaxed); }
     // WHERE THE TIME GOES (2026-11-23): the wall time the DSP thread has spent in each phase of its loop since the pipeline began, cumulative and
-    // never reset (measured by difference, like the counters above). The phases are the heartbeat's words, in this order: ring, spectrum,
-    // audio-lock, taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink. "ring" is the read of the ring and the idle sleep
-    // when it is empty, so it is NOT work; the other ten are. Taken from the timestamps the heartbeat already reads: no extra clock read.
-    static constexpr unsigned kDspPhases = 11;
+    // never reset (measured by difference, like the counters above). The phases are the heartbeat's words, in this order: ring, iq-corr,
+    // spectrum, audio-lock, taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink. "ring" is the read of the ring and the idle sleep
+    // when it is empty, so it is NOT work; the other eleven are. Taken from the timestamps the heartbeat already reads: no extra clock read.
+    static constexpr unsigned kDspPhases = 12;
     static const char* dspPhaseName(unsigned index);   // "" for an index past the last
     void dspPhaseTotalsNs(std::uint64_t* out) const;   // kDspPhases values
     // The samples in one block (the FFT size the thread was built with): a block is that many samples at the input rate, so its duration is the

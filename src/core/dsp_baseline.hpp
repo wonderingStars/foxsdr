@@ -68,20 +68,26 @@ inline std::string dspTopPhasesText(const std::uint64_t* ns, const char* const* 
     return out.empty() ? std::string("none") : out;
 }
 
+// The words that lead the line. The first baseline of a session says "dsp baseline"; the same line said AGAIN in the first loss minute whose cost
+// per block more than doubled says it, so a reader can tell a minute's own figures (the whole loss minute, not the 5 s window) from the first.
+constexpr const char* kDspBaselineLabel = "dsp baseline";
+constexpr const char* kDspBaselineAgainLabel = "dsp baseline (again, cost doubled)";
+
 // THE BASELINE LINE: how much margin the machine has, in every session, whether or not it ever drops.
 //   dsp baseline: rate=<S/s> block=<samples> budget_us=<the block's duration> cost_us=<mean busy per block> headroom=<budget/cost> top=<phase>:<%>,...
 // `blocks` and `busyNs` are over the last few seconds. With no block in that window cost and headroom say "unknown".
-inline std::string dspBaselineText(double rateHz, std::size_t blockSamples, std::uint64_t blocks, std::uint64_t busyNs, const std::string& top) {
-    char line[200];
+inline std::string dspBaselineText(double rateHz, std::size_t blockSamples, std::uint64_t blocks, std::uint64_t busyNs, const std::string& top,
+                                   const char* label = kDspBaselineLabel) {
+    char line[240];
     const double budgetUs = rateHz > 0.0 ? 1.0e6 * static_cast<double>(blockSamples) / rateHz : 0.0;
     if (blocks == 0 || busyNs == 0 || budgetUs <= 0.0) {
-        std::snprintf(line, sizeof(line), "dsp baseline: rate=%.0f block=%zu budget_us=%.0f cost_us=unknown headroom=unknown top=%s", rateHz,
+        std::snprintf(line, sizeof(line), "%s: rate=%.0f block=%zu budget_us=%.0f cost_us=unknown headroom=unknown top=%s", label, rateHz,
                       blockSamples, budgetUs, top.c_str());
         return line;
     }
     const double costUs = static_cast<double>(busyNs) / 1000.0 / static_cast<double>(blocks);
     const double headroom = costUs > 0.0 ? budgetUs / costUs : 0.0;
-    std::snprintf(line, sizeof(line), "dsp baseline: rate=%.0f block=%zu budget_us=%.0f cost_us=%.1f headroom=%.1f top=%s", rateHz, blockSamples,
+    std::snprintf(line, sizeof(line), "%s: rate=%.0f block=%zu budget_us=%.0f cost_us=%.1f headroom=%.1f top=%s", label, rateHz, blockSamples,
                   budgetUs, costUs, headroom, top.c_str());
     return line;
 }

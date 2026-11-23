@@ -313,12 +313,18 @@ int main() {
             CHECK(commit > 0 && limit >= commit);
         }
         CHECK(joined.find("mem_load=") != std::string::npos && joined.find("mem_avail_mb=") != std::string::npos && joined.find("commit_mb=") != std::string::npos);
+        // THE SECOND LINE ONLY WHEN A VALUE CHANGED: a loss minute asks without forcing, and with the steady words and the clock and memory load as they
+        // were just said nothing more is written (it used to say both machine lines in every loss minute: 256 lines of ring, ten per minute).
+        const std::size_t after = linesWith("machine:").size();
+        for (int i = 0; i < 3; ++i) { cascade::core::logMachineStateIfChanged("above-normal: raised", "above-normal: raised", false); }
+        CHECK(linesWith("machine:").size() == after);
     }
 
     // --- 5b. A LOSS MINUTE SAYS HOW THE PROCESS FARED IN MEMORY; A DEGRADED MACHINE SAYS ITS BASELINE AGAIN ------------------------------------------
     {
         Access::closeDspMinute(app);
         const std::size_t baselines0 = linesWith("dsp baseline:").size();
+        const std::size_t again0 = linesWith("dsp baseline (again, cost doubled):").size();
         const std::size_t mem0 = linesWith("dsp minute: page_faults=").size();
         Pipeline::setDspPhaseLoadForTest("demod", 1500);   // far more than double the 200-microsecond baseline of section 4
         std::this_thread::sleep_for(std::chrono::milliseconds(3000));
@@ -339,8 +345,9 @@ int main() {
             CHECK(cascade::core::scrubUploadLine(mem.back()) == mem.back());
             accounting.push_back(mem.back());
         }
-        const std::vector<std::string> b = linesWith("dsp baseline:");
-        CHECK(b.size() == baselines0 + 1u);   // said again in this first loss minute whose cost more than doubled
+        const std::vector<std::string> b = linesWith("dsp baseline (again, cost doubled):");
+        CHECK(b.size() == again0 + 1u);   // said again in this first loss minute whose cost more than doubled, and MARKED as the repeat
+        CHECK(linesWith("dsp baseline:").size() == baselines0);   // ...so the plain line is still only the first baselines
         if (!b.empty()) {
             std::printf("baseline again: %s\n", b.back().c_str());
             CHECK(numberAfter(b.back(), " cost_us=") >= 1000);
@@ -351,7 +358,7 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         Pipeline::setDspPhaseLoadForTest("demod", 0);
         Access::closeDspMinute(app);
-        CHECK(linesWith("dsp baseline:").size() == baselines0 + 1u);
+        CHECK(linesWith("dsp baseline (again, cost doubled):").size() == again0 + 1u);
     }
 
     // --- 6. THE NEW LINES AT THEIR WIDEST fit the log's line with its stamp and survive the scrub --------------------------------------

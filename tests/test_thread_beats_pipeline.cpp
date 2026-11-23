@@ -149,7 +149,7 @@ int32_t noText(void*, char*, std::size_t) { return 0; }
 
 int main() {
     auto& reg = beats::Registry::instance();
-    const std::set<std::string> dspPhases = {"ring", "spectrum", "audio-lock", "taps", "plugin-iq", "patch", "demod",
+    const std::set<std::string> dspPhases = {"ring", "iq-corr", "spectrum", "audio-lock", "taps", "plugin-iq", "patch", "demod",
                                              "plugin-audio", "host-audio", "plugin-chain", "sink"};
 
     // ------------------------------------------------------------------------------------------------ 1. healthy

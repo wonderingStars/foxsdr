@@ -5,7 +5,9 @@
 //
 //   0. the baseline line's text and arithmetic;
 //   e. the per-phase time the minute reports adds up and names the phase that was loaded;
-//   g. the idle generator's cost per block at three rates (printed, with only a sanity bound).
+//   g. the idle generator's cost per block at three rates (printed, with only a sanity bound);
+//   h. the I/Q correction has a phase of its own and its time is INSIDE the busy time (cost_us), and the repeated baseline is marked;
+//   i. source pins: the per-phase arrays are sized from the phase count, and powrprof.dll is loaded from the Windows system folder only.
 //
 // (This file was test_dsp_shed.cpp; its sections about shedding display work were removed with the shedding itself, review 2026-11-23.)
 //
@@ -17,6 +19,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -75,7 +80,7 @@ Pipeline::Config appConfig() {
 }
 
 struct Run {
-    std::uint64_t read = 0, dropped = 0, blocks = 0, audioFrames = 0;
+    std::uint64_t read = 0, dropped = 0, blocks = 0, audioFrames = 0, busyNs = 0;
     std::uint64_t phaseNs[Pipeline::kDspPhases] = {};
     double seconds = 0.0;
 };
@@ -99,6 +104,7 @@ Run runLoaded(const char* phase, int us, int ms, double rate = 2000000.0) {
         r.read = p.sourceSamplesRead();
         r.dropped = p.ringDroppedSamples();
         r.blocks = p.dspBlocks();
+        r.busyNs = p.dspBusyNs();
         r.audioFrames = p.audioSamplesProduced();
         p.dspPhaseTotalsNs(r.phaseNs);
     }
@@ -166,6 +172,59 @@ int main() {
         std::printf("g. idle generator: %s\n", line.c_str());
         CHECK(blocks > 100u);
         CHECK(busy > 0u);
+    }
+
+    // --- h. THE I/Q CORRECTION IS A PHASE, INSIDE THE BUSY TIME ---------------------------------------------------------------------------
+    // 400 microseconds burned in the "iq-corr" phase of every block (what an expensive correction at a high input rate costs). It used to be charged
+    // to the ring read (not work, and outside the busy span), so cost_us missed it and a session losing samples to it read as an idle thread.
+    {
+        std::uint64_t idx = 0;
+        for (unsigned i = 0; i < Pipeline::kDspPhases; ++i) {
+            if (std::string(Pipeline::dspPhaseName(i)) == "iq-corr") { idx = i; }
+        }
+        CHECK(idx != 0u);
+        const Run r = runLoaded("iq-corr", 400, 2000);
+        const double costUs = static_cast<double>(r.busyNs) / 1000.0 / static_cast<double>(r.blocks ? r.blocks : 1);
+        std::printf("h. iq-corr +400 us: cost_us %.1f over %llu blocks, iq-corr phase %.0f ms\n", costUs, static_cast<unsigned long long>(r.blocks),
+                    static_cast<double>(r.phaseNs[idx]) / 1e6);
+        CHECK(r.blocks > 100u);
+        CHECK(r.phaseNs[idx] >= 400ull * 1000ull * (r.blocks - 1u));   // the burn is charged to the phase named for it
+        CHECK(costUs >= 400.0);                                        // ...and it is inside the block's busy time
+        // the phase text names it (it is work: only the ring is not)
+        const char* names[Pipeline::kDspPhases];
+        for (unsigned i = 0; i < Pipeline::kDspPhases; ++i) { names[i] = Pipeline::dspPhaseName(i); }
+        CHECK(cascade::core::dspPhaseMsText(r.phaseNs, names, Pipeline::kDspPhases, 140).find("iq-corr:") != std::string::npos);
+        CHECK(std::string(Pipeline::dspPhaseName(0)) == "ring");
+    }
+    {
+        // THE REPEATED BASELINE IS MARKED, and the widest marked line still fits the log's line with its stamp and tag.
+        const std::string first = cascade::core::dspBaselineText(2000000.0, 1024, 1000, 40000000ull, "demod:61,spectrum:22");
+        const std::string again = cascade::core::dspBaselineText(2000000.0, 1024, 1000, 90000000ull, "demod:61,spectrum:22", cascade::core::kDspBaselineAgainLabel);
+        std::printf("%s\n%s\n", first.c_str(), again.c_str());
+        CHECK(first.rfind("dsp baseline: rate=", 0) == 0);
+        CHECK(again.rfind("dsp baseline (again, cost doubled): rate=", 0) == 0);
+        CHECK(first.find("(again") == std::string::npos);
+        const std::string widest = cascade::core::dspBaselineText(192000000.0, 1048576, 123456789ull, 9999999999999ull, "plugin-audio:100,plugin-chain:100",
+                                                                  cascade::core::kDspBaselineAgainLabel) + " [radio 8]";
+        CHECK(widest.size() <= cascade::core::kDspLineTextBudget + cascade::core::kDspRadioTagBudget);
+    }
+
+    // --- i. SOURCE PINS -----------------------------------------------------------------------------------------------------------------
+    {
+        const auto readLf = [](const std::filesystem::path& p) {
+            std::ifstream in(p, std::ios::binary);
+            std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+            return s;
+        };
+        const std::filesystem::path root(CASCADE_SOURCE_DIR);
+        const std::string rx = readLf(root / "src" / "engine" / "receiver.hpp");
+        CHECK(rx.find("dspPhaseAtMinute_[cascade::core::Pipeline::kDspPhases]") != std::string::npos);
+        CHECK(rx.find("baselinePhaseMark_[cascade::core::Pipeline::kDspPhases]") != std::string::npos);
+        CHECK(rx.find("dspPhaseAtMinute_[11]") == std::string::npos && rx.find("baselinePhaseMark_[11]") == std::string::npos);
+        const std::string ms = readLf(root / "src" / "core" / "machine_state.cpp");
+        CHECK(ms.find("LoadLibraryExW(L\"powrprof.dll\", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)") != std::string::npos);
+        CHECK(ms.find("LoadLibraryW(") == std::string::npos && ms.find("LoadLibraryA(") == std::string::npos);   // no bare-name load anywhere in the file
     }
 
     return testSummary("test_dsp_phase_time");

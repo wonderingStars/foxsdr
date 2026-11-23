@@ -1312,11 +1312,12 @@ void Engine::closeDspMinute() {
         const char* topNames[kPhases];
         for (unsigned i = 0; i < kPhases; ++i) { topNames[i] = cascade::core::Pipeline::dspPhaseName(i); }
         const std::string text = cascade::core::dspBaselineText(rx().pipeline_.inputRateHz(), rx().pipeline_.dspBlockSamples(), blocks, busyNs,
-                                                               cascade::core::dspTopPhasesText(phaseNs, topNames, kPhases));
+                                                               cascade::core::dspTopPhasesText(phaseNs, topNames, kPhases),
+                                                               cascade::core::kDspBaselineAgainLabel);
         cascade::core::diagLogf("%s%s", text.c_str(), radioTag.c_str());
     }
     // THE MACHINE, AGAIN WHEN IT CHANGED since the last time it was said (power source, throttling, window, display, priorities).
-    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), true);   // (forced: the clock and the memory are what a loss minute wants, and they move)
+    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), false);   // (the clock and memory line follows only when a value in it changed since it was said)
     if (dropped == 0) { return; }   // (only the application's own pause cost samples, or the audio minute beside this one is bad: said, never filed)
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the

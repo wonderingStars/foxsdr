@@ -80,11 +80,11 @@ thread_local cascade::core::beats::Registration* t_dspBeat = nullptr;
 // THE BEAT WORDS, as an index (2026-11-23): the same words the heartbeat has always carried, now also the phases the minute's gap accounting
 // attributes time to. A phase is the span from one dspBeat call to the next.
 enum DspPhase : unsigned {
-    kPhRing, kPhSpectrum, kPhAudioLock, kPhTaps, kPhPluginIq, kPhPatch, kPhDemod, kPhPluginAudio, kPhHostAudio, kPhPluginChain, kPhSink, kPhCount
+    kPhRing, kPhIqCorr, kPhSpectrum, kPhAudioLock, kPhTaps, kPhPluginIq, kPhPatch, kPhDemod, kPhPluginAudio, kPhHostAudio, kPhPluginChain, kPhSink, kPhCount
 };
 // "plugin-audio" is ONLY the call into the plugins' audio taps; "host-audio" is the host's own audio chain after it (AGC, squelch, resampler,
 // notch, noise reduction, equaliser): the review of 70d16f00 found the one word covering both.
-constexpr const char* kDspPhaseNames[kPhCount] = {"ring",      "spectrum",     "audio-lock",   "taps",         "plugin-iq",
+constexpr const char* kDspPhaseNames[kPhCount] = {"ring",      "iq-corr",      "spectrum",     "audio-lock",   "taps",         "plugin-iq",
                                                   "patch",     "demod",        "plugin-audio", "host-audio",   "plugin-chain", "sink"};
 static_assert(kPhCount <= 16, "the gap mark packs the phase index in four bits");
 
@@ -2839,9 +2839,12 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
-        iqCorr_->process(acc.data(), n);   // F16: the I/Q correction (nothing at all while its mask is 0)
-        dspBeat(kPhSpectrum);
+        // THE BUSY SPAN STARTS HERE, with the I/Q correction (F16; nothing at all while its mask is 0) in its own phase: it is a per-sample cost at the
+        // INPUT rate, and charged to the ring read (as it was) it was invisible to the minute's accounting and to `cost_us` (review of the ringdrop branch).
         const auto blockBegan = std::chrono::steady_clock::now();
+        dspBeat(kPhIqCorr);
+        iqCorr_->process(acc.data(), n);
+        dspBeat(kPhSpectrum);
         if (specOn_.load(std::memory_order_acquire)) {
             // The spectrum block (setSpectrum): frames come at its own rate from these same samples and are pulled by getLatestFrame.
             specBlock_->process(acc.data(), n);
