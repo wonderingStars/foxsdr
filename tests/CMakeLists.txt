@@ -18,7 +18,10 @@ if(NOT WIN32)
         # Hot-plug detection (core/sys_device_watch.cpp) is a hidden window that receives WM_DEVICECHANGE; off Windows DeviceArrivalWatcher::start()
         # and inject() return false, so there is no watcher to test (a Linux one would listen to udev/netlink uevents: an open row in
         # docs/multi-radio-records/linux-local.md, section "The 30 reds").
-        test_engine_api_hotplug)
+        test_engine_api_hotplug
+        # The hand-off holder is a second process started with CreateProcessA and ended with TerminateProcess (PROCESS_INFORMATION, GetModuleFileNameA,
+        # GetCurrentProcessId, __declspec(noinline)): arm64 run 45272697461 stopped on exactly these. A POSIX holder (fork/exec, kill, getpid) is a rewrite.
+        test_radio_reports_engine)
     foreach(_t ${CASCADE_WINDOWS_ONLY_TESTS})
         list(REMOVE_ITEM CASCADE_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/${_t}.cpp")
     endforeach()
