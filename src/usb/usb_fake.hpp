@@ -153,6 +153,9 @@ public:
     std::set<int> failBulkReadsAt;
     // While true every readBulk() parks (a reader stuck inside the kernel); clear it to let the parked reader go.
     std::atomic<bool> blockReads{false};
+    // Called (on the reader's thread, inside readBulk) just before any read this fake fails returns -1: how a test makes something happen at exactly the
+    // moment a stream stops, such as a control call that takes the driver's device lock.
+    std::function<void()> onBulkFail;
     // The text failBulkAfter's failures carry.
     std::string failBulkAfterText = "fake: the device is gone";
     std::string failBulkText = "fake: a bulk read failed (Windows error 31)";
@@ -348,14 +351,17 @@ public:
         ++bulkReads;
         if (failBulkReadsAt.count(bulkReads) != 0) {
             lastError_ = failBulkText;
+            if (onBulkFail) { onBulkFail(); }
             return -1;
         }
         if (failBulkTransientFrom >= 0 && bulkReads > failBulkTransientFrom && bulkReads <= failBulkTransientFrom + failBulkTransientCount) {
             lastError_ = "a bulk read failed (Windows error 31)";
+            if (onBulkFail) { onBulkFail(); }
             return -1;
         }
         if (failBulkAfter >= 0 && bulkReads > failBulkAfter) {
             lastError_ = failBulkAfterText;
+            if (onBulkFail) { onBulkFail(); }
             return -1;
         }
         // A REAL EMPTY READ COSTS TIME, and a fake that returns 0 instantly
