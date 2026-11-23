@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/stereo_fm.hpp"
 
+#include "dsp/dsp_reference.hpp"
 #include "dsp/dsp_substep.hpp"
 
 #include <algorithm>
@@ -215,6 +216,7 @@ std::size_t StereoFm::process(const float* mpx, std::size_t n, float* left,
     // rather than several because every quantity here is causal in the sample
     // index — splitting it into per-block passes would make the result depend
     // on where the caller chose to cut the stream.
+    const bool alwaysCarrier = referenceKernel(kRefStereoCarrier);   // (the reference path: the carrier is computed even while the gate is shut; tests only)
     DSP_STEP_BEGIN(stepPll, "stereo.pll");
     for (std::size_t i = 0; i < n; ++i) {
         const double x = static_cast<double>(mpx[i]);
@@ -282,14 +284,24 @@ std::size_t StereoFm::process(const float* mpx, std::size_t n, float* left,
             // half from the very oscillator that did the down-conversion is
             // what makes the doubling exact: there is no second oscillator to
             // drift, and squaring a phasor doubles its phase by construction.
-            const double psiC = psi_ + freq_ * pilotGroupDelay_;
-            const double c2 = std::cos(2.0 * psiC);
-            const double s2 = std::sin(2.0 * psiC);
-            const double ur = static_cast<double>(osc_[i].real());
-            const double ui = -static_cast<double>(osc_[i].imag());
-            const double u2r = ur * ur - ui * ui;
-            const double u2i = 2.0 * ur * ui;
-            carrier38 = c2 * u2r - s2 * u2i;  // = cos(2*Phi)
+            //
+            // NOT WHILE THE GATE IS SHUT (the demod performance pass): with the gate at exactly 0 and its target 0 (no pilot lock, or forced mono) the product
+            // below is multiplied by a gate of exactly 0, so the carrier - a cosine, a sine and a squaring per sample - changes nothing the audio filter
+            // sees: audioIn_'s imaginary part is plus or minus zero whatever the carrier was, the filter's imaginary accumulator starts at plus zero, and
+            // adding either zero to it (or to any partial sum) leaves it as it was, so every output is bit-for-bit what it was. The carrier is a pure function
+            // of the loop state (psi_, freq_) and the oscillator sample, neither of which this skips: when the gate opens the very next sample computes it
+            // from the same state it would always have had. A non-finite sample still takes the full path (a zero times infinity is not zero).
+            const bool gateIsShut = gate_ == 0.0 && !(locked_ && !forceMono_) && std::isfinite(x) && !alwaysCarrier;
+            if (!gateIsShut) {
+                const double psiC = psi_ + freq_ * pilotGroupDelay_;
+                const double c2 = std::cos(2.0 * psiC);
+                const double s2 = std::sin(2.0 * psiC);
+                const double ur = static_cast<double>(osc_[i].real());
+                const double ui = -static_cast<double>(osc_[i].imag());
+                const double u2r = ur * ur - ui * ui;
+                const double u2i = 2.0 * ur * ui;
+                carrier38 = c2 * u2r - s2 * u2i;  // = cos(2*Phi)
+            }
 
             // Loop update, AFTER the carrier has been taken, so the phase used
             // for sample i depends only on samples up to i-1.

@@ -9,6 +9,8 @@
 //        8192 so every remainder of the several-outputs-at-once grouping and every decimation-grid phase occurs, from an unaligned start;
 //   E3   the spectrum's dB conversion moved to the pull (P3): the estimator's two steps against the estimator as it was, bit for bit; the Pipeline's
 //        frames pulled at random block counts against a reference estimator fed the same samples; two consumers of one frame; the block path's frames.
+//   E4   the stereo decoder's 38 kHz carrier skipped while the gate is shut (P4): no pilot, a pilot, a pilot switched on and off every 300 ms, and
+//        forced mono, each against the reference with the carrier always computed; the audio must match in every bit.
 //   E1c  the whole receive chain (tests/demod_chain.hpp, the pipeline's classes in the pipeline's order) for each of the eight modes over 10 s:
 //        the four feeds the pipeline produces (the audio, the audio decoder plugins' tap, the IF recorder's, the multiplex recorder's) are
 //        hashed, printed and compared bit for bit with the same chain run with the optimised kernels switched back to their reference paths
@@ -120,10 +122,11 @@ struct ChainRun {
     std::uint64_t hAudio = 0, hDecoder = 0, hIf = 0, hMpx = 0;
 };
 
-ChainRun runChain(DemodMode mode, Signal::Kind kind, double seconds, unsigned referenceMask, int pilotToggleMs = 0, double rate = 2.0e6) {
+ChainRun runChain(DemodMode mode, Signal::Kind kind, double seconds, unsigned referenceMask, int pilotToggleMs = 0, double rate = 2.0e6, bool forceMono = false) {
     constexpr std::size_t kBlock = 1024;
     cascade::dsp::setReferenceKernels(referenceMask);
     demodchain::Chain chain(rate, mode, 300000.0, /*keep=*/true);
+    chain.stereo().setForceMono(forceMono);
     Signal sig(kind, rate, pilotToggleMs);
     std::vector<std::complex<float>> in(kBlock);
     const std::size_t blocks = static_cast<std::size_t>(seconds * rate / static_cast<double>(kBlock));
@@ -313,6 +316,37 @@ int main() {
             }
             std::printf("E3c: spectrum block: %zu frames, hash %016llx\n", frames, static_cast<unsigned long long>(h));
             CHECK(frames > 20u);
+        }
+    }
+
+    // --- E4. THE STEREO CARRIER NOT COMPUTED WHILE THE GATE IS SHUT (P4) ------------------------------------------------------------------------
+    {
+        struct Case {
+            const char* name;
+            Signal::Kind kind;
+            int toggleMs;
+            bool forceMono;
+        };
+        const Case cases[] = {
+            {"no pilot (the generator's signal)", Signal::kGenerator, 0, false},
+            {"a locked pilot (the gate opens after ~50 ms)", Signal::kStereoFm, 0, false},
+            {"a pilot switched off and on every 300 ms", Signal::kStereoFm, 300, false},
+            {"forced mono on a stereo multiplex", Signal::kStereoFm, 0, true},
+        };
+        for (const Case& cs : cases) {
+            const ChainRun ref = runChain(DemodMode::WFM, cs.kind, 10.0, cascade::dsp::kRefStereoCarrier, cs.toggleMs, 2.0e6, cs.forceMono);
+            const ChainRun now = runChain(DemodMode::WFM, cs.kind, 10.0, 0u, cs.toggleMs, 2.0e6, cs.forceMono);
+            const refdsp::Diff dl = refdsp::compareFloats(ref.feeds.audioL, now.feeds.audioL);
+            const refdsp::Diff dr = refdsp::compareFloats(ref.feeds.audioR, now.feeds.audioR);
+            const refdsp::Diff dd = refdsp::compareFloats(ref.feeds.decoder48, now.feeds.decoder48);
+            std::printf("E4: %-46s audio L %s R %s decoder %s (%zu frames, audio hash %016llx)\n", cs.name, dl.sameBits ? "bit-identical" : "DIFFERENT",
+                        dr.sameBits ? "bit-identical" : "DIFFERENT", dd.sameBits ? "bit-identical" : "DIFFERENT", now.feeds.audioL.size(), static_cast<unsigned long long>(now.hAudio));
+            CHECK(dl.sameBits && dr.sameBits && dd.sameBits);
+            if (cs.forceMono || cs.kind == Signal::kGenerator) {   // the gate never opened: L == R exactly (the existing tests demand it too)
+                CHECK(now.feeds.audioL == now.feeds.audioR);
+            } else {
+                CHECK(now.feeds.audioL != now.feeds.audioR);        // the gate opened: the stereo image is there
+            }
         }
     }
 
