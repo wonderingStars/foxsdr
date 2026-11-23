@@ -42,8 +42,12 @@ inline std::mutex& reportedMutex() {
 // `s` as valid UTF-8, logging once per `site` when it had to be repaired.
 inline std::string valid(std::string_view s, const char* site) {
     if (cascade::core::isValidUtf8(s)) { return std::string(s); }
+    // ANSI FIRST: Windows' and the STL's own sentences arrive in the machine's code page, so the bytes that are not
+    // UTF-8 are read there and the reader sees the right accented letters; U+FFFD only if that gave nothing valid.
     cascade::core::Utf8Repair r;
-    std::string fixed = cascade::core::sanitizeUtf8(s, &r);
+    (void)cascade::core::sanitizeUtf8(s, &r);   // where the first bad byte is, for the log line
+    std::string fixed = cascade::core::utf8OrAnsiToUtf8(s);
+    if (!cascade::core::isValidUtf8(fixed)) { fixed = cascade::core::sanitizeUtf8(s); }
     bool first = false;
     {
         std::lock_guard<std::mutex> lk(reportedMutex());

@@ -339,7 +339,9 @@ std::shared_ptr<slint::Model<SettingField>> KitPublisher::fieldsModel(const std:
     }
     for (std::size_t i = 0; i < fields.size(); ++i) {
         const SettingField& now = fields[i];
-        const SettingField was = *cached->row_data(i);
+        const auto wasRow = cached->row_data(i);
+        if (!wasRow) { cached->set_row_data(i, now); continue; }   // a row the model lost: put it back (an empty optional must never be dereferenced)
+        const SettingField was = *wasRow;
         const auto choicesOf = [](const SettingField& x) { std::string c; if (x.choice_values) { for (std::size_t j = 0; j < x.choice_values->row_count(); ++j) { c += std::string(*x.choice_values->row_data(j)) + ""; } } return c; };
         const std::string nowChoices = choicesOf(now), wasChoices = choicesOf(was);
         if (was.id != now.id || was.value != now.value || was.error != now.error || was.pending != now.pending || was.checked != now.checked ||
@@ -1288,6 +1290,7 @@ void KitPublisher::publishPages(const FoxReceiverState& state) {
     }
     const int current = currentPage();
     for (std::size_t i = 0; i < pages_.size(); ++i) {
+        if (i >= pagesModel_->row_count()) { break; }   // the model and pages_ must agree (a plugin reload that changed the set rebuilds above): never index past the model
         const Page& p = pages_[i];
         // only a page that shows is built: the current one, and every torn one
         if (!p.torn && static_cast<int>(i) != current) { continue; }
@@ -1645,7 +1648,9 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_decode_row_clicked([this](int i) {
         auto rows = ui_.get_decode_rows();
         if (!rows || i < 0 || i >= static_cast<int>(rows->row_count())) { return; }
-        const DecodeRow r = *rows->row_data(static_cast<std::size_t>(i));
+        const auto rowOpt = rows->row_data(static_cast<std::size_t>(i));
+        if (!rowOpt) { return; }
+        const DecodeRow r = *rowOpt;
         const std::string id(r.id);
         const PluginRow* row = nullptr;
         switch (r.kind) {
@@ -1679,14 +1684,18 @@ void KitPublisher::wire() {
     ui_.global<::KitEvents>().on_decode_row_key([this](int i) {
         auto rows = ui_.get_decode_rows();
         if (!rows || i < 0 || i >= static_cast<int>(rows->row_count())) { return; }
-        const DecodeRow r = *rows->row_data(static_cast<std::size_t>(i));
+        const auto rowOpt = rows->row_data(static_cast<std::size_t>(i));
+        if (!rowOpt) { return; }
+        const DecodeRow r = *rowOpt;
         if (r.kind != 2) { return; }
         for (const BlockedRow& b : kit_.lists().blocked) { if (b.file == std::string(r.id) && !b.id.empty()) { kit_.updateBlocked(b.id); } }
     });
     ui_.global<::KitEvents>().on_decode_row_key2([this](int i) {
         auto rows = ui_.get_decode_rows();
         if (!rows || i < 0 || i >= static_cast<int>(rows->row_count())) { return; }
-        const DecodeRow r = *rows->row_data(static_cast<std::size_t>(i));
+        const auto rowOpt = rows->row_data(static_cast<std::size_t>(i));
+        if (!rowOpt) { return; }
+        const DecodeRow r = *rowOpt;
         if (r.kind != 2) { return; }
         const std::string key = "blocked:" + std::string(r.id);
         if (armedRemove_ == key && nowMs_ - armedAtMs_ < 5000) { kit_.removeBlocked(std::string(r.id)); armedRemove_.clear(); }
@@ -1714,7 +1723,9 @@ void KitPublisher::wire() {
     const auto entryRow = [this](int e) -> const PluginRow* {
         auto entries = ui_.get_plugin_entries();
         if (!entries || e < 0 || e >= static_cast<int>(entries->row_count())) { return nullptr; }
-        return rowByFile(kit_.lists().rows, std::string(entries->row_data(static_cast<std::size_t>(e))->file));
+        const auto entry = entries->row_data(static_cast<std::size_t>(e));
+        if (!entry) { return nullptr; }
+        return rowByFile(kit_.lists().rows, std::string(entry->file));
     };
     ui_.global<::KitEvents>().on_decode_entry_preset([this, entryRow](int e, int i) {
         const PluginRow* r = entryRow(e);
@@ -2037,9 +2048,13 @@ void KitPublisher::wire() {
         if (p == nullptr || p->kind != 6) { return nullptr; }
         auto pages = pagesModel_;
         if (!pages || static_cast<std::size_t>(i) >= pages->row_count()) { return nullptr; }
-        const PageTab t = *pages->row_data(static_cast<std::size_t>(i));
+        const auto tabOpt = pages->row_data(static_cast<std::size_t>(i));
+        if (!tabOpt) { return nullptr; }
+        const PageTab t = *tabOpt;
         if (!t.fitted.rows || row < 0 || row >= static_cast<int>(t.fitted.rows->row_count())) { return nullptr; }
-        return rowByFile(kit_.lists().rows, std::string(t.fitted.rows->row_data(static_cast<std::size_t>(row))->file));
+        const auto fitted = t.fitted.rows->row_data(static_cast<std::size_t>(row));
+        if (!fitted) { return nullptr; }
+        return rowByFile(kit_.lists().rows, std::string(fitted->file));
     };
     ui_.global<::KitEvents>().on_page_fitted_row_clicked([this, fittedRow](int i, int row) {
         const PluginRow* r = fittedRow(i, row);

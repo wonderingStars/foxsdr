@@ -16,6 +16,7 @@
 #include <string>
 
 #include "cjk_fonts.hpp"
+#include "core/utf8_text.hpp"   // a path from std::filesystem::path::string() is in the ANSI code page on Windows: converted before Slint sees it
 
 namespace foxsdr::slintfonts {
 
@@ -34,7 +35,7 @@ inline Registered registerForLanguage(slint::Window& window, const std::string& 
             out.labels += (out.labels.empty() ? "" : ", ") + face.label + " (already)";
             continue;
         }
-        const auto err = window.window_handle().register_font_from_path(slint::SharedString(face.path));
+        const auto err = window.window_handle().register_font_from_path(slint::SharedString(cascade::core::utf8OrAnsiToUtf8(face.path)));
         if (err) {
             std::fprintf(stderr, "foxsdr-slint: font %s not registered: %s\n", face.path.c_str(), std::string(*err).c_str());
             continue;

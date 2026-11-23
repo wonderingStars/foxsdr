@@ -21,6 +21,7 @@
 // write probe at all - inside an MSIX package the exe directory is read-only
 // by design and nothing here should try it.
 #include "core/diag_log.hpp"
+#include "core/utf8_text.hpp"
 #include "core/package_identity.hpp"
 #include "core/plugin_fault.hpp"
 #include "core/plugin_marker.hpp"
@@ -81,7 +82,8 @@ constexpr NativeModule kNoModule = nullptr;
 
 std::string lastOsError() {
     const DWORD err = ::GetLastError();
-    std::string msg = std::error_code(static_cast<int>(err), std::system_category()).message();
+    // The STL's text for a Windows code; made UTF-8 (a window shows this: see core/utf8_text.hpp) whatever code page the OS answered in.
+    std::string msg = utf8OrAnsiToUtf8(std::error_code(static_cast<int>(err), std::system_category()).message());
     // Windows messages carry a trailing CRLF and a period; trim so the reason
     // reads as one line in a log or a tooltip.
     while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' ')) {

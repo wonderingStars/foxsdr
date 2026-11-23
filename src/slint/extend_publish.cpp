@@ -924,7 +924,7 @@ void ExtendPublisher::runPictureProbe() {
             const auto s = entry.image.size();
             size = std::to_string(s.width) + "x" + std::to_string(s.height);
         }
-        line += " [" + std::to_string(i) + "] " + size + " (strip " + std::to_string(body.frames->row_count()) + " frames, caption \"" + std::string(body.frames->row_data(i)->caption) + "\")";
+        line += " [" + std::to_string(i) + "] " + size + " (strip " + std::to_string(body.frames->row_count()) + " frames, caption \"" + (body.frames->row_data(i) ? std::string(body.frames->row_data(i)->caption) : std::string()) + "\")";
     }
     pictureIndex_ = saved;
     probeLine_ = line;

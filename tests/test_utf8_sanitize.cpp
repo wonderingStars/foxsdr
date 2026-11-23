@@ -12,6 +12,9 @@
 
 #include <cstdio>
 #include <string>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include "test_check.hpp"
 
@@ -134,9 +137,37 @@ void testLogRing() {
     bool sawService = false;
     for (const std::string& line : log.ringSnapshot()) {
         CHECK(isValidUtf8(line));
-        if (line.find("service said: AirSpy M?INI") != std::string::npos) { sawService = true; }
+        if (line.find("service said: AirSpy M") != std::string::npos && line.find("INI v1.0") != std::string::npos) { sawService = true; }
     }
     CHECK(sawService);
+}
+
+void testAnsiFirst() {
+    std::printf("  ANSI first: the bytes that are not UTF-8 are read in the code page, valid UTF-8 around them is kept\n");
+#if defined(_WIN32)
+    // What the STL's / Windows' own sentence looks like in a Windows-1252 machine's answer.
+    const std::string sp = "El sistema no puede encontrar el archivo especificado. (c\xF3" "digo 2)";
+    CHECK(repairUtf8WithCodePage(sp, 1252) == "El sistema no puede encontrar el archivo especificado. (c\xC3\xB3" "digo 2)");
+    CHECK(repairUtf8WithCodePage("Impossible de trouver le fichier sp\xE9" "cifi\xE9", 1252) == "Impossible de trouver le fichier sp\xC3\xA9" "cifi\xC3\xA9");
+    CHECK(repairUtf8WithCodePage("Der Pfad f\xFCr \xDF", 1252) == "Der Pfad f\xC3\xBCr \xC3\x9F");
+    // Mixed: the valid UTF-8 letters stay, the lone ANSI byte is converted.
+    CHECK(repairUtf8WithCodePage("Portugu\xC3\xAAs c\xF3" "digo", 1252) == "Portugu\xC3\xAAs c\xC3\xB3" "digo");
+    CHECK(repairUtf8WithCodePage("plain", 1252) == "plain");
+    CHECK(isValidUtf8(repairUtf8WithCodePage(std::string(300, '\xF3'), 1252)));
+    if (::GetACP() == 1252) {
+        CHECK(utf8OrAnsiToUtf8(sp) == repairUtf8WithCodePage(sp, 1252));
+        diagLogf("ansi-first: %s", sp.c_str());
+        bool saw = false;
+        for (const std::string& l : DiagLog::instance().ringSnapshot()) {
+            if (l.find("ansi-first: El sistema no puede encontrar el archivo especificado. (c\xC3\xB3" "digo 2)") != std::string::npos) { saw = true; }
+        }
+        CHECK(saw);
+    } else {
+        std::printf("    (this machine's ANSI code page is %u, not 1252: the log-ring letter check is skipped)\n", ::GetACP());
+    }
+#else
+    SKIP_LINUX("code pages are a Windows facility");
+#endif
 }
 
 }  // namespace
@@ -149,5 +180,6 @@ int main() {
     testCleanDeviceText();
     testAnsi();
     testLogRing();
+    testAnsiFirst();
     return testSummary("test_utf8_sanitize");
 }

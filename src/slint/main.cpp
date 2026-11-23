@@ -1062,7 +1062,7 @@ int main(int argc, char** argv) {
 
     // ---- the menus: one Menu, filled per kind, dispatched by id ----
     const auto entry = [](MenuItemKind kind, int id, const char* label, const char* hint = "", bool checked = false, bool enabled = true, float value = 0.f) {
-        return MenuEntry{kind, id, slint::SharedString(label), slint::SharedString(hint), checked, enabled, value};
+        return MenuEntry{kind, id, ss(label), ss(hint), checked, enabled, value};
     };
     const auto displayBlock = [&](std::vector<MenuEntry>& e) {
         e.push_back(entry(MenuItemKind::Separator, 0, ""));
@@ -3215,7 +3215,7 @@ int main(int argc, char** argv) {
                 if (ds.path.rfind("event:", 0) == 0 || ds.path.rfind("textevent:", 0) == 0) {   // the toolkit's drop route, end to end: a DropEvent carrying a file path (event:) or only text (textevent:) goes to the window's own callbacks
                     slint::language::DropEvent ev;
                     if (ds.path[0] == 'e') { const std::string p = ds.path.substr(6); ev.data.set_file_paths(std::vector<std::filesystem::path>{std::filesystem::path(std::u8string(p.begin(), p.end()))}); }
-                    else { ev.data.set_plain_text(slint::SharedString(ds.path.substr(10))); }
+                    else { ev.data.set_plain_text(ss(ds.path.substr(10))); }
                     if (ui->invoke_file_drop_can(ev) == slint::language::DragAction::Copy) { ui->invoke_file_dropped(ev); }
                     continue;
                 }
@@ -3942,7 +3942,9 @@ int main(int argc, char** argv) {
             const auto rows = ui->get_decode_rows();
             if (rows) {
                 for (std::size_t i = 0; i < rows->row_count(); ++i) {
-                    const DecodeRow r = *rows->row_data(i);
+                    const auto rowOpt = rows->row_data(i);
+                    if (!rowOpt) { continue; }
+                    const DecodeRow r = *rowOpt;
                     if (std::string(r.id) != "store") { continue; }
                     if (name == "store.railChip") { out = std::string(r.chip); }
                     else if (name == "store.railLamp") { out = std::to_string(static_cast<int>(r.dot)); }

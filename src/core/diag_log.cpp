@@ -192,8 +192,17 @@ void DiagLog::write(const char* level, const char* msg) {
     // answer, a localised Windows sentence in the ANSI code page). Slint aborts
     // the process on a text that is not UTF-8 (0.99.112, crash groups
     // 6CCFD0C0E58FC30C and 104F425230C2A742), so a byte that is not part of a
-    // valid sequence is made '?' here, once, for the ring, the file and every
-    // report built from them. Valid lines are only scanned.
+    // valid sequence is read in the machine's ANSI code page here (the STL's and
+    // Windows' own sentences, a localised "El sistema no puede encontrar el
+    // archivo", arrive that way: the right accented letters, not marks), once,
+    // for the ring, the file and every report built from them. Valid lines are
+    // only scanned. Anything still invalid afterwards is made '?'.
+    if (!isValidUtf8(std::string_view(line, len))) {
+        const std::string fixed = utf8OrAnsiToUtf8(std::string_view(line, len));
+        len = utf8Floor(fixed.c_str(), (std::min)(fixed.size(), maxLen));
+        std::memcpy(line, fixed.data(), len);
+        line[len] = '\0';
+    }
     utf8ReplaceInvalidInPlace(line, len);
 
     {

@@ -196,7 +196,9 @@ inline std::string cleanDeviceText(std::string_view s) {
 std::string codePageToUtf8(std::string_view s, unsigned codePage);
 // The same for the machine's own ANSI code page (CP_ACP).
 std::string ansiToUtf8(std::string_view s);
-// Valid UTF-8 is returned as it is; anything else is taken to be ANSI.
+// Valid UTF-8 is returned as it is; every run of bytes that is not valid UTF-8 is read in the machine's ANSI code page.
+// The result is always valid UTF-8.
+std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage);
 std::string utf8OrAnsiToUtf8(std::string_view s);
 
 // The character after the one at `p`.

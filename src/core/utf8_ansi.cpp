@@ -52,9 +52,35 @@ std::string ansiToUtf8(std::string_view s) {
 #endif
 }
 
+// Valid UTF-8 stays exactly as it is; each run of bytes that is not valid UTF-8 is read in the code page. A line that is
+// mostly UTF-8 with one stray byte keeps its accents, and a line that is wholly ANSI ("El sistema no puede encontrar el
+// archivo" with a 0xF3 in it) comes out as the right letters.
+std::string repairUtf8WithCodePage(std::string_view s, unsigned codePage) {
+    const std::size_t ok = utf8ValidUpTo(s);
+    if (ok == s.size()) { return std::string(s); }
+    std::string out(s.substr(0, ok));
+    std::size_t i = ok;
+    while (i < s.size()) {
+        const std::size_t n = utf8SeqLen(s, i);
+        if (n != 0) {
+            out.append(s.data() + i, n);
+            i += n;
+            continue;
+        }
+        std::size_t j = i;
+        while (j < s.size() && utf8SeqLen(s, j) == 0) { ++j; }
+        out += codePageToUtf8(s.substr(i, j - i), codePage);
+        i = j;
+    }
+    return out;
+}
+
 std::string utf8OrAnsiToUtf8(std::string_view s) {
-    if (isValidUtf8(s)) { return std::string(s); }
-    return ansiToUtf8(s);
+#if defined(_WIN32)
+    return repairUtf8WithCodePage(s, CP_ACP);
+#else
+    return repairUtf8WithCodePage(s, 0);
+#endif
 }
 
 }  // namespace cascade::core

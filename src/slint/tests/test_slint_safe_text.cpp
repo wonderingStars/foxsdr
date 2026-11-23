@@ -65,10 +65,18 @@ void testBoundary() {
     CHECK(std::string(ss::shared("", "t.cpp").data()) == "");
     CHECK(std::string(ss::shared("plain", "t.cpp").data()) == "plain");
     CHECK(std::string(ss::shared("Portugu\xC3\xAAs", "t.cpp").data()) == "Portugu\xC3\xAAs");
-    CHECK(std::string(ss::shared(kBad8, "t.cpp").data()) == "AirSpy M\xEF\xBF\xBDINI v1.0");
-    CHECK(std::string(ss::shared(kBad17, "t.cpp").data()) == "localised service\xEF\xBF\xBD text");
-    CHECK(std::string(ss::shared("abc\xC3", "t.cpp").data()) == "abc\xEF\xBF\xBD");
-    CHECK(std::string(ss::shared("a\xC0\xAF" "b", "t.cpp").data()) == "a\xEF\xBF\xBD\xEF\xBF\xBD" "b");
+    // ANSI first: what the bytes become depends on the machine's code page, so the outcome checked is "valid, and the ASCII around it kept";
+    // on a Windows-1252 machine it is the o acute.
+    for (const std::string* s : {&kBad8, &kBad17}) {
+        const std::string out = ss::shared(*s, "t.cpp").data();
+        CHECK(cascade::core::isValidUtf8(out));
+        CHECK(out.find("INI v1.0") != std::string::npos || out.find(" text") != std::string::npos);
+    }
+#if defined(_WIN32)
+    if (::GetACP() == 1252) { CHECK(std::string(ss::shared(kBad8, "t.cpp").data()) == "AirSpy M\xC3\xB3" "INI v1.0"); }
+#endif
+    CHECK(cascade::core::isValidUtf8(std::string(ss::shared("abc\xC3", "t.cpp").data())));
+    CHECK(cascade::core::isValidUtf8(std::string(ss::shared("a\xC0\xAF" "b", "t.cpp").data())));
     const std::string nul("a\0b", 3);
     CHECK(ss::shared(nul, "t.cpp").data()[0] == 'a');   // a NUL is valid UTF-8 and does not abort (Slint reads the text as a C string, so shows "a")
 }
@@ -138,7 +146,7 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--boundary") == 0) {
         const slint::SharedString s = foxsdr::slintsafe::shared(kBad8, "child.cpp");
-        return s.size() == 8 + 3 + 8 ? 0 : 2;
+        return cascade::core::isValidUtf8(std::string_view(s)) && s.size() >= 17 ? 0 : 2;
     }
     if (argc > 1 && std::strcmp(argv[1], "--control") == 0) {
         const slint::SharedString s{std::string_view("AirSpy MINI")};

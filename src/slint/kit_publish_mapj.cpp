@@ -393,7 +393,7 @@ void KitPublisher::fillMapJModel(MapSurface& s, MapPage* pg, const std::string& 
     sig += "G" + std::to_string(j.labelCount) + std::string(jm.units) + std::string(jm.status) + mj_.cacheLine + std::to_string(j.layersOpen);
     // the legend rows the layers add, after the altitude rows
     std::vector<::LegendRow> legend;
-    if (m.legend) { for (std::size_t i = 0; i < m.legend->row_count(); ++i) { legend.push_back(*m.legend->row_data(i)); } }
+    if (m.legend) { for (std::size_t i = 0; i < m.legend->row_count(); ++i) { if (const auto row = m.legend->row_data(i)) { legend.push_back(*row); } } }
     for (const mj::LegendEntry& e : mj::layerLegend(j.layers, !mj_.locatorMarks.empty())) { legend.push_back({ss(tr(e.label)), colourOf(e.rgba)}); }
     m.legend = model(std::move(legend));
     m.attribution = ss(mj::creditLine(std::string(m.attribution), j.layers, trFn()));

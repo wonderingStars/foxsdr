@@ -38,7 +38,7 @@ std::shared_ptr<slint::Model<T>> reuseModelFrom(const std::shared_ptr<slint::Mod
     if (!fresh || !held) { return fresh; }
     std::vector<T> rows;
     rows.reserve(fresh->row_count());
-    for (std::size_t i = 0; i < fresh->row_count(); ++i) { rows.push_back(*fresh->row_data(i)); }
+    for (std::size_t i = 0; i < fresh->row_count(); ++i) { if (const auto row = fresh->row_data(i)) { rows.push_back(*row); } }
     return reuseModel<T>(held, std::move(rows));
 }
 

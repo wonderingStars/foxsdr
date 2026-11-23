@@ -122,7 +122,7 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${FOXSDR_REPO_ROOT}/src/core/tester_usage.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/serial_port.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
-                "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp"
+                "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
         endif()
         if(unit STREQUAL "tools")
@@ -217,7 +217,7 @@ foreach(src ${_foxsdr_slint_test_sources})
                 "${CMAKE_CURRENT_SOURCE_DIR}/../signal_logic.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp"
                 "${FOXSDR_REPO_ROOT}/src/core/patch_presets.cpp"
-                "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
+                "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp")
         endif()
         if(unit STREQUAL "patchfaces")
             # The PATCH page's Spectrum and Map faces (docs/multi-radio-records/patch-faces.md): ../patch_faces.cpp over the compositor it projects through, the kit's fitView and the receiver's painters
@@ -240,7 +240,7 @@ foreach(src ${_foxsdr_slint_test_sources})
         endif()
         if(unit STREQUAL "sdrplaydiag")
             # The SDRplay diagnostic's dialog (window-gaps-2, ../sdrplaydiag_logic.cpp, added by name above) and the pointer ledger's line (../pointer_ledger.cpp); the probe's child is NOT linked: a stand-in stands for it.
-            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../pointer_ledger.cpp" "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp")
+            list(APPEND _extra "${CMAKE_CURRENT_SOURCE_DIR}/../pointer_ledger.cpp" "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp")
         endif()
         if(unit STREQUAL "toneout")
             # The access lane's test tone (../lanek_audio.cpp): ALSA on Linux (the test writes its own ALSA configuration, a file over a null sink), the waveOut mapper on Windows (never opened by a test).
@@ -309,7 +309,7 @@ foreach(src ${_foxsdr_slint_test_sources})
     elseif(family STREQUAL "cjk")
         # The CJK glyphs of the window (docs 6.62): the specimen's one line of text rendered per character, once per language (the registered faces accumulate in a process, so each
         # language is its own run). The unit chooses the system faces exactly as main.cpp does (cjk_fonts.cpp over the classic's scripts.cpp and the stb_truetype probe).
-        add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../cjk_fonts.cpp" "${FOXSDR_REPO_ROOT}/src/core/scripts.cpp" "${FOXSDR_REPO_ROOT}/src/gui/font_probe.cpp")
+        add_executable(${name} ${name}.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../cjk_fonts.cpp" "${FOXSDR_REPO_ROOT}/src/core/scripts.cpp" "${FOXSDR_REPO_ROOT}/src/gui/font_probe.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp")
         target_link_libraries(${name} PRIVATE slint_render_harness slint_i18n)
         target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/third_party/imgui")
         set_property(TARGET ${name} PROPERTY SLINT_EMBED_RESOURCES embed-files)
@@ -350,7 +350,7 @@ foreach(src ${_foxsdr_slint_test_sources})
         add_executable(${name} ${name}.cpp "${_lc}/host_logic.cpp" "${_lc}/lanec_logic.cpp" "${_lc}/system_logic.cpp" "${_lc}/signal_logic.cpp" "${_lc}/key_dispatch.cpp" "${_lc}/look_logic.cpp"
                        "${FOXSDR_REPO_ROOT}/src/core/airband_data.cpp" "${FOXSDR_REPO_ROOT}/src/core/countries.cpp" "${FOXSDR_REPO_ROOT}/src/core/feature_request.cpp" "${FOXSDR_REPO_ROOT}/src/core/problem_report.cpp"
                        "${FOXSDR_REPO_ROOT}/src/core/pasted_report.cpp" "${FOXSDR_REPO_ROOT}/src/core/tester_usage.cpp" "${FOXSDR_REPO_ROOT}/src/core/serial_port.cpp" "${FOXSDR_REPO_ROOT}/src/core/plugin_repo_data.cpp"
-                       "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
+                       "${FOXSDR_REPO_ROOT}/src/core/diag_log.cpp" "${FOXSDR_REPO_ROOT}/src/core/utf8_ansi.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/system_core_stubs.cpp")
         target_compile_features(${name} PRIVATE cxx_std_20)
         target_link_libraries(${name} PRIVATE slint_i18n)
         target_include_directories(${name} PRIVATE "${_lc}" "${FOXSDR_REPO_ROOT}/src" "${FOXSDR_REPO_ROOT}/tests" "${FOXSDR_REPO_ROOT}/third_party/foxsdr_api" "${FOXSDR_REPO_ROOT}/third_party/imgui")
@@ -637,3 +637,10 @@ endif()
 
 # NO TEST SENDS A REPORT OFF THIS COMPUTER (send-on lane): see cmake/NoOutsideReports.cmake.
 cascade_forbid_outside_reports()
+
+# The text-boundary scan (tools/slint_text_sites.py): every SharedString construction in src/slint is the boundary's own or in the script's allow-list.
+find_program(FOXSDR_SLINT_SCAN_PYTHON NAMES python3 python)
+if(FOXSDR_SLINT_SCAN_PYTHON)
+    add_test(NAME slint_text_sites COMMAND ${FOXSDR_SLINT_SCAN_PYTHON} -I "${FOXSDR_REPO_ROOT}/tools/slint_text_sites.py" "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    set_tests_properties(slint_text_sites PROPERTIES LABELS "slint")
+endif()

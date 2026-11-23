@@ -802,7 +802,9 @@ struct PatchPublisher::Impl {
         }
         for (std::size_t i = 0; i < fields.size(); ++i) {
             const ::SettingField& now = fields[i];
-            const ::SettingField was = *cached->row_data(i);
+            const auto wasRow = cached->row_data(i);
+            if (!wasRow) { cached->set_row_data(i, now); continue; }
+            const ::SettingField was = *wasRow;
             const auto choicesOf = [](const ::SettingField& x) { std::string c; if (x.choice_values) { for (std::size_t j = 0; j < x.choice_values->row_count(); ++j) { c += std::string(*x.choice_values->row_data(j)) + ""; } } return c; };
             if (was.id != now.id || was.value != now.value || was.error != now.error || was.pending != now.pending || was.checked != now.checked || was.label != now.label ||
                 was.kind != now.kind || was.placeholder != now.placeholder || was.max_length != now.max_length || choicesOf(was) != choicesOf(now)) {
