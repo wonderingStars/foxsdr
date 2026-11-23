@@ -85,8 +85,9 @@ std::int32_t BasemapClient::rawTile(std::uint32_t z, std::uint32_t x, std::uint3
 }
 
 void BasemapClient::noteLine(const std::string& line, std::int64_t nowMs) {
-    const BasemapFailure f = classifyBasemapLine(line);
+    BasemapFailure f = classifyBasemapLine(line);
     if (f.kind == BasemapFault::None) { return; }
+    f.atMs = nowMs;   // when it was said: the note forgets a failure older than the last painted tile (kit_logic TilesNoteWatch)
     lastFailure_ = f;
     if (failureLog_.allow(nowMs)) { cascade::core::diagLogf("map: tile fetches are failing (%s)", basemapFailureLogWords(f).c_str()); }
 }

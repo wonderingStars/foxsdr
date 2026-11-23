@@ -123,26 +123,134 @@ int main() {
         CHECK(classifyBasemapLine("serving tiles from https://tile.openstreetmap.org/0/0/0.png").kind == BasemapFault::None);   // not a failure
         CHECK(classifyBasemapLine("HTTP 200").kind == BasemapFault::None);
         CHECK(classifyBasemapLine("").kind == BasemapFault::None);
+        // EVERY failure text the OpenMapTiles plugin can emit (its source, feat/plugins-merged src/openmaptiles/openmaptiles_plugin.cpp and include/http_get.h) lands in a category, never in None
+        struct Row { const char* line; BasemapFault kind; int code; };
+        const Row rows[] = {
+            {"basemap: HTTP 403 fetching https://tile.example.org/3/2/2.png", BasemapFault::Refused, 403},
+            {"basemap: HTTP 404 fetching https://tile.example.org/3/2/2.png", BasemapFault::Refused, 404},
+            {"basemap: HTTP 500 fetching https://tile.example.org/3/2/2.png", BasemapFault::Refused, 500},
+            {"basemap: HTTP 301 fetching https://tile.example.org/3/2/2.png", BasemapFault::Refused, 301},     // a redirect the plugin does not follow
+            {"basemap: HTTP 204 fetching https://tile.example.org/3/2/2.png", BasemapFault::NotAPicture, 0},   // an answer with nothing in it
+            {"basemap: empty response fetching https://tile.example.org/3/2/2.png", BasemapFault::NotAPicture, 0},
+            {"basemap: response larger than the limit fetching https://tile.example.org/3/2/2.png", BasemapFault::NotAPicture, 0},
+            {"basemap: a tile did not decode as a 256px image", BasemapFault::NotAPicture, 0},                 // a captive portal's or a proxy's page answering 200
+            {"basemap: a tile in D:\\timeout\\refused is not a 256px image", BasemapFault::NotAPicture, 0},      // (a folder name with words in it is not read as a fault)
+            {"basemap: overlay: an overlay tile did not decode as a 256px image fetching https://o.example.org/3/2/2.png", BasemapFault::NotAPicture, 0},
+            {"basemap: overlay: HTTP 500 fetching https://o.example.org/3/2/2.png", BasemapFault::Refused, 500},
+            {"basemap: timed out fetching https://tile.example.org/3/2/2.png", BasemapFault::TimedOut, 0},
+            {"basemap: transfer took longer than the budget fetching https://tile.example.org/3/2/2.png", BasemapFault::TimedOut, 0},
+            {"basemap: request failed fetching https://tile.example.org/3/2/2.png", BasemapFault::Unreachable, 0},
+            {"basemap: request failed: Connection fetching https://tile.example.org/3/2/2.png", BasemapFault::Unreachable, 0},
+            {"basemap: connect failed fetching https://tile.example.org/3/2/2.png", BasemapFault::Unreachable, 0},
+            {"basemap: read failed fetching https://tile.example.org/3/2/2.png", BasemapFault::Unreachable, 0},
+            {"basemap: WinHttpOpen failed fetching https://tile.example.org/3/2/2.png", BasemapFault::Unreachable, 0},
+            {"basemap: response ended early (10 of 500 bytes) fetching https://tile.example.org/3/2/2.png", BasemapFault::Unreachable, 0},
+            {"basemap: malformed URL fetching nonsense", BasemapFault::Other, 0},
+            {"basemap: unsupported URL scheme fetching ftp://tile.example.org/3/2/2.png", BasemapFault::Other, 0},
+            {"basemap: URL has no host fetching https:///3/2/2.png", BasemapFault::Other, 0},
+            {"basemap: has neither url= nor offline_dir= - using the configured source", BasemapFault::Other, 0},
+            {"basemap: imagery is switched off (url= is empty in C:\\x\\basemap.ini)", BasemapFault::Other, 0},
+            {"basemap: there is no map source called 'x' - keeping 'default'", BasemapFault::Other, 0},
+            {"basemap: something the plugin says that no table here has ever seen", BasemapFault::Other, 0},   // matches no shape: the generic category, not ignored
+        };
+        for (const Row& r : rows) {
+            const BasemapFailure f = classifyBasemapLine(r.line);
+            CHECK(f.kind == r.kind && f.httpCode == r.code);
+            if (f.kind != r.kind) { std::fprintf(stderr, "  classify: %s -> %d, wanted %d\n", r.line, static_cast<int>(f.kind), static_cast<int>(r.kind)); }
+        }
+        // the plugin's notices are not failures, even with fault words in a custom address (review B2); a line that is not the plugin's and says nothing known is not a failure either
+        CHECK(classifyBasemapLine("basemap: serving tiles from https://tiles.example.org/timeout/refused/{z}/{x}/{y}.png").kind == BasemapFault::None);
+        CHECK(classifyBasemapLine("basemap: showing 'default' - (c) OpenStreetMap contributors").kind == BasemapFault::None);
+        CHECK(classifyBasemapLine("basemap: map sources: default, resolve").kind == BasemapFault::None);
+        CHECK(classifyBasemapLine("basemap: tiles from the folder D:\\unreachable").kind == BasemapFault::None);
+        CHECK(classifyBasemapLine("basemap: overlay https://o.example.org/timeout.png at 60%").kind == BasemapFault::None);
+        CHECK(classifyBasemapLine("something unrelated that happened").kind == BasemapFault::None);
+        // the address after " fetching " is never read: a host named like a fault does not make one
+        CHECK(classifyBasemapLine("basemap: HTTP 403 fetching https://timeout.example.org/refused.png").kind == BasemapFault::Refused);
         BasemapFailure refused;
         refused.kind = BasemapFault::Refused;
         refused.httpCode = 403;
         BasemapFailure unreachable;
         unreachable.kind = BasemapFault::Unreachable;
-        // every tile missing and none painted: the note, with the plugin's category in plain words
-        CHECK(mapTilesNote(true, 0, 6, 0, unreachable) == "Map pictures could not be loaded: the map server could not be reached. The built-in coastline is shown instead.");
-        CHECK(mapTilesNote(true, 0, 6, 0, refused) == "Map pictures could not be loaded: the map server answered with an error (HTTP 403). The built-in coastline is shown instead.");
-        CHECK(mapTilesNote(true, 0, 6, 0, BasemapFailure{}) == "Map pictures could not be loaded: the map source gave no picture. The built-in coastline is shown instead.");
-        // the real plugin keeps a failed tile PENDING (it tries again): pending tiles after a reported failure are failing tiles too
-        CHECK(mapTilesNote(true, 0, 0, 12, unreachable) == "Map pictures could not be loaded: the map server could not be reached. The built-in coastline is shown instead.");
-        CHECK(mapTilesNote(true, 0, 0, 12, BasemapFailure{}).empty());   // pending and nothing reported: just slow, no note
-        // nothing in it is an address
-        CHECK(mapTilesNote(true, 0, 6, 0, unreachable).find("http") == std::string::npos && mapTilesNote(true, 0, 6, 0, unreachable).find("127.0.0.1") == std::string::npos);
-        // a tile arrived (the note goes), nothing asked, no basemap on this page: no note
-        CHECK(mapTilesNote(true, 3, 6, 0, unreachable).empty());
-        CHECK(mapTilesNote(true, 3, 0, 9, unreachable).empty());
-        CHECK(mapTilesNote(true, 0, 0, 0, unreachable).empty());
-        CHECK(mapTilesNote(false, 0, 6, 0, unreachable).empty());
-        CHECK(basemapFailureLogWords(refused) == "HTTP 403" && basemapFailureLogWords(unreachable) == "no connection" && basemapFailureLogWords(BasemapFailure{}) == "no reason given");
+        BasemapFailure notPicture;
+        notPicture.kind = BasemapFault::NotAPicture;
+        // the sentence, one per category, in plain words and with nothing of an address in it
+        CHECK(mapTilesNoteText(unreachable) == "Map pictures could not be loaded: the map server could not be reached. The built-in coastline is shown instead.");
+        CHECK(mapTilesNoteText(refused) == "Map pictures could not be loaded: the map server answered with an error (HTTP 403). The built-in coastline is shown instead.");
+        CHECK(mapTilesNoteText(BasemapFailure{}) == "Map pictures could not be loaded: the map source gave no picture. The built-in coastline is shown instead.");
+        CHECK(mapTilesNoteText(notPicture) == "Map pictures could not be loaded: the map server sent something that is not a map picture. The built-in coastline is shown instead.");
+        CHECK(mapTilesNoteText(unreachable).find("http") == std::string::npos && mapTilesNoteText(unreachable).find("127.0.0.1") == std::string::npos);
+        CHECK(basemapFailureLogWords(refused) == "HTTP 403" && basemapFailureLogWords(unreachable) == "no connection" && basemapFailureLogWords(BasemapFailure{}) == "no reason given" && basemapFailureLogWords(notPicture) == "not a picture");
+        // WHEN THE NOTE SHOWS (TilesNoteWatch). View A, every tile missing, none painted: nothing for 3 s, then the note with the category the plugin gave
+        const std::string reached = mapTilesNoteText(unreachable);
+        {
+            TilesNoteWatch w;
+            BasemapFailure seen = unreachable;
+            seen.atMs = 100;
+            const std::uint64_t viewA = mapViewKey(52.0, 0.0, 10.0, 800, 500);
+            CHECK(w.update(true, viewA, 0, 6, 0, seen, 1000).empty());
+            CHECK(w.update(true, viewA, 0, 6, 0, seen, 3999).empty());
+            CHECK(w.update(true, viewA, 0, 6, 0, seen, 4000) == reached);                         // 3 s after the view began
+            CHECK(w.update(true, viewA, 0, 6, 0, seen, 9000) == reached);                         // and it stays while nothing paints
+            CHECK(w.update(true, viewA, 3, 3, 0, seen, 9033).empty());                            // the moment a tile paints it goes
+            CHECK(w.update(true, viewA, 3, 3, 0, seen, 20000).empty());
+        }
+        {   // the real plugin keeps a failed tile PENDING: pending counts as awaited too; with nothing pending or missing there is nothing to say
+            TilesNoteWatch w;
+            BasemapFailure seen = unreachable;
+            seen.atMs = 5;
+            CHECK(w.update(true, 1, 0, 0, 12, seen, 0).empty() && w.update(true, 1, 0, 0, 12, seen, 3000) == reached);
+            TilesNoteWatch none;
+            CHECK(none.update(true, 1, 0, 0, 0, seen, 0).empty() && none.update(true, 1, 0, 0, 0, seen, 10000).empty());
+            TilesNoteWatch off;
+            CHECK(off.update(false, 1, 0, 6, 0, seen, 0).empty() && off.update(false, 1, 0, 6, 0, seen, 10000).empty());   // no basemap on this page: never
+        }
+        {   // NO FLASHING (review B2): a zoom step with tiles arriving within a second shows no note, however stale an earlier failure is
+            TilesNoteWatch w;
+            BasemapFailure stale = unreachable;
+            stale.atMs = 10;                                                                       // one old failure from early in the session
+            const std::uint64_t z1 = mapViewKey(52.0, 0.0, 10.0, 800, 500), z2 = mapViewKey(52.0, 0.0, 5.0, 800, 500);
+            CHECK(w.update(true, z1, 4, 0, 0, stale, 1000).empty());                              // painted
+            bool any = false;
+            for (std::int64_t t = 20000; t < 20990; t += 33) { any = any || !w.update(true, z2, 0, 0, 12, stale, t).empty(); }   // zoom step: the new view's tiles are pending...
+            CHECK(!any);
+            CHECK(w.update(true, z2, 5, 0, 7, stale, 21000).empty());                             // ...and arrive within a second
+            for (std::int64_t t = 21033; t < 40000; t += 1000) { any = any || !w.update(true, z2, 12, 0, 0, stale, t).empty(); }
+            CHECK(!any);                                                                           // never a note
+            // a pan or a zoom starts the wait again, also after a long quiet time
+            CHECK(w.update(true, z1, 0, 0, 12, stale, 50000).empty() && w.update(true, z1, 0, 0, 12, stale, 52999).empty());
+            CHECK(!w.update(true, z1, 0, 0, 12, stale, 53000).empty());                           // (3 s with nothing painted: now it is an outage)
+        }
+        {   // A SECOND OUTAGE AFTER A RECOVERY, with no new failure line from the plugin (it reports three at most): the note, with the generic category
+            TilesNoteWatch w;
+            BasemapFailure first = unreachable;
+            first.atMs = 100;
+            const std::uint64_t v1 = mapViewKey(52.0, 0.0, 10.0, 800, 500), v2 = mapViewKey(52.0, 0.0, 5.0, 800, 500);
+            CHECK(w.update(true, v1, 0, 6, 0, first, 0).empty());
+            CHECK(w.update(true, v1, 0, 6, 0, first, 3000) == reached);                           // the first outage, with its category
+            CHECK(w.update(true, v1, 4, 2, 0, first, 5000).empty());                              // recovery: a tile painted at 5000
+            CHECK(w.update(true, v2, 0, 0, 12, first, 8000).empty());                             // a new view, nothing painted yet; the old failure line (at 100) is older than the last picture
+            CHECK(w.update(true, v2, 0, 0, 12, first, 10999).empty());
+            CHECK(w.update(true, v2, 0, 0, 12, first, 11000) == mapTilesNoteText(BasemapFailure{}));   // the generic category: "the map source gave no picture"
+            BasemapFailure second = refused;                                                       // a failure line seen AFTER the last picture is used
+            second.atMs = 9000;
+            CHECK(w.update(true, v2, 0, 0, 12, second, 11033) == mapTilesNoteText(refused));
+        }
+        {   // the captive portal: its page decodes to nothing, the plugin says so once; its own wording
+            TilesNoteWatch w;
+            BasemapFailure portal = classifyBasemapLine("basemap: a tile did not decode as a 256px image");
+            portal.atMs = 1;
+            CHECK(w.update(true, 7, 0, 0, 12, portal, 0).empty());
+            CHECK(w.update(true, 7, 0, 0, 12, portal, 3000) == "Map pictures could not be loaded: the map server sent something that is not a map picture. The built-in coastline is shown instead.");
+        }
+        {   // the view's identity: a zoom step or a pan changes it, the creep of a followed aircraft and the same view do not
+            const std::uint64_t k = mapViewKey(52.0, 0.0, 10.0, 800, 500);
+            CHECK(k == mapViewKey(52.0, 0.0, 10.0, 800, 500));
+            CHECK(k == mapViewKey(52.001, 0.001, 10.0, 800, 500));
+            CHECK(k != mapViewKey(52.0, 0.0, 5.0, 800, 500) && k != mapViewKey(52.0, 0.0, 20.0, 800, 500));   // a zoom step
+            CHECK(k != mapViewKey(52.0, 3.0, 10.0, 800, 500) && k != mapViewKey(57.0, 0.0, 10.0, 800, 500));  // a pan of a few cells
+            CHECK(k != mapViewKey(52.0, 0.0, 10.0, 1000, 500));
+        }
         LogGate gate(60000);
         CHECK(gate.allow(1000) && !gate.allow(1001) && !gate.allow(60999) && gate.allow(61000) && !gate.allow(61500));   // once a minute at most
     }

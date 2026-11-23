@@ -4073,7 +4073,8 @@ int main(int argc, char** argv) {
             else if (what == "pictures") { n = kit.images().size(); }
             else if (what == "lines") { n = kit.decoderLines().size(); }
             else if (what == "mapPages") { n = kit.mapPages().size(); }
-            else { return "kit.plugins|tracks|panels|instruments|pictures|lines|mapPages, not " + name; }
+            else if (what == "tilesNote") { out = publisher.tilesNoteLine(); return std::string(); }   // user bug B: the note over a map page while its tiles are missing ("" none); the `kit.` names were a closed list, so the line below never answered
+            else { return "kit.plugins|tracks|panels|instruments|pictures|lines|mapPages|tilesNote, not " + name; }
             out = std::to_string(n);
             return std::string();
         }
@@ -4305,7 +4306,6 @@ int main(int argc, char** argv) {
         if (name == "bank") { out = std::to_string(ui->get_bank_index()); return std::string(); }
         if (name == "view") { out = std::to_string(ui->get_view_index()); return std::string(); }
         if (name == "pages") { out = publisher.pagesLine(); return std::string(); }
-        if (name == "kit.tilesNote") { out = publisher.tilesNoteLine(); return std::string(); }   // user bug B: the note over a map page while its tiles are missing ("" none)
         if (name == "tick") { out = std::to_string(bounded.ticks() + 1); return std::string(); }
         return "no state named " + name;
     };

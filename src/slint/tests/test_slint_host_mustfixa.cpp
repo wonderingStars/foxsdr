@@ -192,7 +192,15 @@ void theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing() {
     const std::string kp = slurp(repoRoot() / "src" / "slint" / "kit_publish.cpp");
     CHECK(has(kp, "s.comp.setLayers(true, true);"));
     CHECK(!has(kp, "s.comp.setLayers(!tiles, true);"));
-    CHECK(has(kp, "mapTilesNote(tiles, tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure())"));
+    CHECK(has(kp, "s.tilesWatch.update(tiles, ") && has(kp, "tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure(), clockMs())"));   // the 3 s rule (TilesNoteWatch), not the old "a failure line is fresh" one
+    const std::string mainCpp = slurp(repoRoot() / "src" / "slint" / "main.cpp");   // the bounded run can read the note: `state kit.tilesNote` is inside the closed `kit.` list (it was a line nothing reached)
+    CHECK(has(mainCpp, "else if (what == \"tilesNote\") { out = publisher.tilesNoteLine();") && !has(mainCpp, "if (name == \"kit.tilesNote\")"));
+    // the patch page's map part (review B3): the same coastline rule and the same note
+    const std::string pp = slurp(repoRoot() / "src" / "slint" / "patch_publish.cpp");
+    CHECK(has(pp, "mf.comp.setLayers(true, true);") && !has(pp, "mf.comp.setLayers(!tiles, true);"));
+    CHECK(has(pp, "mf.tilesWatch.update(tiles, ") && has(pp, "o.map_tiles_note = ss(mf.tilesNote);"));
+    const std::string pps = slurp(repoRoot() / "src" / "slint" / "ui" / "patch_page.slint");
+    CHECK(has(pps, "map-tiles-note: string") && has(pps, "tiles-note: root.live.map-tiles-note;"));
     const std::string pk = slurp(repoRoot() / "src" / "slint" / "plugin_kit.cpp");
     CHECK(has(pk, "failureLog_.allow(nowMs)") && has(pk, "map: tile fetches are failing (%s)"));
     const std::string ms = slurp(repoRoot() / "src" / "slint" / "ui" / "map.slint");

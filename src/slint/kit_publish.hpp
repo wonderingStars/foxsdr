@@ -173,6 +173,7 @@ private:
         bool sourceSet = false;
         std::string sourceAttribution;
         std::string tilesNote;                      // user bug B: what the page last showed over the map while its tiles were missing
+        TilesNoteWatch tilesWatch;                  // user bug B: when the note shows (3 s after the last view change or painted tile)
         foxsdr::slintmapj::MapJSurface j;           // screen lane J: the layers, the replay, the filter, the units
     };
 

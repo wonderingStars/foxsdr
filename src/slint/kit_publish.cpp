@@ -587,7 +587,8 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
         m.base = slint::Image(s.buffers[static_cast<std::size_t>(s.which ^ 1)]);
         // USER BUG B: when the view's tiles are missing and none was painted, one quiet line says so (the plugin's own category of failure, no address); it goes when a tile arrives
         const slintmap::TileReport tileRep = s.comp.tileReport();
-        const std::string tilesNote = mapTilesNote(tiles, tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure());
+        // (review B1 + B2: the wait is 3 s after every view change, the category is the last one seen since a tile painted, or the generic one; TilesNoteWatch)
+        const std::string tilesNote = s.tilesWatch.update(tiles, pg != nullptr ? mapViewKey(pg->centreLat, pg->centreLon, pg->spanDeg, s.w, s.h) : 0u, tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure(), clockMs());
         m.tiles_note = ss(tilesNote);
         s.tilesNote = tilesNote;
         if (!tilesNote.empty()) { sig += "TN" + tilesNote; }

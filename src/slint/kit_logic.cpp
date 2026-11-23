@@ -698,18 +698,31 @@ bool mapImageryUnused(bool basemapActive, bool satellitePage) { return basemapAc
 BasemapFailure classifyBasemapLine(const std::string& line) {
     std::string low = line;
     for (char& ch : low) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+    const bool fromPlugin = low.rfind("basemap:", 0) == 0;
+    std::string why = fromPlugin ? low.substr(8) : low;
+    while (!why.empty() && why.front() == ' ') { why.erase(0, 1); }
+    // the plugin's own notices are not failures ("showing '<name>'", "serving tiles from <url>", "tiles from the folder", "map sources: ...", "overlay <url> at <opacity>", "retina=yes but ...")
+    static const char* const kNotices[] = {"showing ", "serving tiles from", "tiles from the folder", "map sources:", "retina=", "overlay http"};
+    for (const char* n : kNotices) { if (why.rfind(n, 0) == 0) { return BasemapFailure{}; } }
+    // the reason is the text BEFORE " fetching <address>": the address (a host, a path, a key in a query) is never read
+    if (const std::size_t at = why.find(" fetching "); at != std::string::npos) { why.erase(at); }
+    if (why.rfind("overlay:", 0) == 0) { why.erase(0, 8); }
     BasemapFailure f;
-    for (std::size_t at = low.find("http "); at != std::string::npos; at = low.find("http ", at + 1)) {   // "HTTP 403": the server answered, with an error
+    for (std::size_t at = why.find("http "); at != std::string::npos; at = why.find("http ", at + 1)) {   // "HTTP 403": the server answered
         std::size_t i = at + 5;
         int code = 0, digits = 0;
-        while (i < low.size() && low[i] >= '0' && low[i] <= '9' && digits < 4) { code = code * 10 + (low[i] - '0'); ++i; ++digits; }
-        if (digits == 3 && code >= 400 && code < 600) { f.kind = BasemapFault::Refused; f.httpCode = code; return f; }
+        while (i < why.size() && why[i] >= '0' && why[i] <= '9' && digits < 4) { code = code * 10 + (why[i] - '0'); ++i; ++digits; }
+        if (digits == 3 && code >= 300 && code < 600) { f.kind = BasemapFault::Refused; f.httpCode = code; return f; }   // an error, or a redirect the plugin does not follow
+        if (digits == 3 && code == 204) { f.kind = BasemapFault::NotAPicture; return f; }                               // "no content": an answer with no picture in it
     }
-    if (low.find("timed out") != std::string::npos || low.find("timeout") != std::string::npos) { f.kind = BasemapFault::TimedOut; return f; }
-    static const char* const kUnreachable[] = {"request failed", "failed fetching", "unreachable", "refused", "no connection", "resolve", "could not connect"};
-    for (const char* w : kUnreachable) {
-        if (low.find(w) != std::string::npos) { f.kind = BasemapFault::Unreachable; return f; }
-    }
+    const auto any = [&why](std::initializer_list<const char*> words) {
+        for (const char* w : words) { if (why.find(w) != std::string::npos) { return true; } }
+        return false;
+    };
+    if (any({"did not decode", "empty response", "larger than the limit"}) || (why.find("is not a ") != std::string::npos && why.find("px image") != std::string::npos)) { f.kind = BasemapFault::NotAPicture; return f; }
+    if (any({"timed out", "timeout", "took longer than the budget"})) { f.kind = BasemapFault::TimedOut; return f; }
+    if (any({"request failed", "connect failed", "read failed", "winhttpopen failed", "response ended early", "unreachable", "refused", "no connection", "resolve", "could not connect"})) { f.kind = BasemapFault::Unreachable; return f; }
+    if (fromPlugin) { f.kind = BasemapFault::Other; }   // a line of the plugin that says it could not do something and matches no shape above (a bad URL, a missing key, an unknown source): the generic category, never ignored
     return f;
 }
 
@@ -718,22 +731,52 @@ std::string basemapFailureLogWords(const BasemapFailure& f) {
         case BasemapFault::Unreachable: return "no connection";
         case BasemapFault::TimedOut: return "timed out";
         case BasemapFault::Refused: return "HTTP " + std::to_string(f.httpCode);
+        case BasemapFault::NotAPicture: return "not a picture";
         default: return "no reason given";
     }
 }
 
-std::string mapTilesNote(bool tilesOn, int drawn, int missing, int pending, const BasemapFailure& why) {
-    // A failed tile is MISSING for the compositor, but the real plugin keeps a failed tile PENDING (it tries it again): so "pending and the plugin has reported a failure" counts as failing too.
-    if (!tilesOn || drawn > 0) { return std::string(); }
-    if (missing <= 0 && !(pending > 0 && why.kind != BasemapFault::None)) { return std::string(); }
+std::string mapTilesNoteText(const BasemapFailure& why) {
     std::string reason;
     switch (why.kind) {
         case BasemapFault::Unreachable: reason = cascade::i18n::tr("the map server could not be reached"); break;
         case BasemapFault::TimedOut: reason = cascade::i18n::tr("the map server did not answer in time"); break;
         case BasemapFault::Refused: reason = cascade::core::formatText(cascade::i18n::tr("the map server answered with an error (HTTP %d)"), why.httpCode); break;
+        case BasemapFault::NotAPicture: reason = cascade::i18n::tr("the map server sent something that is not a map picture"); break;
         default: reason = cascade::i18n::tr("the map source gave no picture"); break;
     }
     return cascade::core::formatText(cascade::i18n::tr("Map pictures could not be loaded: %s. The built-in coastline is shown instead."), reason.c_str());
+}
+
+std::string TilesNoteWatch::update(bool tilesOn, std::uint64_t viewKey, int drawn, int missing, int pending, const BasemapFailure& seen, std::int64_t nowMs) {
+    if (!tilesOn) { reset(); return std::string(); }
+    if (!haveView_ || viewKey != viewKey_) { haveView_ = true; viewKey_ = viewKey; quietSinceMs_ = nowMs; }   // a new view: the wait starts again
+    if (drawn > 0) { lastPaintMs_ = nowMs; quietSinceMs_ = nowMs; return std::string(); }                      // a tile painted: the note goes
+    if (missing <= 0 && pending <= 0) { return std::string(); }                                                 // nothing is asked for or awaited
+    if (nowMs - quietSinceMs_ < kDelayMs) { return std::string(); }
+    BasemapFailure why;                                                                                         // the generic category unless the plugin said something since the last painted tile
+    if (seen.kind != BasemapFault::None && seen.atMs >= lastPaintMs_) { why = seen; }
+    return mapTilesNoteText(why);
+}
+
+void TilesNoteWatch::reset() {
+    haveView_ = false;
+    viewKey_ = 0;
+    quietSinceMs_ = 0;
+    lastPaintMs_ = INT64_MIN;
+}
+
+std::uint64_t mapViewKey(double centreLat, double centreLon, double spanDeg, int w, int h) {
+    const double span = spanDeg > 1.0e-9 ? spanDeg : 1.0e-9;
+    const double cell = span / 8.0;
+    const auto mix = [](std::uint64_t h0, std::int64_t v) { return (h0 ^ static_cast<std::uint64_t>(v)) * 1099511628211ull; };
+    std::uint64_t k = 1469598103934665603ull;
+    k = mix(k, static_cast<std::int64_t>(std::llround(std::log2(span) * 8.0)));
+    k = mix(k, static_cast<std::int64_t>(std::floor(centreLat / cell)));
+    k = mix(k, static_cast<std::int64_t>(std::floor(centreLon / cell)));
+    k = mix(k, w);
+    k = mix(k, h);
+    return k;
 }
 
 std::string mapTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s map"), plugin.c_str()); }

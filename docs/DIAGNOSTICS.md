@@ -197,6 +197,8 @@ describe code this product can be held responsible for.
   remote, a script) arrives while automatic gain is on, on a radio whose driver leaves automatic mode with a manual gain (the RTL-SDR, rtl_tcp, the Pluto). The write is honoured and the
   engine's flag and the window's Auto gain switch follow, but the user's REMEMBERED Auto gain setting is not touched: the next start and the next open of that radio come back as the user
   saved it. The origin is `a control request` (the engine does not know which client asked at that point).
+- `map: tile fetches are failing (<reason>)` - the basemap plugin reported a failed tile fetch (user bug B): `no connection`, `timed out`, `HTTP <code>`, `not a picture` (the server
+  answered with something that is not a map picture: a captive portal's page, an empty body) or `no reason given`; once a minute at most, the category only, never the address.
 - `squelch: auto on (AUTO key)` / `squelch: auto off (knob)` - AUTOMATIC squelch
   changing state (0.99.74, `squelchAuto` in `config.json`), once per change and
   never for the state restored from the config at start. The word in brackets

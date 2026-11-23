@@ -79,7 +79,7 @@ export struct Refusal { shown: bool, text: string, x: length, y: length }       
 export struct FaceMarker { pos: float, label: string }
 export struct FaceLive {
     have-spectrum: bool, trace: image, waterfall: image, markers: [FaceMarker],
-    have-map: bool, map-base: image, map-targets: [MapTarget], map-scale-text: string, map-scale-frac: float, map-attribution: string, map-zoom-in: bool, map-zoom-out: bool, map-hover: string,
+    have-map: bool, map-base: image, map-targets: [MapTarget], map-scale-text: string, map-scale-frac: float, map-attribution: string, map-zoom-in: bool, map-zoom-out: bool, map-hover: string, map-tiles-note: string,
 }
 export struct CanvasModel { zoom: float, faces-live: bool, grid-step: length, grid-ox: length, grid-oy: length, nodes: [CanvasNode], wires: [CanvasWire], ghost: string, refusal: Refusal, keys-shown: bool, lives: [FaceLive] }
 
@@ -1346,6 +1346,7 @@ component CanvasNodeView inherits Rectangle {
             scale-text: root.live.map-scale-text;
             scale-frac: root.live.map-scale-frac;
             attribution: root.live.map-attribution;
+            tiles-note: root.live.map-tiles-note;
             zoom-in-enabled: root.live.map-zoom-in;
             zoom-out-enabled: root.live.map-zoom-out;
             hover-text: root.live.map-hover;
