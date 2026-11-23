@@ -37,6 +37,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
+#include "core/crash_upload.hpp"
 #include "core/event_trail.hpp"
 #include "core/frame_timing.hpp"
 #include "core/hang_watchdog.hpp"
@@ -265,6 +266,16 @@ int main() {
                 CHECK(a1 != std::string::npos && a2 != std::string::npos && a1 < a2);
                 CHECK(cascade::core::trail::sanitise(line) == line);
             }
+        }
+
+        // THE TRAIL SURVIVES THE UPLOAD PARSER (it was empty in every field freeze report: the line sat after the `--- beats ---` heading, which the
+        // parser ignores). Parse the file just written the way the sweep does and read the two transitions back.
+        {
+            cascade::core::ParsedReport parsed;
+            CHECK(cascade::core::parseReportText(text, parsed));
+            std::printf("parsed trail: %s\n", parsed.trail.c_str());
+            CHECK(parsed.trail.find(":src-open.hackrf;") != std::string::npos);
+            CHECK(parsed.trail.find(":mode.usb") != std::string::npos);
         }
 
         // THE INVENTORY, BOTH DIRECTIONS. Present-and-correct was already

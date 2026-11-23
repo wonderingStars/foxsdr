@@ -1514,8 +1514,10 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "--- process ---\n";
     out << "uptime-sec: " << processUptimeSec() << "\n";
     // EVERY REGISTERED WORKER, one line each: the stalled one is rarely the whole story.
-    writeBeatsSection(out);
+    // THE TRAIL BEFORE THE BEATS: the uploader reads `trail:` only inside the process block, and `--- beats ---` is a heading it ignores, so the line
+    // written after it was never uploaded (always empty in the field). tests/test_diag_hang.cpp parses a written report and checks it.
     writeTrailLine(out);
+    writeBeatsSection(out);
     out.flush();
 
     {
@@ -1702,8 +1704,10 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "--- process ---\n";
     out << "uptime-sec: " << processUptimeSec() << "\n";
     // EVERY REGISTERED WORKER, one line each: the stalled one is rarely the whole story.
-    writeBeatsSection(out);
+    // THE TRAIL BEFORE THE BEATS: the uploader reads `trail:` only inside the process block, and `--- beats ---` is a heading it ignores, so the line
+    // written after it was never uploaded (always empty in the field). tests/test_diag_hang.cpp parses a written report and checks it.
     writeTrailLine(out);
+    writeBeatsSection(out);
     out.flush();
 
     {
