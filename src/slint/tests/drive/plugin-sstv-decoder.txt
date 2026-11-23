@@ -17,9 +17,10 @@ state pages contains "SSTV"
 +5 expect "Keep running" checked equals "false"
 +1 click "Keep running"
 +5 expect "Keep running" checked equals "true"
-+1 state pages contains "SSTV image"
+# sstv-decoder 1.2.0 (foxsdr-plugins-dev 85c7cf3, 2026-11-12: KG-STV folded in) is called "SSTV and KG-STV Image Decoder", and its picture page "SSTV and KG-STV Image Decoder image" (the plugin's own name + " image")
++1 state pages contains "SSTV and KG-STV Image Decoder image"
 +1 click "< FITTED"
 +3 state pages contains "Fitted modules"
-+1 click "SSTV image"#2
-+3 state pages contains "SSTV image"
++1 click "SSTV and KG-STV Image Decoder image"#2
++3 state pages contains "SSTV and KG-STV Image Decoder image"
 +2 dump

@@ -5,7 +5,8 @@
 # instrument page needs a signal), so its preset key (row 1130) is looked for in the Decoders drawer, opened here with sections=1:2: the final dump is
 # the one still needed to read its label there.
 120 state kit.plugins == 43
-state list.plugins.names contains "Weather sensors"
+# weather-decoder 1.3.0 (foxsdr-plugins-dev db30518, 2026-11-12: X10 and the Remote Monitor join the sensors) is called "433 MHz Sensors, Remotes and X10", not "Weather sensors"
+state list.plugins.names contains "433 MHz Sensors, Remotes and X10"
 +1 expect "START" enabled equals "true"
 +1 expect "Keep running" checked equals "false"
 +1 click "START"

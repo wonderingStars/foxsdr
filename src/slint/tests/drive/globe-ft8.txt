@@ -1,14 +1,16 @@
-#! frames=800 bank=1 plugins=ft8-decoder open=module:ft8-decoder-1.1.1-abi3-win-x64.dll size=1600x1000
+#! frames=800 bank=1 plugins=ft8-decoder open=module:ft8-decoder-1.1.1-abi3-win-x64.dll size=1600x1700
+# size 1600x1700 (was 1600x1000): the plugin's Plugin settings fold, opened below to type the locator, is the plugin's own fields (it grew with the JT65 and WSPR modes of 1.4.0) and sits above the VIEW bar, so at 1000 px the LIST key is below the window's edge (kit drift, not a window change).
 # globe-ft8: THE FT8 RECEPTION GLOBE (docs 6.65): the FT8 panel page offers VIEW LIST / 3D GLOBE (the LIST is the plugin's own "FT8 - PSK Reporter" table). The globe draws a great-circle
 # path from the receiver (the plugin's Locator, else the receiver position) to the locator carried by each station the decoder printed, coloured by band. BAND, TIME WINDOW, the count
 # of stations heard and the furthest are the host's, from those lines only (no signal is fed here: the globe is empty and says so). The camera by the keyboard. State: globe.ft8.
 120 state kit.plugins >= 1
 +1 click "START"
 +40 expect "STOP" enabled equals "true"
-+1 state pages contains "FT8 - PSK Reporter"
+# ft8-decoder 1.4.0 (foxsdr-plugins-dev 55443ee, 2026-11-12: JT65 and WSPR folded in) is called "FT8, JT65 and WSPR", and its panel page too: the page was "FT8 - PSK Reporter" until 1.3
++1 state pages contains "FT8, JT65 and WSPR"
 +1 click "< FITTED"
 +3 state pages contains "Fitted modules"
-+1 click "FT8 - PSK Reporter"#2
++1 click "FT8, JT65 and WSPR"#2
 +5 expect "LIST" checked equals "true"
 +1 expect "3D GLOBE" checked equals "false"
 +1 state globe.ft8 contains "globe=0"

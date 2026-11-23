@@ -2,8 +2,9 @@
 # plugin-dmr-monitor: DMR Monitor, data only (tick rows 783-786): the module page, START / STOP, Keep running, "< FITTED", then the
 # one preset on the Decoder output page. No signal: no hello line, no group or private call line.
 120 state kit.plugins == 43
-state list.plugins.names contains "DMR Monitor"
-state pages contains "DMR Monitor"
+# dmr-monitor 0.2.0 (foxsdr-plugins-dev b2f073d, 2026-11-11: D-STAR header) is called "DMR and D-STAR Monitor (...)", not "DMR Monitor"
+state list.plugins.names contains "DMR and D-STAR Monitor"
+state pages contains "DMR and D-STAR Monitor"
 +1 expect "START" label equals "START"
 +1 click "START"
 +40 state decodersRunning >= 1
@@ -13,7 +14,9 @@ state pages contains "DMR Monitor"
 +5 expect "Keep running" checked equals "false"
 +1 click "Keep running"
 +5 expect "Keep running" checked equals "true"
-+1 state pages contains "Decoder output"
+# dmr-monitor 0.7.0 added the "DMR roster" panel (a PANEL cap): openWindowsFor (kit_publish.cpp, 987ebf5f) opens the Decoder output page with a preset only for a decoder with no panel, image or track source, so START opens the
+# plugin's own roster page and the Decoder output page is opened below by the "+ Window" key
++1 state pages contains "DMR roster"
 +1 click "< FITTED"
 +3 state pages contains "Fitted modules"
 +1 click "+ Window"

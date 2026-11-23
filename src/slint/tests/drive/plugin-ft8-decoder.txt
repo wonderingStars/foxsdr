@@ -17,7 +17,8 @@ state pages contains "FT8"
 +5 expect "Keep running" checked equals "false"
 +1 click "Keep running"
 +5 expect "Keep running" checked equals "true"
-+1 state pages contains "FT8 - PSK Reporter"
+# ft8-decoder 1.4.0 (foxsdr-plugins-dev 55443ee, 2026-11-12: JT65 and WSPR folded in) is called "FT8, JT65 and WSPR", and its panel page too: the page was "FT8 - PSK Reporter" until 1.3
++1 state pages contains "FT8, JT65 and WSPR"
 # (START opens the plugin's own page, not the Decoder output: that read-back was wrong and is gone)
 +1 click "GRANT RECEIVER CONTROL"
 +15 expect "REVOKE RECEIVER CONTROL" enabled equals "true"
@@ -25,8 +26,8 @@ state pages contains "FT8"
 +1 state kit.panels >= 1
 +1 click "< FITTED"
 +3 state pages contains "Fitted modules"
-+1 click "FT8 - PSK Reporter"#2
-+3 state pages contains "FT8 - PSK Reporter"
++1 click "FT8, JT65 and WSPR"#2
++3 state pages contains "FT8, JT65 and WSPR"
 +1 click "Plugin settings"#2
 +3 dump
 +1 type "Callsign" "G0FOX"
