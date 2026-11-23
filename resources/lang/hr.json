@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Nije spremljeno: postavke dodatka su pune.",
   "Not saved: the store refused it.": "Nije spremljeno: pohrana je to odbila.",
   "Not saved: this field is not one the host can store.": "Nije spremljeno: ovo polje nije vrsta koju domaćin može pohraniti.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Neće se ponovno skenirati u ovoj sesiji: %s (srušio je traženje uređaja)",
   "Not set": "Nije postavljeno",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Ne koristi se za generator signala, zvučnu karticu ni I/Q datoteku - nijedan nema vlastiti kristal za ispravljanje.",
   "Not yet proved on a real radio.": "Još nije dokazano na pravom radiju.",

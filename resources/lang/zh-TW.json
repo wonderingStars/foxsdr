@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "未儲存: 外掛程式的設定已滿。",
   "Not saved: the store refused it.": "未儲存: 儲存拒絕了它。",
   "Not saved: this field is not one the host can store.": "未儲存: 此欄位不是主機可以儲存的類型。",
-  "Not scanned again this session: %s (it crashed the device scan)": "本次工作階段不再掃描: %s (它導致裝置掃描當機)",
   "Not set": "未設定",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "不用於訊號產生器、音效卡或 I/Q 檔案 - 它們都沒有需要校正的自有晶體。",
   "Not yet proved on a real radio.": "尚未在真實的無線電接收機上驗證。",

@@ -2366,7 +2366,9 @@ int main() {
             }
         }
         CHECK(scanned > 200);  // it really walked the source tree
-        CHECK(users == (std::set<std::string>{"src/core/sentinel_host_win.cpp", "src/source/soapy_enum_proc.cpp"}));
+        // src/slint/tests/test_slint_safe_text.cpp is the third user, and a test, not the product: its main() (parent and the --raw child) sets SEM_NOGPFAULTERRORBOX so the deliberate abort() it provokes
+        // does not raise a Windows error dialog on the build machine. It never runs inside the application (a test executable under src/slint/tests).
+        CHECK(users == (std::set<std::string>{"src/core/sentinel_host_win.cpp", "src/source/soapy_enum_proc.cpp", "src/slint/tests/test_slint_safe_text.cpp"}));
         // and the first of those two is the watcher's entry point, never the application's
         const std::string host = readFile(root / "src/core/sentinel_host_win.cpp");
         const std::size_t main = host.find("int runSentinelMain(");

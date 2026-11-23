@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "저장 안 됨: 플러그인 설정이 가득 찼습니다.",
   "Not saved: the store refused it.": "저장 안 됨: 저장소가 거부했습니다.",
   "Not saved: this field is not one the host can store.": "저장 안 됨: 이 필드는 호스트가 저장할 수 있는 종류가 아닙니다.",
-  "Not scanned again this session: %s (it crashed the device scan)": "이번 세션에서는 다시 검색하지 않음: %s (장치 검색을 중단시켰습니다)",
   "Not set": "설정 안 됨",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "신호 발생기, 사운드 카드, I/Q 파일에는 쓰이지 않습니다. 모두 보정할 자체 수정 발진자가 없습니다.",
   "Not yet proved on a real radio.": "아직 실제 라디오에서 검증되지 않았습니다.",

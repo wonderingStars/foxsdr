@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Tidak disimpan: pengaturan plugin sudah penuh.",
   "Not saved: the store refused it.": "Tidak disimpan: penyimpanan menolaknya.",
   "Not saved: this field is not one the host can store.": "Tidak disimpan: bidang ini bukan jenis yang dapat disimpan host.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Tidak dipindai lagi pada sesi ini: %s (membuat pemindaian perangkat mogok)",
   "Not set": "Belum diatur",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Tidak dipakai untuk generator sinyal, kartu suara, atau file I/Q - tidak satu pun punya kristal sendiri untuk dikoreksi.",
   "Not yet proved on a real radio.": "Belum terbukti pada radio sungguhan.",

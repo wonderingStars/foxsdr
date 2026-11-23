@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Δεν αποθηκεύτηκε: οι ρυθμίσεις του πρόσθετου είναι γεμάτες.",
   "Not saved: the store refused it.": "Δεν αποθηκεύτηκε: η αποθήκη το απέρριψε.",
   "Not saved: this field is not one the host can store.": "Δεν αποθηκεύτηκε: αυτό το πεδίο δεν είναι τύπου που μπορεί να αποθηκεύσει ο κεντρικός υπολογιστής.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Δεν σαρώνεται ξανά σε αυτή τη συνεδρία: %s (προκάλεσε κατάρρευση της σάρωσης συσκευών)",
   "Not set": "Δεν ορίστηκε",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Δεν χρησιμοποιείται για τη γεννήτρια σήματος, μια κάρτα ήχου ή ένα αρχείο I/Q - κανένα δεν έχει δικό του κρύσταλλο για διόρθωση.",
   "Not yet proved on a real radio.": "Δεν έχει αποδειχθεί ακόμη σε πραγματικό ραδιοφωνικό δέκτη.",

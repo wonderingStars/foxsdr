@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Nav saglabāts: spraudņa iestatījumi ir pilni.",
   "Not saved: the store refused it.": "Nav saglabāts: krātuve to noraidīja.",
   "Not saved: this field is not one the host can store.": "Nav saglabāts: šis lauks nav tāds, ko resursdators var saglabāt.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Šajā sesijā vairs netiek skenēts: %s (tas izraisīja ierīču meklēšanas avāriju)",
   "Not set": "Nav iestatīts",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Netiek lietots signālu ģeneratoram, skaņas kartei vai I/Q failam - nevienam no tiem nav sava labojama kristāla.",
   "Not yet proved on a real radio.": "Vēl nav pierādīts ar īstu radio.",

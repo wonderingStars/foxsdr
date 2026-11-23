@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Nie zapisano: ustawienia wtyczki są pełne.",
   "Not saved: the store refused it.": "Nie zapisano: magazyn to odrzucił.",
   "Not saved: this field is not one the host can store.": "Nie zapisano: to pole nie jest rodzajem, który host może zapisać.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Nie będzie ponownie skanowany w tej sesji: %s (spowodował awarię wyszukiwania urządzeń)",
   "Not set": "Nie ustawiono",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Nie dotyczy generatora sygnału, karty dźwiękowej ani pliku I/Q - żadne z nich nie ma własnego kwarcu do skorygowania.",
   "Not yet proved on a real radio.": "Jeszcze niesprawdzone na prawdziwym radiu.",

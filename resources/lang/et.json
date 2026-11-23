@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Ei salvestatud: lisandmooduli sätted on täis.",
   "Not saved: the store refused it.": "Ei salvestatud: hoidla lükkas selle tagasi.",
   "Not saved: this field is not one the host can store.": "Ei salvestatud: see väli ei ole selline, mida host saab salvestada.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Selles seansis uuesti ei skannita: %s (see jooksutas seadmete otsingu kokku)",
   "Not set": "Määramata",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Ei kasutata signaaligeneraatori, helikaardi ega I/Q-faili puhul - neil pole oma kristalli, mida parandada.",
   "Not yet proved on a real radio.": "Pole veel päris raadiol tõestatud.",

@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Kaydedilmedi: eklentinin ayarları dolu.",
   "Not saved: the store refused it.": "Kaydedilmedi: depo bunu reddetti.",
   "Not saved: this field is not one the host can store.": "Kaydedilmedi: bu alan, ana bilgisayarın saklayabileceği bir tür değil.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Bu oturumda yeniden taranmayacak: %s (aygıt taramasını çökertti)",
   "Not set": "Ayarlanmadı",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Sinyal üreteci, ses kartı veya I/Q dosyası için kullanılmaz - hiçbirinin düzeltilecek kendi kristali yoktur.",
   "Not yet proved on a real radio.": "Henüz gerçek bir radyoda kanıtlanmadı.",

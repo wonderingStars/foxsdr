@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "No desat: els paràmetres del connector són plens.",
   "Not saved: the store refused it.": "No desat: el magatzem l'ha rebutjat.",
   "Not saved: this field is not one the host can store.": "No desat: aquest camp no és un que l'amfitrió pugui desar.",
-  "Not scanned again this session: %s (it crashed the device scan)": "No es tornarà a explorar en aquesta sessió: %s (va bloquejar la cerca de dispositius)",
   "Not set": "Sense definir",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "No s'utilitza per al generador de senyals, una targeta de so o un fitxer I/Q - cap d'ells té un cristall propi per corregir.",
   "Not yet proved on a real radio.": "Encara no s'ha provat amb una ràdio real.",

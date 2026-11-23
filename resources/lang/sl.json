@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Ni shranjeno: nastavitve vtičnika so polne.",
   "Not saved: the store refused it.": "Ni shranjeno: shramba je to zavrnila.",
   "Not saved: this field is not one the host can store.": "Ni shranjeno: to polje ni vrsta, ki jo gostitelj lahko shrani.",
-  "Not scanned again this session: %s (it crashed the device scan)": "V tej seji se ne pregleduje več: %s (sesul je iskanje naprav)",
   "Not set": "Ni nastavljeno",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Ne uporablja se za generator signala, zvočno kartico ali datoteko I/Q - nobeden od njih nima lastnega kristala za popravek.",
   "Not yet proved on a real radio.": "Še ni preizkušeno na pravem radiu.",

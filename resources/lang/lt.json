@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Neišsaugota: papildinio nustatymai pilni.",
   "Not saved: the store refused it.": "Neišsaugota: saugykla tai atmetė.",
   "Not saved: this field is not one the host can store.": "Neišsaugota: šis laukas nėra tokio tipo, kurį šeimininkas gali saugoti.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Šioje sesijoje nebeskenuojama: %s (sukėlė įrenginių paieškos strigtį)",
   "Not set": "Nenustatyta",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Nenaudojama signalų generatoriui, garso plokštei ar I/Q failui - nė vienas neturi savo kristalo, kurį reikėtų pataisyti.",
   "Not yet proved on a real radio.": "Dar neišbandyta su tikru radiju.",

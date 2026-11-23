@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Ei tallennettu: laajennuksen asetukset ovat täynnä.",
   "Not saved: the store refused it.": "Ei tallennettu: tietovarasto hylkäsi sen.",
   "Not saved: this field is not one the host can store.": "Ei tallennettu: tämä kenttä ei ole sellainen, jonka isäntä voi tallentaa.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Ei skannata uudelleen tämän istunnon aikana: %s (se kaatoi laitehaun)",
   "Not set": "Ei asetettu",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Ei käytetä signaaligeneraattorille, äänikortille eikä I/Q-tiedostolle - millään niistä ei ole omaa korjattavaa kidettä.",
   "Not yet proved on a real radio.": "Ei ole vielä todistettu oikealla radiolla.",

@@ -1638,12 +1638,15 @@ void Engine::pollDeviceOpen() {
     }
 }
 
+// How long a pick waits for the cancelled network open worker to come back (it looks at the cancel flag every ~50 ms). Spent on the control pass when a person picks another radio, never on shutdown.
+static constexpr std::chrono::milliseconds kNetworkCancelWait{400};
+
 bool Engine::cancelPendingNetworkOpen() {
     if (!rx().deviceOpenPending_ || !rx().pendingOpenIsNetwork_ || !rx().openCancel_ || !rx().deviceOpenFuture_.valid()) { return false; }
     rx().openCancel_->store(true);
     // The worker checks the flag every ~50 ms of the connect and of the header wait; a name lookup in progress cannot be interrupted and
     // may outlast this, in which case the pick is refused as before and the next click finds the open finished.
-    if (rx().deviceOpenFuture_.wait_for(std::chrono::milliseconds(400)) != std::future_status::ready) { return true; }
+    if (rx().deviceOpenFuture_.wait_for(kNetworkCancelWait) != std::future_status::ready) { return true; }
     pollDeviceOpen();
     return true;
 }

@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "保存されません: プラグインの設定がいっぱいです。",
   "Not saved: the store refused it.": "保存されません: 保存先が拒否しました。",
   "Not saved: this field is not one the host can store.": "保存されません: この項目はホストが保存できる種類ではありません。",
-  "Not scanned again this session: %s (it crashed the device scan)": "このセッションでは再スキャンしません: %s (デバイスのスキャンをクラッシュさせました)",
   "Not set": "未設定",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "信号発生器、サウンドカード、I/Qファイルには使われません。いずれも補正すべき独自の水晶を持たないためです。",
   "Not yet proved on a real radio.": "実際の無線機ではまだ確認されていません。",

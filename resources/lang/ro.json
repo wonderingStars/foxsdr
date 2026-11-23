@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Nesalvat: setările pluginului sunt pline.",
   "Not saved: the store refused it.": "Nesalvat: stocarea l-a refuzat.",
   "Not saved: this field is not one the host can store.": "Nesalvat: acest câmp nu este unul pe care gazda îl poate stoca.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Nu mai este scanat în această sesiune: %s (a blocat căutarea dispozitivelor)",
   "Not set": "Nesetat",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Nu se folosește pentru generatorul de semnal, o placă de sunet sau un fișier I/Q - niciunul nu are un cristal propriu de corectat.",
   "Not yet proved on a real radio.": "Încă nedovedit pe un radio real.",

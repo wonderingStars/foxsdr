@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Neuloženo: nastavení pluginu jsou plná.",
   "Not saved: the store refused it.": "Neuloženo: úložiště to odmítlo.",
   "Not saved: this field is not one the host can store.": "Neuloženo: toto pole není typ, který hostitel dokáže uložit.",
-  "Not scanned again this session: %s (it crashed the device scan)": "V této relaci se znovu neprohledává: %s (shodil hledání zařízení)",
   "Not set": "Nenastaveno",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Nepoužívá se pro generátor signálu, zvukovou kartu ani soubor I/Q - žádný z nich nemá vlastní krystal k opravě.",
   "Not yet proved on a real radio.": "Zatím neověřeno na skutečném rádiu.",

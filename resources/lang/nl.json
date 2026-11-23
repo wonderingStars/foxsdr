@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Niet opgeslagen: de instellingen van de plug-in zijn vol.",
   "Not saved: the store refused it.": "Niet opgeslagen: de opslag heeft het geweigerd.",
   "Not saved: this field is not one the host can store.": "Niet opgeslagen: dit veld is geen type dat de host kan opslaan.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Wordt deze sessie niet opnieuw gescand: %s (liet het zoeken naar apparaten vastlopen)",
   "Not set": "Niet ingesteld",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Niet gebruikt voor de signaalgenerator, een geluidskaart of een I/Q-bestand - geen van deze heeft een eigen kristal om te corrigeren.",
   "Not yet proved on a real radio.": "Nog niet bewezen op een echte radio.",

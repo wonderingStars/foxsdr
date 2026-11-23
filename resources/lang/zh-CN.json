@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "未保存: 插件的设置已满。",
   "Not saved: the store refused it.": "未保存: 存储拒绝了它。",
   "Not saved: this field is not one the host can store.": "未保存: 此字段不是主机可以存储的类型。",
-  "Not scanned again this session: %s (it crashed the device scan)": "本次会话中不再扫描: %s (它导致设备扫描崩溃)",
   "Not set": "未设置",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "不用于信号发生器、声卡或 I/Q 文件 - 它们都没有需要校正的自有晶体。",
   "Not yet proved on a real radio.": "尚未在真实的无线电接收机上验证。",

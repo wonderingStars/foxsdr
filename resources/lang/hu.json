@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Nincs mentve: a plugin beállításai megteltek.",
   "Not saved: the store refused it.": "Nincs mentve: a tároló elutasította.",
   "Not saved: this field is not one the host can store.": "Nincs mentve: ez a mező nem olyan típusú, amelyet a gazda tárolni tud.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Ebben a munkamenetben nem keresi újra: %s (összeomlasztotta az eszközkeresést)",
   "Not set": "Nincs megadva",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Nem használatos a jelgenerátorhoz, hangkártyához vagy I/Q fájlhoz - egyiknek sincs saját javítandó kristálya.",
   "Not yet proved on a real radio.": "Még nem bizonyított valódi rádión.",

@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Ikke lagret: tilleggets innstillinger er fulle.",
   "Not saved: the store refused it.": "Ikke lagret: lageret avviste det.",
   "Not saved: this field is not one the host can store.": "Ikke lagret: dette feltet er ikke en type verten kan lagre.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Skannes ikke igjen i denne økten: %s (den fikk enhetssøket til å krasje)",
   "Not set": "Ikke angitt",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Brukes ikke for signalgeneratoren, et lydkort eller en I/Q-fil - ingen av dem har sin egen krystall å korrigere.",
   "Not yet proved on a real radio.": "Ikke bevist på en ekte radio ennå.",

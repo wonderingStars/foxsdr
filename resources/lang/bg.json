@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Не е запазено: настройките на плъгина са пълни.",
   "Not saved: the store refused it.": "Не е запазено: хранилището го отказа.",
   "Not saved: this field is not one the host can store.": "Не е запазено: това поле не е от вид, който хостът може да съхранява.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Не се сканира отново в тази сесия: %s (срина сканирането за устройства)",
   "Not set": "Не е зададено",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Не се използва за генератора на сигнал, звукова карта или I/Q файл - нито един от тях няма собствен кварц за коригиране.",
   "Not yet proved on a real radio.": "Още не е доказано с реално радио.",

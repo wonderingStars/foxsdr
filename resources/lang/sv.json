@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Inte sparat: tilläggets inställningar är fulla.",
   "Not saved: the store refused it.": "Inte sparat: lagret avvisade det.",
   "Not saved: this field is not one the host can store.": "Inte sparat: det här fältet är inte en typ som värden kan lagra.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Söks inte igen under den här sessionen: %s (den kraschade enhetssökningen)",
   "Not set": "Ej angiven",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Används inte för signalgeneratorn, ett ljudkort eller en I/Q-fil - ingen av dem har en egen kristall att korrigera.",
   "Not yet proved on a real radio.": "Inte bevisat på en riktig radio ännu.",

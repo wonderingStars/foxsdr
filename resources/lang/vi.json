@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Chưa lưu: cài đặt của plugin đã đầy.",
   "Not saved: the store refused it.": "Chưa lưu: kho lưu trữ đã từ chối.",
   "Not saved: this field is not one the host can store.": "Chưa lưu: trường này không phải loại mà máy chủ có thể lưu trữ.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Không quét lại trong phiên này: %s (đã làm hỏng quá trình quét thiết bị)",
   "Not set": "Chưa đặt",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Không dùng cho bộ tạo tín hiệu, card âm thanh hay tệp I/Q - không cái nào có tinh thể riêng để hiệu chỉnh.",
   "Not yet proved on a real radio.": "Chưa được kiểm chứng trên đài thu thật.",

@@ -286,6 +286,9 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"CloseLeak", "src/source/soundcard_source.cpp", 1}, {"CloseLeak", "src/sink/pa_init.cpp", 1},
         {"LinkStranded", "src/source/sdrplay_source.cpp", 1},
         {"StreamRestart", "src/source/airspy_source.cpp", 1},
+        {"StreamRestart", "src/source/hackrf_source.cpp", 1},      // (HackRF: a silent or stalled stream is re-armed, baa78d31)
+        {"StreamRestart", "src/source/rtlsdr_source.cpp", 1},      // (RTL-SDR: a failed bulk read re-arms the stream instead of faulting the radio, 9fddae77)
+        {"StreamRestart", "src/source/soapy_source.cpp", 1},       // (SoapySDR: the stall detector's bounded restart, fix/soapy-stall)
         {"TunerRetry", "src/source/rtl2832u.cpp", 1},
         {"LateCall", "src/source/soapy_source.cpp", 1},    {"LateCall", "src/source/sdrplay_source.cpp", 1},
         {"ScanLimit", "src/source/soapy_enum_proc.cpp", 5},   // was 4: the missing-helper answer (hw-findings item 6) is counted as the in-process fallback always was

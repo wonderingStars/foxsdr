@@ -2403,7 +2403,6 @@
   "Not saved: the plugin's settings are full.": "Non enregistré : les paramètres du plugin sont pleins.",
   "Not saved: the store refused it.": "Non enregistré : le magasin l'a refusé.",
   "Not saved: this field is not one the host can store.": "Non enregistré : ce champ n'est pas un type que l'hôte peut enregistrer.",
-  "Not scanned again this session: %s (it crashed the device scan)": "Non analysé à nouveau pendant cette session : %s (a fait planter la recherche de périphériques)",
   "Not set": "Non défini",
   "Not used for the signal generator, a sound card or an I/Q file - none has a crystal of its own to correct.": "Non utilisé pour le générateur de signal, une carte son ou un fichier I/Q - aucun n'a de quartz propre à corriger.",
   "Not yet proved on a real radio.": "Pas encore éprouvé sur une vraie radio.",
