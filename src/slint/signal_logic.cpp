@@ -943,7 +943,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
             paras.push_back({m.busy_line, true});
         }
         if (!faultedDrivers.empty()) {
-            paras.push_back({cc::formatText(tr("Not scanned again this session: %s (it crashed the device scan)"), faultedDrivers.c_str()), true});
+            paras.push_back({cc::formatText(tr("The search for %s radios crashed; press Refresh to try again"), cascade::gui::friendlyDriverList(faultedDrivers).c_str()), true});
         }
         if ((src & FOXAPI_SRC_UHD_LEFT_OUT) != 0u && !m.look_for_usrps) {
             const std::vector<std::string> left{"uhd"};

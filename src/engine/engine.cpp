@@ -1383,7 +1383,7 @@ std::string Engine::soapyScanGateDevice() const {
     return "a radio this session could not release";
 }
 
-void Engine::scanSoapy() {
+void Engine::scanSoapy(bool userRefresh) {
     // Kick the enumeration onto a worker and return immediately - see the
     // header for why this may not run inline. One at a time: a second scan
     // while one is in flight would race the result into soapyDevices_.
@@ -1494,7 +1494,7 @@ void Engine::scanSoapy() {
     // promises a list and nothing more, and this caller also needs the scan's
     // uhdImagesMissing answer for the hint under the Source list.
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
-    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps,
+    soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps, userRefresh,
                                                        absentOut, uhdNoImagesOut, usrpOnUsbOut, helperMissingOut, scanHook] {
         // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life; pumpWorkers collects it, and a scan that
         // never comes back is named here after the Open kind's budget.
@@ -1516,6 +1516,7 @@ void Engine::scanSoapy() {
         cascade::source::EnumOptions options;
         options.skipDrivers = skip;
         options.absentDrivers = absent;
+        options.userRefresh = userRefresh;   // only the explicit Refresh asks a crashed driver again (soapy_enum_proc.hpp)
         if (cascade::gui::soapyUhdUsbOnly(absent, namedSoapyArgs, lookForNetworkUsrps)) { options.usbOnlyDrivers = {"uhd"}; }
         cascade::source::EnumResult r = cascade::source::enumerateIsolated(options);
         *uhdNoImagesOut = r.uhdImagesMissing;
@@ -8318,7 +8319,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // SoapySDR scan goes through its own gate, which defers while a
             // radio is open and says why once.
             scanNative();
-            scanSoapy();
+            scanSoapy(/*userRefresh=*/true);
             return res;
         case FOXAPP_OP_SCAN_DEVICES_ON_OPEN:
             // The Source list opening: the lazy first SoapySDR scan, or the
@@ -10524,9 +10525,10 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                                          : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (triedModel.empty() || triedModel == args) { triedModel = kind; }
             cascade::core::diagWarnf(
-                "source: the saved radio (%s, %s) did not reopen (%s) - the receiver is on the "
+                "source: the saved radio (%s, %s) did not reopen (%s), the driver said: %s - the receiver is on the "
                 "signal generator and the radio stays saved",
-                triedModel.c_str(), kind.c_str(), whyClass.c_str());
+                triedModel.c_str(), kind.c_str(), whyClass.c_str(),
+                cascade::core::radioreport::openFailureWords(kind, args, rx().sourceError_).c_str());
 
             // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
             // generator above, which is right - it has to run on something -

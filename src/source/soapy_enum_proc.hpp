@@ -374,6 +374,11 @@ struct EnumResult {
     // fault's code and module even when the child's report is lost.
     std::string childFaultLine;
 
+    // A FOREIGN USB DEVICE THE CHILD'S LIBUSB COULD NOT READ (22 Nov 2026: three UHD scan children died inside libusb-1.0.dll with a VMware USB device
+    // on the bus whose descriptor was invalid). One sentence naming only its vendor and product id, taken from the child's stderr; empty when libusb
+    // said nothing of the kind. Added to the death report and the log line.
+    std::string usbNote;
+
     // UHD SAID IT HAS NO FIRMWARE IMAGES during this scan's walk (2026-10-21,
     // source/soapy_log_bridge.hpp's uhdImagesMissingLine). radioconda installs
     // SoapyUHD and uhd.dll but no images directory, so UHD's find warns and
@@ -504,7 +509,18 @@ struct EnumOptions {
     // hint it does not. Carried to the helper (and the in-process fallback) in the environment variable kUsbOnlyEnv, read by
     // SoapySource::findHintFor. Restored when the scan ends.
     std::vector<std::string> usbOnlyDrivers;
+
+    // THE USER PRESSED REFRESH (set only by the engine's explicit SCAN_DEVICES; never by the start-up search, a hot-plug or a wake). A driver
+    // whose child crashed an earlier scan this session is then asked again, at most kRefreshRetriesPerSession times per driver per session.
+    bool userRefresh = false;
 };
+
+// How many times an explicit Refresh asks a crashed driver again in one session. After that it stays left out until FoxSDR is restarted.
+inline constexpr int kRefreshRetriesPerSession = 2;
+
+// The child's stderr text -> "a USB device (VID_0E0F&PID_0001) has an invalid descriptor" (vendor and product id only, never the instance path),
+// or empty when libusb reported no such device.
+std::string invalidDescriptorNote(const std::string& childStderr);
 
 // The environment variable that carries EnumOptions::usbOnlyDrivers to the helper child: comma-separated lower-case driver names.
 inline constexpr const char* kUsbOnlyEnv = "FOXSDR_SOAPY_USB_ONLY";
@@ -546,6 +562,9 @@ std::vector<FaultedDriver> sessionFaultedDrivers();
 // too-slow-beside-a-radio list (EnumResult::sessionSlowDrivers) too, which
 // likewise starts empty.
 void clearSessionFaultedDriversForTest();
+
+// Refresh retries a driver still has this session (kRefreshRetriesPerSession minus the ones spent). Thread-safe.
+int refreshRetriesLeft(const std::string& driver);
 
 // THE GROUPING TAG of a contained child death, hashed into the report's
 // signature in place of a module name (there is no faulting module in this

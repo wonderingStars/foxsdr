@@ -1111,7 +1111,7 @@ void testNoHardware() {
         CHECK(has(t, "search: C:/search/two"));
         CHECK(has(t, "module: libsoapy_a.dll"));
         CHECK(has(t, "module: libsoapy_b.dll"));
-        CHECK(has(t, "Not scanned again this session: uhd, audio (it crashed the device scan)"));
+        CHECK(has(t, "The search for Ettus (UHD), audio radios crashed; press Refresh to try again"));
         CHECK_EQ(Access::lists(a).modulesLoaded, 2);
         CHECK_EQ(Access::lists(a).evidence.size(), 5u);
         // A thousand more frames, however long the block stays up: no further crossing.

@@ -364,6 +364,14 @@ void testTheUhdImagesMissingHint() {
 
 }  // namespace
 
+// The crashed-driver note names the Ettus driver the way a user knows it, and leaves the rest as they are.
+void testFriendlyDriverNames() {
+    CHECK(cascade::gui::friendlyDriverList("uhd") == "Ettus (UHD)");
+    CHECK(cascade::gui::friendlyDriverList("uhd, airspy") == "Ettus (UHD), airspy");
+    CHECK(cascade::gui::friendlyDriverList("airspy, uhd, hackrf") == "airspy, Ettus (UHD), hackrf");
+    CHECK(cascade::gui::friendlyDriverList("").empty());
+}
+
 int main() {
     {
         std::ifstream in(std::string(CASCADE_SOURCE_DIR) + "/src/engine/engine.cpp", std::ios::binary);
@@ -383,5 +391,6 @@ int main() {
     testNetworkProbesNeedTheSwitch();
     testTheNetworkUsrpHintOnlyWhenUhdWasSkipped();
     testTheUhdImagesMissingHint();
+    testFriendlyDriverNames();
     return testSummary("test_device_scan_plan");
 }

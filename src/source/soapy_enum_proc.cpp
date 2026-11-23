@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -492,6 +493,7 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
     // child's own answer can still say it too (a SoapyUHD that DOES forward
     // UHD's log), which parseChildOutput keeps rather than overwrites.
     out.uhdImagesMissing = uhdImagesMissingLine(errText.c_str());
+    out.usbNote = invalidDescriptorNote(errText);
 
     DWORD exitCode = 0;
     ::GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -742,6 +744,35 @@ void rememberFaultedDriver(const std::string& driver, unsigned long exitCode) {
     sessionList().push_back(FaultedDriver{name, exitCode});
 }
 
+std::map<std::string, int>& refreshRetryCounts() {
+    static std::map<std::string, int> counts;
+    return counts;
+}
+
+// THE USER'S REFRESH GIVES A CRASHED DRIVER ANOTHER TURN (field, 22 Nov 2026: after one libusb crash the B200's driver stayed out for the rest of the
+// session, so a healthy board could never be listed without a restart). Each such driver leaves the faulted list, so the walk below asks it; if it
+// crashes again it is remembered again. Bounded by kRefreshRetriesPerSession per driver per session; the automatic searches never come here.
+void grantRefreshRetries() {
+    std::vector<std::string> granted;
+    {
+        std::lock_guard<std::mutex> lk(sessionMutex());
+        std::vector<FaultedDriver>& list = sessionList();
+        for (auto it = list.begin(); it != list.end();) {
+            int& used = refreshRetryCounts()[it->driver];
+            if (used < kRefreshRetriesPerSession) {
+                ++used;
+                granted.push_back(it->driver + " (try " + std::to_string(used) + " of " + std::to_string(kRefreshRetriesPerSession) + ")");
+                it = list.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    for (const std::string& g : granted) {
+        core::diagLogf("soapy: asking %s again because Refresh was pressed - it crashed a device scan earlier in this session", g.c_str());
+    }
+}
+
 std::vector<std::string> sessionFaultedNames() {
     std::vector<std::string> out;
     std::lock_guard<std::mutex> lk(sessionMutex());
@@ -863,6 +894,13 @@ std::string withChildSaid(const std::string& head, const std::string& line) {
     return head + kSep + line.substr(0, kReasonBudget - head.size() - kSep.size());
 }
 
+// The child's own fault line with the foreign USB device's note after it (EnumResult::usbNote), for the report reason and the log. The note comes
+// second: the code and module of the fault are what the grouping needs; the note says what else was on the bus.
+std::string faultLineWithUsbNote(const std::string& line, const std::string& note) {
+    if (note.empty()) { return line; }
+    return line.empty() ? note : line + "; " + note;
+}
+
 std::string joinNames(const std::vector<std::string>& names, std::size_t most) {
     std::string out;
     for (std::size_t i = 0; i < names.size() && i < most; ++i) {
@@ -907,8 +945,33 @@ std::vector<FaultedDriver> sessionFaultedDrivers() {
     return sessionList();
 }
 
+int refreshRetriesLeft(const std::string& driver) {
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    const auto it = refreshRetryCounts().find(lowerAscii(driver));
+    const int used = it == refreshRetryCounts().end() ? 0 : it->second;
+    return used >= kRefreshRetriesPerSession ? 0 : kRefreshRetriesPerSession - used;
+}
+
+std::string invalidDescriptorNote(const std::string& err) {
+    const std::size_t at = err.find("invalid descriptor");
+    if (at == std::string::npos) { return std::string(); }
+    // the libusb line that holds it: from the start of that line back to its end
+    std::size_t b = err.rfind('\n', at);
+    b = b == std::string::npos ? 0 : b + 1;
+    std::size_t e = err.find('\n', at);
+    if (e == std::string::npos) { e = err.size(); }
+    const std::string line = err.substr(b, e - b);
+    const std::size_t v = line.find("VID_");
+    const std::size_t p = line.find("PID_");
+    if (v == std::string::npos || p == std::string::npos || v + 8 > line.size() || p + 8 > line.size()) {
+        return "a USB device on the bus has an invalid descriptor";
+    }
+    return "a USB device (" + line.substr(v, 8) + "&" + line.substr(p, 8) + ") has an invalid descriptor";
+}
+
 void clearSessionFaultedDriversForTest() {
     std::lock_guard<std::mutex> lk(sessionMutex());
+    refreshRetryCounts().clear();
     sessionList().clear();
     sessionSlowList().clear();
 }
@@ -1217,7 +1280,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 const std::string reason = withChildSaid(
                     "SDR device enumeration child process for driver=" + reportSafeName(driver) +
                         " died after its answer was complete (contained: the answer was used)",
-                    one.childFaultLine);
+                    faultLineWithUsbNote(one.childFaultLine, one.usbNote));
                 if (!one.endedOnClosedPipe) {
                     reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
                                                    childFaultSignatureTag(driver));
@@ -1260,7 +1323,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
             const std::string reason = withChildSaid(
                 std::string(core::kChildDeathReasonPrefix) + " probing driver=" +
                     reportSafeName(driver) + " (contained: every other driver was still probed)",
-                one.childFaultLine);
+                faultLineWithUsbNote(one.childFaultLine, one.usbNote));
             reportChildDeathUnlessChildDid(crashDir, one, reason, 1,
                                            childFaultSignatureTag(driver));
             // Deterministic by now: the driver died with nothing else running
@@ -1286,6 +1349,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
                 "skipped for this scan; every other driver was still asked%s%s",
                 driver.c_str(), one.exitCode, one.childFaultLine.empty() ? "" : " - the child said: ",
                 one.childFaultLine.c_str());
+            if (!one.usbNote.empty()) { core::diagWarnf("soapy: while probing '%s', libusb reported: %s", driver.c_str(), one.usbNote.c_str()); }
         }
     }
 
@@ -1371,6 +1435,7 @@ struct UsbOnlyEnvScope {
 
 EnumResult enumerateIsolated(const EnumOptions& options) {
     const UsbOnlyEnvScope usbOnlyEnv(options.usbOnlyDrivers);
+    if (options.userRefresh) { grantRefreshRetries(); }
     const auto t0 = std::chrono::steady_clock::now();
     EnumResult result;
 
@@ -1530,7 +1595,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                 std::string(core::kChildDeathReasonPrefix) +
                     " (contained: the parent survived and " +
                     (answered ? "used its answer)" : "re-probed)") + running,
-                result.childFaultLine);
+                faultLineWithUsbNote(result.childFaultLine, result.usbNote));
 
             // NOT FILED WHEN THE PIPE WAS CLOSED (0.99.76, field reports
             // 862234B08B9FC33D and 30BCD594C128766D): a helper whose pipe had no

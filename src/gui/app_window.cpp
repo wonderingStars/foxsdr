@@ -7781,8 +7781,8 @@ void AppWindow::drawSourceSection() {
     if (!c.faultedDrivers.empty()) {
         std::string note;
         cascade::core::formatUtf8(
-            note, tr("Not scanned again this session: %s (it crashed the device scan)"),
-            c.faultedDrivers.c_str());
+            note, tr("The search for %s radios crashed; press Refresh to try again"),
+            cascade::gui::friendlyDriverList(c.faultedDrivers).c_str());
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
         ImGui::TextWrapped("%s", note.c_str());
         ImGui::PopStyleColor();

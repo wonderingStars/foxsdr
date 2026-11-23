@@ -530,7 +530,7 @@ int main() {
         const SourceModel mh = readSource(hints.t, hints.s, hints.o);
         CHECK(has(mh.advisory, "Network USRPs are not searched - tick Look for network USRPs to include them"));
         CHECK(has(mh.advisory, "A USRP is plugged in but UHD has no firmware images"));
-        CHECK(has(mh.advisory, "Not scanned again this session: uhd, airspy (it crashed the device scan)"));
+        CHECK(has(mh.advisory, "The search for Ettus (UHD), airspy radios crashed; press Refresh to try again"));
         CHECK(has(mh.advisory, "Refreshed the native radios. The SoapySDR scan is deferred while NESDR SMArt v5 is open"));
         hints.t.facts["fact.source.scanSkip"] = "uhd";
         CHECK(has(readSource(hints.t, hints.s, hints.o).advisory, "While NESDR SMArt v5 is open, Refresh looks for every other kind of radio but leaves out the uhd driver"));

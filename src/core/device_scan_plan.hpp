@@ -36,6 +36,22 @@
 
 namespace cascade::gui {
 
+// "uhd, airspy" -> "Ettus (UHD), airspy": driver names as the screen says them (only a driver with a well-known brand is renamed). Used by the note that
+// says a driver's search crashed (the classic Source section and the Slint source panel).
+inline std::string friendlyDriverList(const std::string& commaSeparated) {
+    std::string out;
+    std::size_t i = 0;
+    while (i <= commaSeparated.size()) {
+        std::size_t j = commaSeparated.find(", ", i);
+        if (j == std::string::npos) { j = commaSeparated.size(); }
+        std::string name = commaSeparated.substr(i, j - i);
+        if (name == "uhd") { name = "Ettus (UHD)"; }
+        if (!name.empty()) { out += (out.empty() ? "" : ", ") + name; }
+        i = j + 2;
+    }
+    return out;
+}
+
 // One open radio: its family as the receiver and the patch name it ("rtlsdr",
 // "hackrf", "soapy", ...) and its args ("driver=uhd,serial=..." for "soapy").
 struct OpenRadio {

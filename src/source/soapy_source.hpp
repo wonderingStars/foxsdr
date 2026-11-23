@@ -680,6 +680,15 @@ private:
     // the three sites the driver failed at.
     bool activateLocked(const char* what, bool* pending = nullptr);
     bool deactivateLocked(const char* what);
+    // STREAM RESTART (the Soapy counterpart of the RTL-SDR reader's re-arm, kMaxStreamRearms = 3). Both run with the device lock held.
+    // recreateStreamLocked: closeStream + setupStream, so a stream built for the old state is never reused. Needs the stream
+    // DEACTIVATED. restartStreamLocked: deactivate, recreate, re-apply rate / frequency / antenna / gain, activate.
+    bool recreateStreamLocked(std::string& why);
+    bool restartStreamLocked(std::string& why);
+    // Called from read() on every no-samples answer of the driver: the stall detector.
+    void noteNoSamplesLocked();
+    // True for a driver whose stream must be re-created after a live rate change (the B200's master clock follows the rate).
+    bool recreatesStreamOnRateChange() const;
 
     // Releases whatever half-built state exists, swallowing every Soapy
     // exception: teardown runs inside catch blocks and destructors, where a
@@ -876,6 +885,13 @@ public:
     // Tests only: shorten the minute so the read loop's own reporting can be
     // seen without waiting for it.
     void setStreamHealthWindowForTest(std::chrono::milliseconds w) { healthWindow_ = w; }
+    // HOW LONG A RUNNING STREAM MAY DELIVER NOTHING before it is restarted, and how many restarts one stall gets.
+    static constexpr std::chrono::milliseconds kStallWindow{5000};
+    static constexpr int kMaxStallRestarts = 3;
+    // Tests only: a stall window a test can wait out.
+    void setStallWindowForTest(std::chrono::milliseconds w) { stallWindow_ = w; }
+    // How many times the stream has been restarted for a stall since it last delivered steadily (tests read it).
+    int stallRestartsForTest() const { return stallRestarts_; }
 
     // HOW LONG A LATE CALL IS LISTENED FOR before it is given up (see
     // setCenterFrequencyHz). Nothing ever blocks on this: it is the age past
@@ -892,6 +908,13 @@ public:
 
 private:
     void noteRead(int ret, std::size_t got);
+    // STALL DETECTOR STATE (guarded by the device lock, which read() and every restart hold): when the current run of read answers
+    // without samples began, and how many restarts have been spent on it.
+    std::chrono::steady_clock::time_point noSamplesSince_{};
+    bool noSamplesRun_ = false;
+    int stallRestarts_ = 0;
+    std::chrono::steady_clock::time_point lastStallRestartAt_{};
+    std::chrono::milliseconds stallWindow_ = kStallWindow;
     StreamHealth health_;
     // Set by the read loop's own write, and only by it, so a caller that took
     // the summary early (a test) does not use up the first minute's line.

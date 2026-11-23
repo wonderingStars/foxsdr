@@ -92,6 +92,10 @@ RadioIdentity soundCardIdentity();
 // "withheld: <code>"), then cut to `maxChars` characters on a character boundary. Never empty (a report needs a reason).
 std::string scrubReason(const std::string& raw, const std::string& serial, std::size_t maxChars = 400);
 
+// THE VENDOR'S OWN WORDS for a log line about a failed open: the driver's sentence through the same scrub (the radio's serial out, paths and names masked),
+// cut to 160 characters, and never empty ("the driver gave no reason" when it said nothing). The log used to carry only the one-word class.
+std::string openFailureWords(const std::string& driverKind, const std::string& args, const std::string& reason);
+
 // Only the radio lines of the log ring (the first word, after the time stamp and the level word, is a radio prefix of contract 2.1), each
 // through the same scrub, in the contract's own shape "HH:MM:SS.mmm source: ..." (the ring's "info"/"warn" level word is dropped: the contract's
 // pattern has none), at most `maxLines`, newest last, each at most 240 characters. A line the text rules still refuse is left out.

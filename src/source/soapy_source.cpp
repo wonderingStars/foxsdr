@@ -189,6 +189,27 @@ std::string describe(const std::exception& e, const char* context) {
     return std::string(context) + ": " + msg;
 }
 
+// THE ARGUMENTS A SAVED RADIO IS OPENED WITH. The row carries every key the search printed, and for an Ettus (UHD) radio several of them are not the
+// radio: `label` and `name` are display text (the label embeds the USB address and changes when the board re-enumerates), `product` is a model string.
+// UHD filters on every key it is given, so a stale one answers "No devices found" for a board that is on the bus. For driver=uhd with a serial the open
+// keeps driver, serial and type only. Any other driver, and a uhd row with no serial, is passed through untouched. The saved row itself is never edited.
+std::string reducedMakeArgs(const std::string& args) {
+    try {
+        const SoapySDR::Kwargs kw = SoapySDR::KwargsFromString(args);
+        const auto d = kw.find("driver");
+        const auto sn = kw.find("serial");
+        if (d == kw.end() || d->second != "uhd" || sn == kw.end() || sn->second.empty()) { return args; }
+        SoapySDR::Kwargs out;
+        out["driver"] = d->second;
+        out["serial"] = sn->second;
+        const auto t = kw.find("type");
+        if (t != kw.end() && !t->second.empty()) { out["type"] = t->second; }
+        return SoapySDR::KwargsToString(out);
+    } catch (...) {
+        return args;
+    }
+}
+
 // "2000000 S/s" - the rate as the user reads it on the counter, for the
 // messages setSampleRateHz leaves about what the stream is doing now.
 std::string rateWords(double hz) {
@@ -1200,6 +1221,7 @@ bool SoapySource::open(const std::string& args) {
     struct Open {
         SoapySource* self;
         const std::string* args;
+        std::string makeArgs;  // what Device::make is given (see reducedMakeArgs); the message below still quotes `args`
         enum class Result { Ok, NullDevice, NoRxChannel, NullStream, Threw } result = Result::Ok;
         std::string threw;
         // Readbacks land here, not in the members: the mirrors are atomics
@@ -1227,12 +1249,12 @@ bool SoapySource::open(const std::string& args) {
         std::vector<double> rates;
         bool autoGainSupported = false;
         bool freqCorrectionSupported = false;
-    } o{this, &args};
+    } o{this, &args, reducedMakeArgs(args)};
 
     const bool completed = guardedVendorCall([&o]() noexcept {
         SoapySource* s = o.self;
         try {
-            s->link_->dev = SoapySDR::Device::make(*o.args);
+            s->link_->dev = SoapySDR::Device::make(o.makeArgs);
             if (s->link_->dev == nullptr) {
                 // make() normally throws on failure, but a null return is
                 // legal API-wise and must not turn into a null deref at
@@ -1864,6 +1886,8 @@ bool SoapySource::start() {
     // 40002A91C26F3C07 and 9B804643C56308CF). A start the driver has not
     // answered within kVendorCallWait is PENDING: true, running, reads answer
     // 0, and the answer is taken when it comes (see LateCall).
+    noSamplesRun_ = false;
+    stallRestarts_ = 0;
     bool pending = false;
     if (!activateLocked("starting the stream", &pending)) {
         return false;
@@ -2119,6 +2143,164 @@ bool SoapySource::deactivateLocked(const char* what) {
     return true;
 }
 
+bool SoapySource::recreateStreamLocked(std::string& why) {
+    // closeStream + setupStream, guarded like every vendor crossing. Runs with the stream DEACTIVATED and the device lock held. A stream that cannot be
+    // made again leaves link_->stream null, which read() answers with 0 and which the caller turns into a fault with this sentence.
+    struct Re {
+        SoapySource* self;
+        bool threw = false;
+        bool noStream = false;
+        std::string message;
+    } r{this};
+    const bool completed = guardedVendorCall([&r]() noexcept {
+        try {
+            auto& l = *r.self->link_;
+            if (l.stream != nullptr) {
+                try {
+                    l.dev->closeStream(l.stream);
+                } catch (...) {
+                }
+                l.stream = nullptr;
+            }
+            l.stream = l.dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32, std::vector<std::size_t>{kChannel});
+            if (l.stream == nullptr) { r.noStream = true; }
+        } catch (const std::exception& e) {
+            r.threw = true;
+            r.message = describe(e, "setupStream failed");
+        } catch (...) {
+            r.threw = true;
+            r.message = "setupStream failed: non-standard exception";
+        }
+    });
+    if (!completed) {
+        noteVendorFault("re-creating the stream");
+        why = lastError();
+        return false;
+    }
+    if (r.threw) { why = r.message; return false; }
+    if (r.noStream) { why = "setupStream(RX, CF32) returned no stream"; return false; }
+    return true;
+}
+
+bool SoapySource::recreatesStreamOnRateChange() const {
+    // The B200's master clock follows the sample rate, and a UHD streamer built for the old clock is not trusted across the change (field: two
+    // silent stalls, 20 and 22 Nov 2026, the second straight after live rate changes). INFERRED, not proved on the hardware; the stall detector
+    // below is the net under every other driver.
+    return driverKey_ == "uhd";
+}
+
+bool SoapySource::restartStreamLocked(std::string& why) {
+    // THE STATE TO PUT BACK, copied out before the guarded body (no lock may be taken inside it).
+    const double rate = sampleRateHz_.load(std::memory_order_relaxed);
+    const double freq = centerFrequencyHz_.load(std::memory_order_relaxed);
+    std::string antenna;
+    std::vector<std::string> gainNames;
+    std::vector<double> gainValues;
+    bool autoGain = false;
+    {
+        std::lock_guard<std::mutex> lk(infoMutex_);
+        antenna = antenna_;
+        autoGain = autoGain_;
+        for (std::size_t i = 0; i < gainInfo_.size() && i < gainDb_.size(); ++i) {
+            gainNames.push_back(gainInfo_[i].name);
+            gainValues.push_back(gainDb_[i]);
+        }
+    }
+    if (!deactivateLocked("stopping a stalled stream")) {
+        if (deviceDead()) { why = lastError(); return false; }
+        // The driver answered and said no: the stream is rebuilt anyway, which is the point of a restart.
+    }
+    if (!recreateStreamLocked(why)) { return false; }
+    struct Apply {
+        SoapySource* self;
+        double rate, freq;
+        const std::string* antenna;
+        const std::vector<std::string>* names;
+        const std::vector<double>* values;
+        bool autoGain;
+        double rateBack = 0.0;
+    } a{this, rate, freq, &antenna, &gainNames, &gainValues, autoGain};
+    const bool completed = guardedVendorCall([&a]() noexcept {
+        auto& d = *a.self->link_->dev;
+        // each setting on its own: one the driver refuses must not cost the others
+        if (a.rate > 0.0) {
+            try { d.setSampleRate(SOAPY_SDR_RX, kChannel, a.rate); a.rateBack = d.getSampleRate(SOAPY_SDR_RX, kChannel); } catch (...) {}
+        }
+        if (a.freq > 0.0) {
+            try { d.setFrequency(SOAPY_SDR_RX, kChannel, a.freq); } catch (...) {}
+        }
+        if (!a.antenna->empty()) {
+            try { d.setAntenna(SOAPY_SDR_RX, kChannel, *a.antenna); } catch (...) {}
+        }
+        if (a.autoGain) {
+            try { d.setGainMode(SOAPY_SDR_RX, kChannel, true); } catch (...) {}
+        } else {
+            for (std::size_t i = 0; i < a.names->size(); ++i) {
+                try { d.setGain(SOAPY_SDR_RX, kChannel, (*a.names)[i], (*a.values)[i]); } catch (...) {}
+            }
+        }
+    });
+    if (!completed) {
+        noteVendorFault("re-applying the settings");
+        why = lastError();
+        return false;
+    }
+    if (a.rateBack > 0.0) { sampleRateHz_.store(a.rateBack, std::memory_order_relaxed); }
+    bool pending = false;
+    if (!activateLocked("restarting a stalled stream", &pending)) {
+        why = lastError();
+        return false;
+    }
+    return true;
+}
+
+// THE STALL DETECTOR (field: 20 and 22 Nov 2026, a B200 open and "streaming" with zero samples for 18 minutes and for 237 minutes, no fault, no message).
+// Every read answer that carries no samples while the stream is meant to run lands here, with the device lock held. A run of them longer than the
+// stall window restarts the stream, at most kMaxStallRestarts times; steady samples afterwards forgive the budget. A stream that still delivers nothing
+// is the fault, worded for what it is, never "unplugged" unless the driver says the device is gone.
+void SoapySource::noteNoSamplesLocked() {
+    const auto now = std::chrono::steady_clock::now();
+    if (!noSamplesRun_) {
+        noSamplesRun_ = true;
+        noSamplesSince_ = now;
+        return;
+    }
+    if (now - noSamplesSince_ < stallWindow_) { return; }
+    std::string model;
+    {
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        model = name_;
+    }
+    if (model.rfind("SoapySDR: ", 0) == 0) { model.erase(0, 10); }
+    const long long secs = std::chrono::duration_cast<std::chrono::seconds>(now - noSamplesSince_).count();
+    if (stallRestarts_ >= kMaxStallRestarts) {
+        std::string msg = "the radio delivered no samples for " + std::to_string(secs) + " s and restarting its stream " + std::to_string(kMaxStallRestarts) +
+                          " times did not bring them back - power-cycle the radio, then pick it again";
+        core::diagWarnf("source: the %s %s", model.c_str(), msg.c_str());
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        lastError_ = msg;
+        faulted_ = true;
+        rre::noteDeviceFault(this, "soapy", "reading samples", lastError_);
+        return;
+    }
+    ++stallRestarts_;
+    core::health::raiseRecovered(core::health::Recovered::StreamRestart);
+    core::diagWarnf("source: the %s stream delivered nothing for %lld s; restarting the stream (attempt %d of %d)", model.c_str(), secs, stallRestarts_,
+                    kMaxStallRestarts);
+    std::string why;
+    const bool back = restartStreamLocked(why);
+    lastStallRestartAt_ = std::chrono::steady_clock::now();
+    noSamplesRun_ = false;
+    if (!back) {
+        std::string msg = "the radio delivered no samples and its stream would not restart: " + why;
+        std::lock_guard<std::mutex> lk(errorMutex_);
+        if (!deviceDead_) { lastError_ = msg; }
+        faulted_ = true;
+        running_.store(false, std::memory_order_relaxed);
+        rre::noteDeviceFault(this, "soapy", "reading samples", msg);
+    }
+}
+
 std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     if (dst == nullptr || n == 0) {
         return 0;
@@ -2234,6 +2416,8 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
             const bool scrubbed = sanitizeNonFinite(dst, got);
             std::lock_guard<std::mutex> lk(errorMutex_);
             consecutiveErrors_ = 0;  // samples arrived: the device is alive
+            noSamplesRun_ = false;
+            if (stallRestarts_ > 0 && std::chrono::steady_clock::now() - lastStallRestartAt_ >= std::chrono::seconds(60)) { stallRestarts_ = 0; }
             if (scrubbed) {
                 // Classified like an overflow: recorded so the GUI can show
                 // it, and NOT counted toward the fault threshold. The device
@@ -2252,8 +2436,10 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // "readStream failed" in the GUI. (A literal 0 is not a documented
         // return, but it means no samples either way, so it lands here.)
         if (ret == SOAPY_SDR_TIMEOUT || ret == 0) {
+            noteNoSamplesLocked();
             return 0;
         }
+        if (transientStreamError(ret)) { noteNoSamplesLocked(); }
         {
             std::lock_guard<std::mutex> lk(errorMutex_);
             lastError_ = std::string("readStream failed: ") + SoapySDR::errToStr(ret);
@@ -2504,6 +2690,20 @@ bool SoapySource::setSampleRateHz(double hz) {
         return false;
     }
     sampleRateHz_.store(r.got, std::memory_order_relaxed);
+    noSamplesRun_ = false;  // a new rate is a new stream: the stall clock starts again
+    if (wasRunning && recreatesStreamOnRateChange()) {
+        // THE B200 CASE (field, 22 Nov 2026): 2.4, then 1.0, then 2.0 MS/s on a live stream, and the stream went 1.55 M, 0.75 M, then 0 samples/s for
+        // 237 minutes with no fault. The master clock follows the rate, so the stream made for the old clock is closed and a fresh one made for the
+        // new, while the device is quiescent (deactivated above). INFERRED as the cause, not proved on the hardware.
+        std::string why;
+        if (!recreateStreamLocked(why)) {
+            running_.store(false, std::memory_order_relaxed);
+            if (!deviceDead()) {
+                setError(std::string("sample rate changed to ") + rateWords(r.got) + " but the stream could not be re-created (" + why + ") - it is stopped");
+            }
+            return false;
+        }
+    }
     // A restart the driver has not answered yet is PENDING (see
     // activateLocked): the stream stays running, reads answer 0 until the
     // answer is taken, and a late refusal stops it as faulted().

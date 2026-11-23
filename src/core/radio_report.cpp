@@ -679,6 +679,13 @@ std::string scrubReason(const std::string& raw, const std::string& serial, std::
     return t;
 }
 
+std::string openFailureWords(const std::string& driverKind, const std::string& args, const std::string& reason) {
+    bool blank = true;
+    for (char ch : reason) { if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') { blank = false; break; } }
+    if (blank) { return "the driver gave no reason"; }
+    return scrubReason(reason, identify(driverKind, args).serial, 160);
+}
+
 namespace {
 
 const char* const kRadioPrefixes[] = {"source", "soapy", "vendor", "radio", "rtltcp", "aor", "rx888", "pluto", "mirisdr", "hackrf", "airspy",

@@ -1898,6 +1898,64 @@ int main(int argc, char** argv) {
         CHECK(r.faultedDrivers.empty());
         cascade::source::clearSessionFaultedDriversForTest();
     }
+    // --- 2026-11-23: A CRASHED DRIVER IS ANNOUNCED AND ASKED AGAIN ONLY AT THE USER'S REFRESH -----------------------------------------------------------
+    //
+    // The owner's B200: three UHD scan children died inside libusb; after the first, FoxSDR left uhd out for the rest of the session and a healthy
+    // board could never be listed. The fake dies with 43 whenever uhd is asked ("uhdtrap"). The automatic searches (start-up, hot-plug, wake) never
+    // ask a crashed driver again; an explicit Refresh does, kRefreshRetriesPerSession times per driver per session, and the driver stays remembered
+    // (and so is named on screen) after each crash.
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const std::vector<std::string> wantUhd{"uhd"};
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == cascade::source::kRefreshRetriesPerSession);
+
+        const EnumResult first = enumerateIsolated(o);              // the crash
+        CHECK(first.faultedDrivers == wantUhd);
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);   // remembered: this is what the screen names
+
+        const EnumResult automatic = enumerateIsolated(o);          // an automatic search: not asked, nothing dies
+        CHECK(automatic.sessionSkippedDrivers == wantUhd);
+        CHECK(automatic.childDeaths == 0);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == 2);
+
+        EnumOptions refresh = o;
+        refresh.userRefresh = true;
+        const EnumResult r1 = enumerateIsolated(refresh);           // Refresh, try 1 of 2: asked again (and it crashes again)
+        CHECK(r1.sessionSkippedDrivers.empty());
+        CHECK(r1.childDeaths >= 1);
+        CHECK(r1.faultedDrivers == wantUhd);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == 1);
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);   // still remembered after the crash
+
+        const EnumResult autoAgain = enumerateIsolated(o);          // automatic again: still not asked
+        CHECK(autoAgain.sessionSkippedDrivers == wantUhd);
+        CHECK(autoAgain.childDeaths == 0);
+
+        const EnumResult r2 = enumerateIsolated(refresh);           // Refresh, try 2 of 2
+        CHECK(r2.childDeaths >= 1);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == 0);
+
+        const EnumResult r3 = enumerateIsolated(refresh);           // the budget is spent: left out until FoxSDR restarts
+        CHECK(r3.sessionSkippedDrivers == wantUhd);
+        CHECK(r3.childDeaths == 0);
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
+    {
+        // THE FOREIGN DEVICE'S WORDS: vendor and product id only, never its instance path.
+        const std::string err =
+            "[INFO] [UHD] Win32\r\nlibusb: error [init_device] device 'USB\\VID_0E0F&PID_0001\\5&CC3F949&0&7' has invalid descriptor!\r\n"
+            "libusb: warning [winusb_get_device_list] failed to initialize device\r\n";
+        const std::string note = cascade::source::invalidDescriptorNote(err);
+        CHECK(note == "a USB device (VID_0E0F&PID_0001) has an invalid descriptor");
+        CHECK(note.find("CC3F949") == std::string::npos);
+        CHECK(cascade::source::invalidDescriptorNote("[INFO] [UHD] nothing wrong here\r\n").empty());
+        CHECK(cascade::source::invalidDescriptorNote("libusb: error device has invalid descriptor!").find("invalid descriptor") != std::string::npos);
+    }
+
     // --- 2026-10-01: THE SOAPYSDR AUDIO DRIVER IS NEVER ASKED ---------------
     //
     // 0.99.57 on Windows 10 19045: SoapyAudio's probe initialised a Native
