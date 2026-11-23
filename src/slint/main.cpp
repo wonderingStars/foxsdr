@@ -198,12 +198,9 @@ struct PaletteAction { std::string kind, title, detail; std::function<void()> ru
 int main(int argc, char** argv) {
     using namespace cascade::engine;
 
-    // SLINT'S RUST CODE reads RUST_BACKTRACE when it panics. Set to 1 (unless the user chose a value) the panic message is followed by a
-    // backtrace, and the crash report's stderr tail keeps the panic's "file:line:column" through the path scrub (keepPanicLocations in
-    // core/diag_log.cpp) and keeps the panic line itself when a long backtrace follows it. Before bootProcess: the stderr capture starts there.
-#if defined(_WIN32)
-    if (std::getenv("RUST_BACKTRACE") == nullptr) { _putenv_s("RUST_BACKTRACE", "1"); }
-#endif
+    // RUST_BACKTRACE is deliberately NOT set here: measured with RUST_BACKTRACE=1 on a real Slint panic in this build
+    // (test_slint_safe_text --raw), the backtrace is the single line "stack backtrace:" (no symbols), so it adds nothing to a
+    // report. The panic line and its message already carry the location.
 
     // EVERYTHING before the window: the console, the helper modes, the crash handlers, the instance claim, the argument parse, the tool
     // modes, the stderr capture, the console handler and the sentinel - in that order, in bootProcess (src/main.cpp). A helper, a tool
