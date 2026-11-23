@@ -51,6 +51,7 @@
 #include "core/event_trail.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
+#include "core/machine_state.hpp"
 #include "core/issue_report.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -1084,6 +1085,8 @@ bool Engine::digestClockStarted(double now) {
         const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
         cascade::core::diagLogf("dsp: first drain %llu ms after the program started; digest minutes start in %.0f s%s",
                                 static_cast<unsigned long long>(rx().pipeline_.processMsAtFirstDrain()), kDigestGraceS, radioTag.c_str());
+        // AND THE MACHINE, ONCE AT START (core/machine_state.hpp): power, throttling, timer, window and display, thread priorities.
+        cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), true);
     }
     return now - rx().firstDrainSeenS_ >= kDigestGraceS;
 }
@@ -1195,6 +1198,8 @@ void Engine::closeDspMinute() {
                             static_cast<unsigned long long>(pct), radioTag.c_str());
     cascade::core::diagLogf("dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu events=%s%s",
                             cap(srcGapNs / 1000000u), cap(resyncs), cap(skippedNs / 1000000u), cap(absent), eventWords, radioTag.c_str());
+    // THE MACHINE, AGAIN WHEN IT CHANGED since the last time it was said (power source, throttling, window, display, priorities).
+    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), false);
     if (dropped == 0) { return; }   // (only the application's own pause cost samples, or the audio minute beside this one is bad: said, never filed)
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the

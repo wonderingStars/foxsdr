@@ -2422,6 +2422,9 @@ void Pipeline::sourceThreadMain(double chainRateHz,
     const cascade::core::ThreadPriorityScope raised;
     priority->set(raised.outcome());
     cascade::core::diagLogf("dsp: source thread priority %s", raised.outcome().c_str());
+    if (!raised.mmcssFailure().empty()) {
+        cascade::core::diagLogf("dsp: warning - source thread MMCSS registration failed: %s", raised.mmcssFailure().c_str());
+    }
     // THE HEARTBEAT, tied to THIS generation's stop token: a thread stop() gives up on and abandons (and counts,
     // Recovered::SrcThread) reads as retired, and the monitor says nothing more about it.
     cascade::core::beats::Registration beat(cascade::core::beats::kThreadSource, stopToken);
@@ -2451,6 +2454,11 @@ void Pipeline::dspThreadMain() {
     const cascade::core::ThreadPriorityScope raised;
     dspPriority_->set(raised.outcome());
     cascade::core::diagLogf("dsp: thread priority %s", raised.outcome().c_str());
+    // A FAILED MMCSS REGISTRATION IS NOT SILENT (2026-11-23): the outcome above says "above-normal" when the fallback worked and drops the
+    // reason; a thread that is not in the "Pro Audio" class is the first thing a starved-thread report needs to know. Windows error number only.
+    if (!raised.mmcssFailure().empty()) {
+        cascade::core::diagLogf("dsp: warning - DSP thread MMCSS registration failed: %s", raised.mmcssFailure().c_str());
+    }
     // THE HEARTBEAT (6.27): registered for the life of this function, and visible to processAudioBlock through t_dspBeat.
     cascade::core::beats::Registration beat(cascade::core::beats::kThreadDsp);
     t_dspBeat = &beat;

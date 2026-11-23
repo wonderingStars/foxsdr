@@ -26,8 +26,10 @@
 #include <thread>
 
 #include "core/diag_log.hpp"
+#include "core/machine_state.hpp"
 #include "core/minute_events.hpp"
 #include "core/pipeline.hpp"
+#include "core/thread_priority.hpp"
 #include "source/iq_source.hpp"
 #include "test_check.hpp"
 
@@ -228,6 +230,51 @@ int main() {
         CHECK(p.ringDroppedSamples() == droppedBefore);
         Pipeline::setDspStartDelayForTest(0);
         p.stop();
+    }
+
+    // --- 4. THE MACHINE LINE: fixed words and numbers, inside the log's line, intact through the upload scrub ---------------------
+    {
+        const std::string line = machineStateText("mmcss", "none: MMCSS refused (error 1552)");
+        std::printf("%s\n", line.c_str());
+        CHECK(line.rfind("machine: power=", 0) == 0);
+        for (const char* key : {" saver=", " throttle=", " timer_100ns=", " cpus=", " affinity=", " window=", " display=", " prio=dsp:mmcss,src:none"}) {
+            CHECK(line.find(key) != std::string::npos);
+        }
+        CHECK(line.find("1552") == std::string::npos);   // only the first word of an outcome: no error text, no device
+        CHECK(line.size() < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+        // The scrub leaves it as it was (a line that "sounds like tuning" has its numbers masked: this one must not).
+        CHECK(scrubUploadLine(line) == line);
+        // Changed-only logging: the second identical call says nothing; a forced one does.
+        resetMachineStateLogForTest();
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));
+        CHECK(!logMachineStateIfChanged("mmcss", "mmcss", false));
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", true));
+        noteDisplayState(1);
+        CHECK(logMachineStateIfChanged("mmcss", "mmcss", false));   // the display went off: a change
+        CHECK(machineStateText("mmcss", "mmcss").find("display=off") != std::string::npos);
+        noteDisplayState(-1);
+    }
+
+    // --- 4b. A FAILED MMCSS REGISTRATION IS SAID (2026-11-23) ------------------------------------------------------------------------
+    // The outcome of a thread that fell back to above-normal does not carry the reason, so a refused registration was silent. The scope now
+    // keeps the reason (a fixed phrase and the Windows error number) for the caller's one warning line. The test seam makes the refusal.
+    {
+        ThreadPriorityScope::setMmcssDisabledForTest(true);
+        {
+            const ThreadPriorityScope refused;
+#if defined(_WIN32)
+            CHECK(!refused.mmcssFailure().empty());
+            CHECK(refused.mmcssFailure().find("MMCSS") != std::string::npos);
+            CHECK(refused.outcome().rfind("mmcss", 0) != 0);   // (it did not get the class)
+#endif
+        }
+        ThreadPriorityScope::setMmcssDisabledForTest(false);
+        {
+            const ThreadPriorityScope fine;
+#if defined(_WIN32)
+            if (fine.outcome() == "mmcss") { CHECK(fine.mmcssFailure().empty()); }   // success says nothing
+#endif
+        }
     }
 
     // --- 5. THE DSP THREAD'S ACCOUNTING (the one measurement that settles the rest) ---------------------------------------------------

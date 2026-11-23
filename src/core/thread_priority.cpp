@@ -122,6 +122,7 @@ ThreadPriorityScope::ThreadPriorityScope() {
             why = "MMCSS refused (error " + std::to_string(static_cast<unsigned long>(::GetLastError())) + ")";
         }
     }
+    mmcssFailure_ = why;   // (kept so the caller can say it: the outcome below no longer does)
     // The fallback: one step above normal, put back at the end. A thread that is
     // already there (or higher) is left alone and reported the same way.
     HANDLE self = ::GetCurrentThread();

@@ -607,9 +607,11 @@ int main() {
         const std::size_t rep0 = ringdropReports();
         const std::size_t drops0 = dropLines().size();
         const std::size_t drains0 = countLines("dsp: first drain ");
+        const std::size_t machine0 = countLines("machine: power=");
         Access::ageSession(app, 100.0);                     // an old engine: the old rule would close the first minute at the next poll
         Access::pollDspMinute(app);                         // the pass sees the stream: the time to first drain is said, once
         CHECK(countLines("dsp: first drain ") == drains0 + 1);
+        CHECK(countLines("machine: power=") == machine0 + 1);   // ...with the machine's state, once, at the start
         CHECK(!Access::armed(app));
         stallMinute(false);                                 // the set-up window loses samples
         Access::ageSession(app, 5.0);
