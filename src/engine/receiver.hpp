@@ -557,6 +557,12 @@ struct Receiver {
     int dspLossRun_ = 0;
     int audioLossRun_ = 0;
     std::uint64_t dspAbsentAtMinute_ = 0;
+    // The DSP thread's accounting as the minute opened (Pipeline::dspBusyNs and friends: cumulative counters, so the minute is a difference).
+    std::uint64_t dspBusyAtMinute_ = 0;
+    std::uint64_t dspCpuAtMinute_ = 0;
+    std::uint64_t dspBlocksAtMinute_ = 0;
+    std::uint64_t genResyncsAtMinute_ = 0;
+    std::uint64_t genSkippedAtMinute_ = 0;
     // ---- the slot's own life (multi-radio stage 4) ----
     // Which radio this is, from 1 (slot + 1); set once when the slot is built.
     std::uint32_t radioNumber_ = 1;

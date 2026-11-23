@@ -78,6 +78,35 @@ private:
     std::atomic<double> rate_;
 };
 
+// A FREE-RUNNING source (the pipeline paces it, as the built-in generator and a file) whose third read stalls for 400 ms, once: the
+// pacing loop falls more than 250 ms behind and resynchronises instead of bursting.
+class StallOnceSource final : public cascade::source::IqSource {
+public:
+    bool start() override { return true; }
+    void stop() override {}
+    bool running() const override { return true; }
+    bool selfPaced() const override { return false; }
+    double sampleRateHz() const override { return 2000000.0; }
+    bool setSampleRateHz(double) override { return false; }
+    double centerFrequencyHz() const override { return 100.0e6; }
+    bool setCenterFrequencyHz(double) override { return true; }
+    const char* name() const override { return "Stall-once test source"; }
+    const char* lastError() const override { return ""; }
+    std::size_t read(std::complex<float>* dst, std::size_t n) override {
+        if (reads_.fetch_add(1) == 2) {
+            stalls_.fetch_add(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        }
+        for (std::size_t i = 0; i < n; ++i) { dst[i] = std::complex<float>(0.25f, -0.25f); }
+        return n;
+    }
+    int stalls() const { return stalls_.load(); }
+
+private:
+    std::atomic<int> reads_{0};
+    std::atomic<int> stalls_{0};
+};
+
 template <typename Pred>
 bool waitFor(Pred pred, int timeoutMs = 10000) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -199,6 +228,126 @@ int main() {
         CHECK(p.ringDroppedSamples() == droppedBefore);
         Pipeline::setDspStartDelayForTest(0);
         p.stop();
+    }
+
+    // --- 5. THE DSP THREAD'S ACCOUNTING (the one measurement that settles the rest) ---------------------------------------------------
+    // The audio mutex is held for 400 ms while samples arrive: the DSP thread reads one block and then WAITS inside it. Wall time inside
+    // blocks must rise by about the hold, its own CPU time must not, and the longest gap between two ring reads must be the hold and name
+    // the phase the thread was in - "audio-lock", the step that waits for the mutex. This is what a ringdrop report could never say.
+    {
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        p.start();
+        src->grant(32768);
+        CHECK(waitFor([&] { return p.dspBlocks() >= 16u; }, 5000));
+        (void)p.takeDspGapLongest(nullptr);
+        const std::uint64_t busy0 = p.dspBusyNs();
+        const std::uint64_t blocks0 = p.dspBlocks();
+        std::atomic<bool> acquired{false};
+        std::thread holder([&] { p.holdLockForTest(Pipeline::LockForTest::Audio, 400, &acquired); });
+        CHECK(waitFor([&] { return acquired.load(std::memory_order_acquire); }));
+        src->grant(8192);   // eight blocks: the first one waits for the mutex
+        holder.join();
+        CHECK(waitFor([&] { return p.dspBlocks() >= blocks0 + 8u; }, 5000));
+        p.stop();           // the thread's last CPU time is published as it ends
+        const std::uint64_t busyMs = (p.dspBusyNs() - busy0) / 1000000u;
+        const char* phase = "";
+        const std::uint64_t gapMs = p.takeDspGapLongest(&phase) / 1000000u;
+        std::printf("held 400 ms: busy +%llu ms, longest gap %llu ms in %s, cpu known %d, cpu %llu ms in total\n",
+                    static_cast<unsigned long long>(busyMs), static_cast<unsigned long long>(gapMs), phase, p.dspCpuKnown() ? 1 : 0,
+                    static_cast<unsigned long long>(p.dspCpuNs() / 1000000u));
+        CHECK(busyMs >= 350u);
+        CHECK(busyMs < 5000u);
+        CHECK(gapMs >= 350u);
+        CHECK(std::string(phase) == "audio-lock");
+        CHECK(p.dspBlocks() >= blocks0 + 8u);
+        if (p.dspCpuKnown()) {
+            // The whole run did a few dozen blocks of work: far less processor time than the 400 ms it spent waiting.
+            CHECK(p.dspCpuNs() / 1000000u < 300u);
+        }
+        // The mark is a window: taking it started a new one.
+        CHECK(p.takeDspGapLongest(&phase) / 1000000u < 350u);
+    }
+
+    // --- 5b. THE DSP BLOCK DELAY SEAM makes a slow thread: busy time is the blocks' span, the gap names the phase it slept in -------------
+    {
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        Pipeline::setDspBlockDelayForTest(30);
+        p.start();
+        src->grant(1024 * 12);
+        CHECK(waitFor([&] { return p.dspBlocks() >= 12u; }, 10000));
+        Pipeline::setDspBlockDelayForTest(0);
+        p.stop();
+        const char* phase = "";
+        const std::uint64_t gapMs = p.takeDspGapLongest(&phase) / 1000000u;
+        std::printf("30 ms per block: longest gap %llu ms in %s\n", static_cast<unsigned long long>(gapMs), phase);
+        CHECK(gapMs >= 25u);
+        CHECK(std::string(phase) == "sink");   // the delay is taken after the last beat of a block
+    }
+
+    // --- 5c. THE SOURCE THREAD'S LONGEST GAP BETWEEN WRITES ------------------------------------------------------------------------------
+    {
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        p.start();
+        src->grant(20000);
+        CHECK(waitFor([&] { return p.sourceSamplesRead() >= 20000u; }, 5000));
+        (void)p.takeSrcGapLongestNs();
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));   // the device goes quiet for 300 ms
+        src->grant(20000);
+        CHECK(waitFor([&] { return p.sourceSamplesRead() >= 40000u; }, 5000));
+        const std::uint64_t gapMs = p.takeSrcGapLongestNs() / 1000000u;
+        std::printf("quiet device: longest gap between writes %llu ms\n", static_cast<unsigned long long>(gapMs));
+        CHECK(gapMs >= 250u);
+        CHECK(gapMs < 5000u);
+        CHECK(p.takeSrcGapLongestNs() / 1000000u < 250u);   // a window
+        p.stop();
+    }
+
+    // --- 5d. THE FREE-RUNNING GENERATOR'S RESYNC AFTER A LONG STALL IS COUNTED ----------------------------------------------------------
+    {
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<StallOnceSource>();
+        StallOnceSource* src = owned.get();
+        p.setSource(std::move(owned));
+        CHECK(p.genResyncs() == 0u);
+        p.start();
+        CHECK(waitFor([&] { return p.genResyncs() >= 1u; }, 5000));
+        const std::uint64_t skippedMs = p.genSkippedNs() / 1000000u;
+        std::printf("generator stall: %llu resync(s), %llu ms skipped (stalled %d times)\n", static_cast<unsigned long long>(p.genResyncs()),
+                    static_cast<unsigned long long>(skippedMs), src->stalls());
+        CHECK(p.genResyncs() == 1u);
+        CHECK(skippedMs >= 250u);
+        CHECK(skippedMs < 2000u);
+        p.stop();
+    }
+
+    // --- 6. THE MINUTE LINES AT THEIR WIDEST fit the log's line and survive the upload scrub with every number ---------------------------
+    {
+        const auto cap = [](unsigned long long v) { return v > 9999999999ULL ? 9999999999ULL : v; };
+        char a[256];
+        std::snprintf(a, sizeof(a),
+                      "dsp minute: dropped=%llu pct=%s busy_ms=%llu cpu_ms=%s longest_gap_ms=%llu gap_phase=%s blocks=%llu ring_high_pct=%llu [radio 8]",
+                      cap(~0ULL), "100.00", cap(~0ULL), "9999999999", cap(~0ULL), "plugin-audio", cap(~0ULL), 100ULL);
+        char b[256];
+        std::snprintf(b, sizeof(b), "dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu events=%s [radio 8]",
+                      cap(~0ULL), cap(~0ULL), cap(~0ULL), cap(~0ULL), "rate|switch|plugins|audio");
+        std::printf("widest minute line A: %zu characters; B: %zu\n", std::strlen(a), std::strlen(b));
+        // (the log adds "HH:MM:SS.mmm info " before the text in the ring; the budget is for the text itself)
+        CHECK(std::strlen(a) < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+        CHECK(std::strlen(b) < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+        // The upload scrub leaves both as they are: no number of theirs is masked as a "tuning".
+        CHECK(scrubUploadLine(a) == std::string(a));
+        CHECK(scrubUploadLine(b) == std::string(b));
+        const std::string typical = "dsp minute: dropped=1048576 pct=66.67 busy_ms=3012 cpu_ms=41 longest_gap_ms=2982 gap_phase=audio-lock blocks=1536 ring_high_pct=100";
+        CHECK(scrubUploadLine(typical) == typical);
     }
 
     return testSummary("test_ringdrop_measure");

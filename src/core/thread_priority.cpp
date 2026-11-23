@@ -16,6 +16,7 @@
 #include <windows.h>
 #else
 #include <cerrno>
+#include <ctime>
 #include <pthread.h>
 #include <sched.h>
 #endif
@@ -63,6 +64,27 @@ const Avrt& avrt() {
 #endif
 
 }  // namespace
+
+std::uint64_t currentThreadCpuNs(bool* ok) {
+#if defined(_WIN32)
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (::GetThreadTimes(::GetCurrentThread(), &created, &exited, &kernel, &user) != 0) {
+        const auto ticks = [](const FILETIME& f) {
+            return (static_cast<std::uint64_t>(f.dwHighDateTime) << 32) | static_cast<std::uint64_t>(f.dwLowDateTime);
+        };
+        if (ok != nullptr) { *ok = true; }
+        return (ticks(kernel) + ticks(user)) * 100u;   // 100 ns units
+    }
+#elif defined(__linux__) || defined(__ANDROID__)
+    timespec ts{};
+    if (::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0) {
+        if (ok != nullptr) { *ok = true; }
+        return static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<std::uint64_t>(ts.tv_nsec);
+    }
+#endif
+    if (ok != nullptr) { *ok = false; }
+    return 0;
+}
 
 void ThreadPriorityScope::setMmcssDisabledForTest(bool disabled) {
     g_mmcssDisabledForTest.store(disabled, std::memory_order_relaxed);

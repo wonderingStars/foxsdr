@@ -472,6 +472,39 @@ int main() {
             CHECK(blockMs <= 10000);
             CHECK(line.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
         }
+        // THE MINUTE'S ACCOUNTING LINES (2026-11-23), in a fixed key=value form: what the DSP thread did with the minute. The thread sat in
+        // the held mutex for 3 s, so its busy wall time and its longest gap between ring reads are that hold, and the phase is the step
+        // that waits for the mutex; its own processor time is not. The lines fit the log's line and survive the upload scrub intact.
+        {
+            std::string lineA;
+            std::string lineB;
+            for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
+                if (l.find("dsp minute: dropped=") != std::string::npos) { lineA = l; }
+                if (l.find("dsp minute: src_longest_gap_ms=") != std::string::npos) { lineB = l; }
+            }
+            std::printf("minute line A: %s\nminute line B: %s\n", lineA.c_str(), lineB.c_str());
+            CHECK(!lineA.empty() && !lineB.empty());
+            CHECK(numberAfter(lineA, "dropped=") == static_cast<long long>(stalledDropped));
+            CHECK(lineA.find(" pct=") != std::string::npos);
+            CHECK(numberAfter(lineA, " busy_ms=") >= 2500);
+            CHECK(numberAfter(lineA, " longest_gap_ms=") >= 2500);
+            CHECK(lineA.find(" gap_phase=audio-lock ") != std::string::npos);
+            CHECK(numberAfter(lineA, " blocks=") >= 1);
+            CHECK(numberAfter(lineA, " ring_high_pct=") == 100);
+            CHECK(lineA.find(" cpu_ms=") != std::string::npos);
+            if (lineA.find(" cpu_ms=unknown") == std::string::npos) { CHECK(numberAfter(lineA, " cpu_ms=") < 1500); }   // not the 3 s it waited
+            CHECK(numberAfter(lineB, " absent_discards=") == 0);
+            CHECK(lineB.find(" events=none") != std::string::npos);
+            CHECK(lineB.find(" gen_resyncs=") != std::string::npos && lineB.find(" gen_skipped_ms=") != std::string::npos);
+            CHECK(lineA.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+            CHECK(lineB.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+            CHECK(cascade::core::scrubUploadLine(lineA) == lineA);
+            CHECK(cascade::core::scrubUploadLine(lineB) == lineB);
+            // ...and they are in the filed report: the row is written after them.
+            const std::string filedNow = ringdropReportText();
+            CHECK(filedNow.find("dsp minute: dropped=") != std::string::npos);
+            CHECK(filedNow.find("dsp minute: src_longest_gap_ms=") != std::string::npos);
+        }
         // THE FEED ROW (0.99.102): a minute that lost two rings of three is far over
         // the 0.05% floor, so the `ringdrop` issue report is filed - by this minute
         // close, not by the health poll, which now only counts.
@@ -541,7 +574,7 @@ int main() {
         stallMinute();
         CHECK(ringdropReports() == base);
         CHECK(countLines("logged, not filed as a fault") == notFiledBefore + 1);
-        CHECK(countLines("dsp minute: absent_discards=") >= 1);
+        CHECK(countLines(" absent_discards=") >= 1);
         CHECK(countLines("events=plugins") >= 1);
         // (b) the same loss in a clean minute IS filed (the second loss minute in a row: the run is 2, the mask 0).
         stallMinute();

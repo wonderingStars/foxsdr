@@ -32,6 +32,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace cascade::core {
@@ -78,5 +79,11 @@ private:
     int previousA_ = 0;
     int previousB_ = 0;
 };
+
+// THE CALLING THREAD'S OWN PROCESSOR TIME (kernel plus user), in nanoseconds since the thread began; false in `*ok` where the platform
+// cannot say (then 0 is returned). Windows: GetThreadTimes. Linux and Android: CLOCK_THREAD_CPUTIME_ID. Used by the DSP thread's minute
+// accounting (Pipeline::dspCpuNs, 2026-11-23): busy wall time against CPU time is what separates "the chain is too heavy for this machine"
+// from "the thread was not scheduled". No allocation, no lock.
+std::uint64_t currentThreadCpuNs(bool* ok);
 
 }  // namespace cascade::core
