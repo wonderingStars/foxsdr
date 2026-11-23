@@ -2562,14 +2562,22 @@ void testCloseWaits() {
         const std::size_t fn = text.find("void Engine::patchStopAll(");
         const std::size_t batch =
             fn == std::string::npos ? std::string::npos : text.find("SoundCardSource::CloseBatch", fn);
-        const std::size_t clear =
-            batch == std::string::npos ? std::string::npos : text.find("patchRadios_.clear();", batch);
-        std::printf("patchStopAll: CloseBatch@%zu patchRadios_.clear()@%zu\n", batch, clear);
-        CHECK(batch != std::string::npos && clear != std::string::npos && clear - batch < 200);
-        // ...and nothing destroys the radios before it.
+        // THE RADIOS ARE DESTROYED UNDER THE BATCH. Since fix/freezes (the Stop phase) that is a loop that erases them one at a time, a beat after each device's close, instead of one
+        // patchRadios_.clear(): the destructions are the same, and so is the rule this check holds - the batch is open when the first radio goes, and none goes before it.
+        const std::size_t destroy =
+            batch == std::string::npos ? std::string::npos : text.find("while (!patchRadios_.empty())", batch);
+        std::printf("patchStopAll: CloseBatch@%zu destroying loop@%zu\n", batch, destroy);
+        CHECK(batch != std::string::npos && destroy != std::string::npos && destroy - batch < 200);
+        const std::size_t firstErase =
+            destroy == std::string::npos ? std::string::npos : text.find("patchRadios_.erase(", destroy);
+        CHECK(firstErase != std::string::npos);
+        // ...and nothing destroys the radios before it (no clear(), no erase, anywhere in the function ahead of the batch).
         const std::size_t earlyClear =
             fn == std::string::npos ? std::string::npos : text.find("patchRadios_.clear();", fn);
-        CHECK(earlyClear == clear);
+        const std::size_t earlyErase =
+            fn == std::string::npos ? std::string::npos : text.find("patchRadios_.erase(", fn);
+        CHECK(earlyClear == std::string::npos);
+        CHECK(earlyErase == firstErase);
     }
 }
 
