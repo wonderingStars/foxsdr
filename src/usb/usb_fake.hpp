@@ -385,7 +385,12 @@ public:
         return static_cast<int>(n);
     }
 
+    // Called (on the caller's thread) at the start of every endBulkStream(), streaming or not: how a test makes something happen at the instant a driver takes a
+    // radio down, such as a stop() that lands while the handle is being closed.
+    std::function<void()> onEndBulk;
+
     void endBulkStream() override {
+        if (onEndBulk) { onEndBulk(); }
         if (streaming_) { ++streamStops; }
         streaming_ = false;
     }

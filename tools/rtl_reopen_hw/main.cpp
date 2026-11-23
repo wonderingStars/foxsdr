@@ -10,7 +10,12 @@
 // (the product's 60 s is untouched). Nothing is transmitted; no other radio is touched. The log and settings go where APPDATA and LOCALAPPDATA point: run it with
 // both set to a scratch folder.
 //
-// Usage: rtl_reopen_hw      Exit 0 = three of three recovered; 1 = a cycle did not recover; 2 = no RTL-SDR bound to WinUSB; 3 = the radio would not open or start.
+// A FOURTH PHASE follows the three cycles: the handle is invalidated again, and when the re-open is in flight a stop is requested. The tool prints how long the stop took,
+// whether the radio is then faulted and dead with the sentence that says it was being reconnected, whether start() is refused with it, and whether a FRESH open of the same
+// radio afterwards streams (what picking its row again does).
+//
+// Usage: rtl_reopen_hw      Exit 0 = three of three recovered and the fourth phase shown; 1 = a cycle did not recover or the fourth phase was not shown; 2 = no RTL-SDR bound to
+//                           WinUSB; 3 = the radio would not open or start.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
@@ -107,8 +112,82 @@ int main() {
             break;
         }
     }
+    std::printf("%d of 3 cycles recovered\n", recovered);
+    if (recovered != 3) {
+        src.stop();
+        src.closeDevice();
+        return 1;
+    }
+
+    // PHASE 4 (decision F1 of the review): A STOP THAT LANDS WHILE THE RADIO IS BEING REOPENED. The handle is invalidated, the tool waits for the re-open to be in
+    // flight (the radio is closed and being brought back), requests the stop, and then asks the source what it is: faulted and dead with the sentence that says it was
+    // being reconnected, closed (no stream), and a following start() refused with those words. Then the radio is opened afresh (what picking its row again does) and
+    // must stream. The re-open of a listed radio takes under a second, so the stop may arrive after it has finished; that attempt is reported as "too late" and tried
+    // again (up to five times) - only a stop that really landed inside a re-open counts.
+    bool stopPhaseOk = false;
+    for (int attempt = 1; attempt <= 5 && !stopPhaseOk; ++attempt) {
+        if (!src.running() && !src.faulted() && !src.start()) {
+            std::printf("phase 4, attempt %d: the radio would not start again: %s\n", attempt, src.lastError());
+            break;
+        }
+        (void)readFor(src, 500);
+        if (!src.invalidateTransportForTest()) {
+            std::printf("phase 4, attempt %d: the transport could not be invalidated\n", attempt);
+            break;
+        }
+        const auto t0 = Clock::now();
+        bool inFlight = false;
+        while (msBetween(t0, Clock::now()) < 3000) {
+            if (src.reopeningForTest()) {
+                inFlight = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        const long long toReopen = msBetween(t0, Clock::now());
+        const auto tStop = Clock::now();
+        src.stop();
+        const long long stopMs = msBetween(tStop, Clock::now());
+        const bool faulted = src.faulted();
+        const bool dead = src.deviceDead();
+        const std::string said = src.lastError();
+        const bool right = said == cascade::source::kReopenStoppedSentence;
+        const bool refused = !src.start();
+        const std::string saidAfter = src.lastError();
+        std::printf("phase 4, attempt %d: re-open in flight after %lld ms: %s; stop took %lld ms; faulted %d dead %d; words: \"%s\"; start() refused %d, words after: \"%s\"\n", attempt, toReopen,
+                    inFlight ? "yes" : "no", stopMs, faulted ? 1 : 0, dead ? 1 : 0, said.c_str(), refused ? 1 : 0, saidAfter.c_str());
+        if (!inFlight || !faulted) {
+            std::printf("phase 4, attempt %d: too late (the re-open had finished before the stop landed); trying again\n", attempt);
+            if (!faulted) { continue; }
+        }
+        if (inFlight && faulted && dead && right && refused && saidAfter == cascade::source::kReopenStoppedSentence) {
+            // the radio is closed: a FRESH open of the same radio (what picking the row again does) streams
+            src.closeDevice();
+            RtlSdrSource fresh;
+            if (!fresh.open(found[0].args)) {
+                std::printf("phase 4: the fresh open failed: %s\n", fresh.lastError());
+                return 1;
+            }
+            fresh.setSampleRateHz(2000000.0);
+            fresh.setCenterFrequencyHz(98000000.0);
+            if (!fresh.start()) {
+                std::printf("phase 4: the fresh open would not start: %s\n", fresh.lastError());
+                return 1;
+            }
+            const std::size_t n = readFor(fresh, 1000);
+            std::printf("phase 4: a fresh open after the stop: %zu samples in one second at %.3f MHz, %.4f MS/s, faulted %d\n", n, fresh.centerFrequencyHz() / 1e6, fresh.sampleRateHz() / 1e6, fresh.faulted() ? 1 : 0);
+            fresh.stop();
+            fresh.closeDevice();
+            stopPhaseOk = n > 0 && !fresh.faulted();
+            if (!stopPhaseOk) { return 1; }
+            std::printf("phase 4: ok\n");
+            return 0;
+        }
+        std::printf("phase 4, attempt %d: the state after the stop was not the expected one\n", attempt);
+        break;
+    }
     src.stop();
     src.closeDevice();
-    std::printf("%d of 3 cycles recovered\n", recovered);
-    return recovered == 3 ? 0 : 1;
+    std::printf("phase 4: NOT shown (%s)\n", stopPhaseOk ? "ok" : "no stop landed inside a re-open, or the state was wrong");
+    return 1;
 }

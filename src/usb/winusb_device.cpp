@@ -192,6 +192,26 @@ DEVINST usbDeviceNodeOf(DEVINST inst) {
     return inst;
 }
 
+// WHERE A USB DEVICE NODE SITS: its first SetupAPI location path (hub and port, from the root controller down), else the instance id of its parent. Both
+// are read-only queries on the configuration manager; nothing is opened and nothing needs elevation. Empty when neither can be read.
+std::string usbLocationOf(DEVINST devNode) {
+    DEVPROPTYPE type = 0;
+    ULONG size = 0;
+    if (::CM_Get_DevNode_PropertyW(devNode, &DEVPKEY_Device_LocationPaths, &type, nullptr, &size, 0) == CR_BUFFER_SMALL && size > 0) {
+        std::vector<BYTE> buf(size + sizeof(wchar_t), 0);
+        if (::CM_Get_DevNode_PropertyW(devNode, &DEVPKEY_Device_LocationPaths, &type, buf.data(), &size, 0) == CR_SUCCESS && type == DEVPROP_TYPE_STRING_LIST) {
+            const auto* p = reinterpret_cast<const wchar_t*>(buf.data());
+            if (*p != L'\0') { return narrow(p); }
+        }
+    }
+    DEVINST parent = 0;
+    if (::CM_Get_Parent(&parent, devNode, 0) == CR_SUCCESS) {
+        const std::wstring id = instanceIdOf(parent);
+        if (!id.empty()) { return "parent:" + narrow(id.c_str()); }
+    }
+    return std::string();
+}
+
 // The interface GUIDs this devnode's driver declared for itself, read from
 // Device Parameters\DeviceInterfaceGUIDs (REG_MULTI_SZ). This is where
 // libwdi/Zadig puts the GUID it generated for the device, and on this bench's
@@ -1590,6 +1610,7 @@ std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
         // Interface".
         const DEVINST devNode = usbDeviceNodeOf(info.DevInst);
         entry.serial = lastInstanceSegment(instanceIdOf(devNode));
+        entry.location = usbLocationOf(devNode);
         if (devNode == info.DevInst) {
             entry.description =
                 narrow(deviceStringProperty(set, info, DEVPKEY_Device_BusReportedDeviceDesc)

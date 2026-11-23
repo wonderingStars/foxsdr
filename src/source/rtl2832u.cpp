@@ -67,11 +67,13 @@ void Rtl2832u::note(const char* what) {
 // The only two places a transfer reaches the transport, so the keep-going token (rtl2832u.hpp) is honoured by every one.
 int Rtl2832u::ctlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, const std::uint8_t* data, std::size_t len) {
     if (stopped()) { return -1; }
+    if (beat_ != nullptr) { beat_->store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed); }
     return dev_.controlOut(requestType, request, value, index, data, len, controlTimeoutMs_);
 }
 
 int Rtl2832u::ctlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, std::uint8_t* data, std::size_t len) {
     if (stopped()) { return -1; }
+    if (beat_ != nullptr) { beat_->store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed); }
     return dev_.controlIn(requestType, request, value, index, data, len, controlTimeoutMs_);
 }
 

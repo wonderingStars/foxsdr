@@ -351,7 +351,9 @@ void noteVendorCallFault(const void* source, const char* driverKey, const char* 
     try {
         const Who w = whoIs(source, driverKey);
         const std::string word = what != nullptr ? what : "vendorcall";
-        if (!admitCall(w.registered ? w.radio.key : pointerKey(source), "vendor-" + word, 10000)) { return; }
+        // THE PHASE IS PART OF THE KEY: a recovery that worked and one that gave up a moment later are different events, and the second must not be folded
+        // into the first by the ten-second rule (decision F7). The same phase repeated is still folded.
+        if (!admitCall(w.registered ? w.radio.key : pointerKey(source), "vendor-" + word + (absorbed ? "-ok" : "-bad"), 10000)) { return; }
         Event ev;
         ev.kind = "radio_recovery";
         ev.radio = w.radio;

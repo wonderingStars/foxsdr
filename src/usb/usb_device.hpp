@@ -100,6 +100,11 @@ struct UsbDeviceInfo {
     std::string path;
     std::string serial;
     std::string description;  // the bus-reported device description, may be empty
+    // WHERE THE DEVICE SITS ON THE BUS: the hub-and-port location of its USB device node (SetupAPI's location path, "PCIROOT(0)#PCI(1400)#USB(5)#USB(2)"),
+    // or, when Windows gives none, "parent:" and the instance id of the node's parent. Read-only queries, nothing is opened. Empty when neither could be
+    // read. Together with the interface path and the serial it is what lets a driver know it found the SAME radio again after it dropped off the bus (two
+    // dongles can share a serial; they cannot share a port). Never printed, never reported.
+    std::string location;
 };
 
 // Lists devices bound to WinUSB whose VID/PID appear in `ids`, in a stable

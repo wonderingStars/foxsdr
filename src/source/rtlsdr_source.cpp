@@ -340,6 +340,10 @@ struct BringUp {
     bool biasForced = false;
     double rateHz = 0.0;
     std::string error;
+    // What the bring-up read from the device, for the identity a re-open compares (rtlsdr_source.hpp, Link::Identity).
+    std::string tunerName;
+    std::string manufacturer;
+    std::string product;
 };
 
 int ifBandwidthForRate(int userHz, double rateHz) { return userHz > 0 ? userHz : static_cast<int>(rateHz); }
@@ -353,7 +357,8 @@ ChipState makeChipState(double rateHz, double centerHz, int ifBandwidthHz, int d
     return st;
 }
 
-bool bringUpChip(RtlSdrSource::Link& link, int ifBandwidthHz, int directChoice, BringUp& out);
+// `teeForced`, when not null, replaces what the EEPROM's forced bias tee would be written as (the re-open passes false: it decides the tee itself).
+bool bringUpChip(RtlSdrSource::Link& link, int ifBandwidthHz, int directChoice, BringUp& out, const bool* teeForced = nullptr);
 bool retuneChip(RtlSdrSource::Link& link, double hz, int choice);
 
 bool rangeFor(const RtlSdrSource::Link& link, int directChoice, double& loHz, double& hiHz) {
@@ -488,25 +493,65 @@ RtlSdrSource::Link::Wanted wantedCopy(RtlSdrSource::Link& link) {
 // ---------------------------------------------------------------------------
 constexpr int kMaxReopensPerWindow = 2;      // then the radio keeps dropping off USB and is called dead
 constexpr int kMaxReopensPerOpen = 12;
+constexpr int kMaxReopenLockLosses = 3;      // the driver was busy this many times in a row: then the radio is called dead, with the sentence that says so
+constexpr int kMaxSettingRounds = 3;         // rounds of putting the user's settings back, while setters keep arriving
 constexpr int kReopenSliceMs = 50;           // the wait polls the stop token this often
 
-enum class Reopen { Back, Stopped, Absent, Failed, LockLost };
+enum class Reopen { Back, Stopped, Absent, Failed, LockLost, Mismatch };
+
+void beat(RtlSdrSource::Link& link) { link.readerBeatNs.store(steadyNowNs(), std::memory_order_relaxed); }
+
+// A SETTER THAT ARRIVES WHILE A RE-OPEN RUNS hands its change to the re-open, under the lock that guards `wanted`, and only while the re-open is still taking
+// them: the re-open clears `reopening` under the same lock, after its last look at `wanted`, so a change is either seen by that look or refused here (false: the
+// re-open is over and the setter takes the device in the ordinary way). That is what makes "acknowledged" mean "will reach the chip" (decision F5).
+template <class F>
+bool deferWhileReopening(RtlSdrSource::Link& link, F change) {
+    std::lock_guard<std::mutex> lk(link.wantedMutex);
+    if (!link.reopening.load(std::memory_order_acquire)) { return false; }
+    change(link.wanted);
+    link.wantedGen.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+// The device lock after a re-open ended in the instant between a setter's two looks: the re-open's last act holds it for the length of a stream start, so a few
+// tries over about fifty milliseconds (polled, not a timed wait: this is never the long wait again, and nothing on the shutdown path waits here).
+std::unique_lock<std::timed_mutex> retakeAfterReopen(RtlSdrSource::Link& link) {
+    std::unique_lock<std::timed_mutex> lk(link.mutex, std::defer_lock);
+    for (int i = 0; i < 50 && !lk.owns_lock(); ++i) {
+        if (lk.try_lock()) { break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (lk.owns_lock() && link.reopening.load(std::memory_order_acquire)) { lk.unlock(); }
+    return lk;
+}
+
+// Whether what the bring-up found is what the open found: the tuner and the two USB strings. A different dongle in the same place is refused.
+bool sameRadioAsOpened(RtlSdrSource::Link& link, const BringUp& bu) {
+    std::lock_guard<std::mutex> lk(link.wantedMutex);
+    const RtlSdrSource::Link::Identity& id = link.identity;
+    if (id.tuner.empty()) { return true; }   // nothing was remembered (an open that did not get as far as the tuner)
+    return id.tuner == bu.tunerName && id.manufacturer == bu.manufacturer && id.product == bu.product;
+}
 
 // The hardware the re-open closes and reopens is the link's: every step either runs under link.mutex or touches only locals.
 Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithheld, bool repeatInWindow) {
     biasWithheld = false;
+    beat(link);
     // STEP A, under the device lock: take the radio down. No standby or power-down writes are sent - the device is not answering.
     {
         std::unique_lock<std::timed_mutex> lk(link.mutex, kDeviceLockWait);
         if (!lk.owns_lock()) {
             why = "the radio was busy with a control call";
-            return Reopen::LockLost;   // nothing was touched: the caller treats it as a retry (see the loop), never as a fault
+            return Reopen::LockLost;   // nothing was touched: the caller tries again (a bounded number of times), never faults on the first
         }
         link.reopening.store(true, std::memory_order_release);
+        beat(link);
         if (link.transport) { link.transport->endBulkStream(); }
+        beat(link);
         link.tuner.reset();
         link.rtl.reset();
         link.transport.reset();   // closes the WinUSB handle and the file handle
+        beat(link);
     }
     struct Clear {
         RtlSdrSource::Link& l;
@@ -517,6 +562,7 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
     std::unique_ptr<usb::UsbDevice> fresh;
     std::string lastErr;
     bool everPresent = false;
+    bool ambiguous = false;
     const int waitMs = link.reopenWaitMs.load(std::memory_order_relaxed);
     const int pollMs = std::max(1, link.reopenPollMs.load(std::memory_order_relaxed));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
@@ -524,10 +570,13 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
         if (!link.readerRun.load(std::memory_order_relaxed) || link.abandoned.load(std::memory_order_relaxed)) { return Reopen::Stopped; }
         bool present = false;
         std::string err;
+        beat(link);
         fresh = link.reopen(err, present);
+        beat(link);
         if (fresh) { break; }
         everPresent = everPresent || present;
-        if (!err.empty()) { lastErr = err; }
+        ambiguous = (err == kRadioAmbiguousError);
+        if (!err.empty() && !ambiguous) { lastErr = err; }
         // Someone else took the radio in the gap: waiting will not hand it back.
         if (usb::errorSaysInUse(err)) {
             why = err;
@@ -538,11 +587,15 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
         const auto until = std::min(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(pollMs));
         while (std::chrono::steady_clock::now() < until) {
             if (!link.readerRun.load(std::memory_order_relaxed)) { return Reopen::Stopped; }
-            link.readerBeatNs.store(steadyNowNs(), std::memory_order_relaxed);
+            beat(link);
             std::this_thread::sleep_for(std::chrono::milliseconds(kReopenSliceMs));
         }
     }
     if (!fresh) {
+        if (ambiguous) {
+            why = kReopenWhichSentence;
+            return Reopen::Mismatch;
+        }
         if (everPresent) {
             why = lastErr.empty() ? std::string("the radio would not open") : lastErr;
             return Reopen::Failed;
@@ -554,48 +607,95 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
     if (!link.readerRun.load(std::memory_order_relaxed) || link.abandoned.load(std::memory_order_relaxed)) { return Reopen::Stopped; }
 
     // STEP C, under the device lock: install, bring the chip up from nothing and put the settings back.
+    beat(link);
     std::unique_lock<std::timed_mutex> lk(link.mutex, kDeviceLockWait);
     if (!lk.owns_lock()) {
         why = "the radio was busy with a control call";
         return Reopen::Failed;
     }
+    // WHATEVER WAY THIS LEAVES EXCEPT BACK, THE DEVICE IT INSTALLED IS TAKEN OUT AGAIN, under the lock, before `reopening` comes down: a stop() that lands in
+    // the bring-up, a failed step or a radio that is not the same one must not leave a half-initialised chip for a later start() to stream from (decision F1).
+    struct Drop {
+        RtlSdrSource::Link& l;
+        bool armed = true;
+        ~Drop() {
+            if (armed) {
+                l.tuner.reset();
+                l.rtl.reset();
+                l.transport.reset();
+            }
+        }
+    } drop{link};
     if (!link.readerRun.load(std::memory_order_relaxed) || link.abandoned.load(std::memory_order_relaxed)) { return Reopen::Stopped; }
     link.transport = std::move(fresh);
     link.rtl = std::make_unique<Rtl2832u>(*link.transport, static_cast<unsigned>(kControlTimeout.count()));
     link.rtl->setKeepGoing(&link.readerRun);   // a stop() now ends the bring-up within the one transfer in flight
+    link.rtl->setBeat(&link.readerBeatNs);     // and a long bring-up is a live reader, not a wedged one
+    link.rtl->setDeadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(link.reopenBringUpMs.load(std::memory_order_relaxed)));   // and it is bounded as a whole
     auto stopped = [&link] { return !link.readerRun.load(std::memory_order_relaxed); };
+    const char* phase = "the chip bring-up";
+    auto expired = [&link] { return link.rtl && link.rtl->deadlineExpired(); };
     auto fail = [&](const std::string& step) {
+        if (stopped()) { why = step; return Reopen::Stopped; }
+        if (expired()) {
+            why = std::string(phase) + " did not finish in time";
+            return Reopen::Failed;
+        }
         // Every failing step says its own words and the transport's error.
         why = step + ": " + (link.rtl ? link.rtl->lastError() : std::string());
         if (link.transport && !link.transport->lastError().empty() && why.find(link.transport->lastError()) == std::string::npos) { why += " [" + link.transport->lastError() + "]"; }
-        return stopped() ? Reopen::Stopped : Reopen::Failed;
+        return Reopen::Failed;
     };
     // Whatever way this function leaves, the token comes off the chip object: a later teardown (stop() clears the same flag) must still be able to write
     // the tuner's standby and the demodulator's power-down.
     struct TokenOff {
         RtlSdrSource::Link& l;
-        ~TokenOff() { if (l.rtl) { l.rtl->setKeepGoing(nullptr); } }
+        ~TokenOff() {
+            if (l.rtl) {
+                l.rtl->setKeepGoing(nullptr);
+                l.rtl->setDeadline(std::chrono::steady_clock::time_point{});
+                l.rtl->setBeat(nullptr);
+            }
+        }
     } tokenOff{link};
     BringUp bu;
+    // THE BIAS TEE IS NOT SWITCHED ON BY THE BRING-UP'S EEPROM RULE here: a dongle whose EEPROM forces it gets it written OFF, and the settings below put it where
+    // the user's wish and the repeat rule say (decision F3a, 3b). Everything else the bring-up writes is the open's.
+    const bool teeOffInBringUp = false;
     // The IF bandwidth is applied AFTER the bring-up, by its own step, in the order the setters would have run (see chipIfBandwidth); the bring-up is the open's.
-    if (!bringUpChip(link, 0, 0, bu)) {
+    if (!bringUpChip(link, 0, 0, bu, &teeOffInBringUp)) {
+        if (stopped()) { why = "stopped"; return Reopen::Stopped; }
+        if (expired()) {
+            why = std::string(phase) + " did not finish in time";
+            return Reopen::Failed;
+        }
         why = bu.error + (link.rtl->lastError().empty() ? std::string() : " [" + link.rtl->lastError() + "]");
-        return stopped() ? Reopen::Stopped : Reopen::Failed;
+        return Reopen::Failed;
     }
+    // THE SAME RADIO? What the bring-up read from the device must be what the open read from the one that left: a different tuner or different USB strings is a
+    // different dongle that happens to sit where the old one did, and the user's settings, bias tee included, are not put onto it (decision F4).
+    if (!sameRadioAsOpened(link, bu)) {
+        why = kReopenWhichSentence;
+        return Reopen::Mismatch;
+    }
+    phase = "putting the settings back";
     ChipState st;
     st.rateHz = bu.rateHz;
     st.centerHz = kDefaultFreqHz;
-    // Re-apply what the user asked for, in the order the setters are called, each by the same device work a setter does. A setting asked for DURING this
-    // bring-up is picked up by the generation check at the end.
-    unsigned gen = 0;
-    RtlSdrSource::Link::Wanted w;
-    for (int pass = 0; pass < 4; ++pass) {
+    // Re-apply what the user asked for, in the order the setters are called, each by the same device work a setter does. A setting asked for DURING a round
+    // is picked up by the next one: after each round `wanted` is looked at again under its lock, and the re-open ends (`reopening` comes down, under the same
+    // lock) only when nothing arrived since the round began (decision F5). The device lock stays held meanwhile, so a setter that arrives after that moment
+    // waits for the stream start below and then reaches the chip in the ordinary way.
+    bool settled = false;
+    for (int round = 0; round < kMaxSettingRounds && !settled; ++round) {
+        unsigned gen = 0;
+        RtlSdrSource::Link::Wanted w;
         {
             std::lock_guard<std::mutex> wlk(link.wantedMutex);
             w = link.wanted;
             gen = link.wantedGen.load(std::memory_order_relaxed);
         }
-        if (stopped()) { return Reopen::Stopped; }
+        if (stopped()) { why = "stopped"; return Reopen::Stopped; }
         if (w.ppm != 0 && !chipPpm(link, w.ppm, st)) { return fail("the radio would not take its crystal correction back"); }
         if (w.rateHz > 0.0 && std::fabs(nearestSupportedRate(w.rateHz) - st.rateHz) > 0.5) {
             if (!chipRate(link, nearestSupportedRate(w.rateHz), st)) { return fail("the radio would not take its sample rate back"); }
@@ -622,28 +722,56 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
                 st.centerHz = w.freqHz;
             }
         }
-        if (link.wantedGen.load(std::memory_order_relaxed) == gen) { break; }
-        // something was set while this pass ran: another pass puts the newest values on (each setter is idempotent)
+        // THE BIAS TEE: back where the user's latest wish has it on the first re-open of a window, and OFF on a repeat - a short or an overload on the coax is
+        // itself a way to brown a dongle out of the bus, and switching 4.5 V straight back on would loop. What is on the wire is what the readback and the
+        // log say: when the rule withholds an "on", the tee is switched OFF if anything switched it on, and `wanted` says off from then on.
+        if (w.biasTee && repeatInWindow) {
+            biasWithheld = true;
+            {
+                std::lock_guard<std::mutex> wlk(link.wantedMutex);
+                link.wanted.biasTee = false;
+            }
+            if (link.biasTee.load(std::memory_order_relaxed)) {
+                if (!link.rtl->setBiasTee(false)) { return fail("the radio would not switch its bias tee off"); }
+            }
+            link.biasTee.store(false, std::memory_order_relaxed);
+        } else if (w.biasTee != link.biasTee.load(std::memory_order_relaxed)) {
+            if (!link.rtl->setBiasTee(w.biasTee)) { return fail("the radio would not take its bias tee back"); }
+            link.biasTee.store(w.biasTee, std::memory_order_relaxed);
+        }
+        // THE LAST LOOK, and the end of the re-open's taking of settings: under the lock a setter hands its change over by.
+        {
+            std::lock_guard<std::mutex> wlk(link.wantedMutex);
+            if (link.wantedGen.load(std::memory_order_relaxed) == gen) {
+                link.reopening.store(false, std::memory_order_release);
+                settled = true;
+            }
+        }
     }
-    // THE BIAS TEE: back where the user had it on the first re-open of a window, and OFF on a repeat - a short or an overload on the coax is itself a way
-    // to brown a dongle out of the bus, and switching 4.5 V straight back on would loop.
-    const bool wantTee = w.biasTee;
-    if (wantTee && repeatInWindow) {
-        biasWithheld = true;
-        std::lock_guard<std::mutex> wlk(link.wantedMutex);
-        link.wanted.biasTee = false;
-        link.biasTee.store(false, std::memory_order_relaxed);
-    } else if (wantTee != link.biasTee.load(std::memory_order_relaxed)) {
-        if (!link.rtl->setBiasTee(wantTee)) { return fail("the radio would not take its bias tee back"); }
-        link.biasTee.store(wantTee, std::memory_order_relaxed);
+    if (!settled) {
+        // Three rounds and a setter is still arriving: accept what the last round put on, and say so. (The device lock is held, so a later setter is ordinary.)
+        {
+            std::lock_guard<std::mutex> wlk(link.wantedMutex);
+            link.reopening.store(false, std::memory_order_release);
+        }
+        core::diagWarnf("source: a setting arrived while the radio was being put back after a re-open, three times over; the newest one may not have reached it yet");
     }
     // THE STREAM, in startStreamLocked's order, into the same ring: the endpoint FIFO reset, then the pipe.
+    phase = "the stream restart";
     if (!link.rtl->resetBuffer()) { return fail("the radio would not reset its endpoint"); }
     if (!link.transport->beginBulkStream(kBulkEndpoint, kBulkBufferBytes, kBulkBufferCount)) {
+        if (stopped()) { why = "stopped"; return Reopen::Stopped; }
         why = "the radio's bulk endpoint would not start: " + link.transport->lastError();
-        return stopped() ? Reopen::Stopped : Reopen::Failed;
+        return Reopen::Failed;
     }
     reportStreamNote(*link.transport, link.owner, "rtlsdr");
+    if (stopped()) {
+        // A stop() landed while the stream was being started: the radio is closed again, as for any stop inside a re-open.
+        link.transport->endBulkStream();
+        why = "stopped";
+        return Reopen::Stopped;
+    }
+    drop.armed = false;
     return Reopen::Back;
 }
 
@@ -677,7 +805,9 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
     // THE DIAGNOSTIC LINE of a recovery's start (R4): which call failed with which Windows error, whether the radio is still listed on the bus (asked by its
     // path, never printed), how long this stream had run and how long it had been silent. No serial number, no path.
     auto sayStopped = [&](const char* what, const std::string& readText, const std::string& account, int restart) {
+        beat(*link);
         const int listed = link->listed ? link->listed() : -1;
+        beat(*link);
         const auto now2 = std::chrono::steady_clock::now();
         core::diagWarnf("source: the RTL-SDR stream stopped - %s%s%s; last stream start: %s; still listed on USB: %s; stream ran %lld s; last samples %lld ms ago; restart %d of %d", what,
                         readText.empty() ? "" : ": ", readText.c_str(), account.empty() ? "no account" : account.c_str(), listed < 0 ? "unknown" : (listed > 0 ? "yes" : "no"),
@@ -750,10 +880,13 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
             }
             // The one way out of the episode that is a fault: files the outcome word for a recovery that was tried, and (for a re-open) the journal's
             // recovery event, then latches the radio dead. `outcome` is false for a radio that really left the bus: that is an unplug, not a failed recovery.
-            auto giveUp = [&](std::string msg, bool outcome) {
-                if (outcome && episode.reopened) { rre::noteVendorCallFault(link->owner, "rtlsdr", "usbreopen", msg, false); }
+            // `reopenPath` is true for every give-up that is the re-open's: the cap, a lost race, a failed or refused re-open. Those always file `usbreopenfail`
+            // and the journal's `gave-up` (never `streamfail`, never nothing), whether or not an earlier re-open belonged to this episode (decision F7).
+            auto giveUp = [&](std::string msg, bool outcome, bool reopenPath = false) {
+                const bool viaReopen = reopenPath || episode.reopened;
+                if (outcome && viaReopen) { rre::noteVendorCallFault(link->owner, "rtlsdr", "usbreopen", msg, false); }
                 noteFault(*link, msg, "reading samples");
-                if (outcome && (episode.reopened || episode.restarts > 0)) { raiseOutcome(false, episode.reopened); }
+                if (outcome && (viaReopen || episode.restarts > 0)) { raiseOutcome(false, viaReopen); }
             };
             bool wantReopen = false;
             std::string failWhy;
@@ -817,16 +950,40 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
                 if (reopensInWindow >= kMaxReopensPerWindow || total >= kMaxReopensPerOpen) {
                     giveUp("the radio keeps dropping off USB: it was reopened " + std::to_string(reopensInWindow >= kMaxReopensPerWindow ? reopensInWindow : total) +
                                " times and stopped answering again (" + failWhy + ")",
-                           true);
+                           true, true);
                     break;
                 }
                 core::diagWarnf("source: the RTL-SDR stopped answering (%s); closing it and opening it again (re-open %d of %d in this window, %d of %d in this open)",
                                 failWhy.c_str(), reopensInWindow + 1, kMaxReopensPerWindow, total + 1, kMaxReopensPerOpen);
                 std::string why;
                 bool biasWithheld = false;
-                const Reopen r = reopenDevice(*link, why, biasWithheld, repeat);
-                if (r == Reopen::LockLost) { continue; }
-                if (r == Reopen::Stopped || !link->readerRun.load(std::memory_order_relaxed)) { break; }
+                // LOSING THE RACE FOR THE DEVICE LOCK is a retry, never a way out of the loop with the stream still down (decision F2): the re-open is tried again,
+                // at most kMaxReopenLockLosses times in a row, and only then is the radio called dead - with the sentence that says what happened.
+                Reopen r = Reopen::LockLost;
+                for (int tries = 0; tries < kMaxReopenLockLosses && r == Reopen::LockLost; ++tries) {
+                    r = reopenDevice(*link, why, biasWithheld, repeat);
+                    if (r == Reopen::LockLost && !link->readerRun.load(std::memory_order_relaxed)) { break; }
+                }
+                if (r == Reopen::LockLost) {
+                    // (A stop() that arrived while the lock was being waited for touched nothing: the radio is as it was, the stream down, and the stop() ends the reader.)
+                    if (link->readerRun.load(std::memory_order_relaxed)) { giveUp(kReopenBusySentence, true, true); }
+                    break;
+                }
+                if (r == Reopen::Stopped) {
+                    // A STOP THAT LANDED INSIDE THE RE-OPEN: the radio is closed (reopenDevice took out anything it had installed) and latched FAULTED with the
+                    // sentence that says why, so a later start() is refused with those words and the window shows them through the fault path (decision F1). Not
+                    // when the radio was abandoned: stop() has already latched its own, true, words and nothing here may touch an object that may be gone.
+                    if (!link->abandoned.load(std::memory_order_relaxed)) {
+                        bool already = false;
+                        {
+                            std::lock_guard<std::mutex> lk(link->errorMutex);
+                            already = link->faulted;
+                        }
+                        if (!already) { noteFault(*link, kReopenStoppedSentence, "reconnecting the radio"); }
+                    }
+                    break;
+                }
+                if (r == Reopen::Back && !link->readerRun.load(std::memory_order_relaxed)) { break; }   // the stream runs and the stop() that is waiting ends it
                 ++reopensInWindow;
                 link->reopensThisOpen.fetch_add(1, std::memory_order_relaxed);
                 episode.reopened = true;
@@ -836,17 +993,20 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
                            false);
                     break;
                 }
-                if (r == Reopen::Failed) {
-                    giveUp("the radio stopped answering and reopening it did not help (" + why + ")", true);
+                if (r == Reopen::Mismatch) {
+                    giveUp(kReopenWhichSentence, true, true);   // the sentence whole: it says what to do
                     break;
                 }
-                // Back: the stream runs again into the same ring. The clocks start over; a bias tee that was withheld is said out loud.
+                if (r == Reopen::Failed) {
+                    giveUp("the radio stopped answering and reopening it did not help (" + why + ")", true, true);
+                    break;
+                }
+                // Back: the stream runs again into the same ring. The clocks start over; a bias tee that was withheld is said out loud, once.
                 rearms = 0;
                 lastReopenAt = std::chrono::steady_clock::now();
                 lastRearmAt = lastReopenAt;
                 lastSamplesAt = lastReopenAt;
-                core::diagWarnf("source: the RTL-SDR was closed and opened again; waiting for samples%s",
-                                biasWithheld ? " (its bias tee was left off because the radio dropped out twice)" : "");
+                core::diagWarnf("source: the RTL-SDR was closed and opened again; waiting for samples");
                 if (biasWithheld) { core::diagWarnf("source: the radio was reconnected. Its bias tee was left off because the radio dropped out twice."); }
             }
             continue;
@@ -912,33 +1072,77 @@ const std::vector<usb::UsbId>& rtlSdrUsbIds() {
     return *ids;
 }
 
-// THE SAME PHYSICAL RADIO, found again on the bus after it dropped off (the re-open): the entry with the same serial when the serial is not empty and unique in
-// the list, otherwise the entry with the same interface path (on Windows the path of the WinUSB child carries the port location). Nothing is opened.
-static bool locateSameRadio(const std::string& serial, const std::string& path, std::string& foundPath) {
-    const std::vector<usb::UsbDeviceInfo> found = usb::enumerateWinUsb(rtlSdrUsbIds());
-    if (!serial.empty()) {
-        const usb::UsbDeviceInfo* only = nullptr;
-        int n = 0;
-        for (const usb::UsbDeviceInfo& d : found) {
-            if (d.serial == serial) { only = &d; ++n; }
-        }
-        if (n == 1) {
-            foundPath = only->path;
-            return true;
-        }
-    }
+// THE SAME PHYSICAL RADIO, found again on the bus after it dropped off (the re-open), and NEVER BY GUESSING (decision F4). In this order: the exact interface path
+// (on Windows the path of the WinUSB child is derived from the port); else the same hub-and-port location; else the same serial, when that serial was the only
+// one of its kind at open and is the only one now. A listed device whose serial differs from a non-empty remembered one is a different dongle and is never taken
+// for it, whatever port it sits on. When the serial points at devices but proves nothing (two dongles both say "00000001", before or now) the answer is
+// Ambiguous and the caller opens none of them. Nothing is opened here.
+RadioLocate locateRadio(const std::vector<usb::UsbDeviceInfo>& found, const RadioIdentity& id, std::string& foundPath) {
     auto lower = [](std::string s) {
         for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
         return s;
     };
-    const std::string want = lower(path);
-    for (const usb::UsbDeviceInfo& d : found) {
-        if (lower(d.path) == want) {
-            foundPath = d.path;
-            return true;
+    // The same dongle as far as the serial can say: either side without one cannot contradict, two serials that differ do.
+    auto serialAgrees = [&id](const usb::UsbDeviceInfo& d) { return id.serial.empty() || d.serial.empty() || d.serial == id.serial; };
+    if (!id.path.empty()) {
+        const std::string want = lower(id.path);
+        for (const usb::UsbDeviceInfo& d : found) {
+            if (lower(d.path) == want && serialAgrees(d)) {
+                foundPath = d.path;
+                return RadioLocate::Found;
+            }
         }
     }
-    return false;
+    if (!id.location.empty()) {
+        const usb::UsbDeviceInfo* only = nullptr;
+        int n = 0;
+        for (const usb::UsbDeviceInfo& d : found) {
+            if (d.location == id.location && serialAgrees(d)) { only = &d; ++n; }
+        }
+        if (n == 1) {
+            foundPath = only->path;
+            return RadioLocate::Found;
+        }
+    }
+    if (!id.serial.empty()) {
+        const usb::UsbDeviceInfo* only = nullptr;
+        int n = 0;
+        for (const usb::UsbDeviceInfo& d : found) {
+            if (d.serial == id.serial) { only = &d; ++n; }
+        }
+        if (n == 1 && id.serialUnique) {
+            foundPath = only->path;
+            return RadioLocate::Found;
+        }
+        if (n >= 1) { return RadioLocate::Ambiguous; }
+    }
+    return RadioLocate::Absent;
+}
+
+std::function<std::unique_ptr<usb::UsbDevice>(std::string& error, bool& present)> makeRadioReopenFn(RadioIdentity id, RadioListFn list, RadioOpenFn open) {
+    return [id = std::move(id), list = std::move(list), open = std::move(open)](std::string& error, bool& present) -> std::unique_ptr<usb::UsbDevice> {
+        std::string where;
+        switch (locateRadio(list(), id, where)) {
+            case RadioLocate::Found:
+                present = true;
+                return open(where, error);
+            case RadioLocate::Ambiguous:
+                present = true;
+                error = kRadioAmbiguousError;
+                return nullptr;
+            case RadioLocate::Absent:
+                break;
+        }
+        present = false;
+        return nullptr;
+    };
+}
+
+std::function<int()> makeRadioListedFn(RadioIdentity id, RadioListFn list) {
+    return [id = std::move(id), list = std::move(list)]() -> int {
+        std::string where;
+        return locateRadio(list(), id, where) == RadioLocate::Absent ? 0 : 1;
+    };
 }
 
 std::vector<NativeDeviceInfo> enumerateRtlSdr() {
@@ -1064,20 +1268,26 @@ bool RtlSdrSource::open(const std::string& args) {
         pick->serial.empty() ? what : (what + " (serial " + pick->serial + ")");
     const bool opened = openWithTransport(std::move(transport), label);
     if (opened) {
-        // ARM THE RE-OPEN for THIS physical radio: the same serial when it has one and it is unique on the bus, else the same interface path. The lambdas
-        // hold copies and nothing of this object (the reader thread outlives it if stop() abandons it). The reader is not running yet.
-        const std::string serial = pick->serial;
-        const std::string path = pick->path;
-        link_->reopen = [serial, path](std::string& error, bool& present) -> std::unique_ptr<usb::UsbDevice> {
-            std::string where;
-            present = locateSameRadio(serial, path, where);
-            if (!present) { return nullptr; }
-            return usb::openWinUsb(where, error);
-        };
-        link_->listed = [serial, path]() -> int {
-            std::string where;
-            return locateSameRadio(serial, path, where) ? 1 : 0;
-        };
+        // ARM THE RE-OPEN for THIS physical radio, by what identifies it: the interface path, the hub-and-port location, and the serial (trusted only when it was
+        // the only one of its kind at this open). The lambdas hold copies and nothing of this object (the reader thread outlives it if stop() abandons it). The
+        // reader is not running yet.
+        RadioIdentity id;
+        id.path = pick->path;
+        id.location = pick->location;
+        id.serial = pick->serial;
+        int sameSerial = 0;
+        for (const usb::UsbDeviceInfo& d : found) {
+            if (!pick->serial.empty() && d.serial == pick->serial) { ++sameSerial; }
+        }
+        id.serialUnique = !pick->serial.empty() && sameSerial == 1;
+        {
+            std::lock_guard<std::mutex> wlk(link_->wantedMutex);
+            link_->identity.radio = id;
+        }
+        const RadioListFn list = [] { return usb::enumerateWinUsb(rtlSdrUsbIds()); };
+        const RadioOpenFn openFn = [](const std::string& path, std::string& error) { return usb::openWinUsb(path, error); };
+        link_->reopen = makeRadioReopenFn(id, list, openFn);
+        link_->listed = makeRadioListedFn(id, list);
     }
     return opened;
 }
@@ -1133,7 +1343,7 @@ bool RtlSdrSource::openWithTransport(std::unique_ptr<usb::UsbDevice> transport,
 // THE CHIP BRING-UP, over the link, so the open and the re-open run the very same code (the re-open is on the reader's thread and may not touch the source
 // object). The caller holds the device lock and has put the transport and the demodulator object on the link. `out.error` carries the failing step's words.
 namespace {
-bool bringUpChip(RtlSdrSource::Link& link, int ifBandwidthHz, int directChoice, BringUp& out) {
+bool bringUpChip(RtlSdrSource::Link& link, int ifBandwidthHz, int directChoice, BringUp& out, const bool* teeForced) {
     Rtl2832u& rtl = *link.rtl;
     auto setError = [&out](std::string msg) { out.error = std::move(msg); };
 
@@ -1192,6 +1402,9 @@ bool bringUpChip(RtlSdrSource::Link& link, int ifBandwidthHz, int directChoice, 
                    TunerR82xx::chipName(chip), static_cast<double>(cfg.xtalHz) / 1e6);
     link.tuner = std::make_unique<TunerR82xx>(rtl, cfg);
     TunerR82xx& tuner = *link.tuner;
+    out.tunerName = tuner.name();
+    out.manufacturer = manufacturer;
+    out.product = product;
     {
         std::lock_guard<std::mutex> wlk(link.wantedMutex);
         link.tunerNameCached = tuner.name();
@@ -1245,8 +1458,10 @@ bool bringUpChip(RtlSdrSource::Link& link, int ifBandwidthHz, int directChoice, 
     out.biasForced = forceBiasTee;
     // THE READBACK FOLLOWS THE WRITE, as it does in setBiasT: a dongle that
     // refused the GPIO writes has not switched anything on.
-    const bool wrote = rtl.setBiasTee(forceBiasTee);
-    link.biasTee.store(wrote ? forceBiasTee : false, std::memory_order_relaxed);
+    // (A re-open replaces a FORCED tee's "on" with its own answer, and leaves the bytes of every other dongle exactly as they are.)
+    const bool tee = (forceBiasTee && teeForced != nullptr) ? *teeForced : forceBiasTee;
+    const bool wrote = rtl.setBiasTee(tee);
+    link.biasTee.store(wrote ? tee : false, std::memory_order_relaxed);
 
     // A rate, a gain and a frequency, so the panel is not looking at a dead
     // device the moment it opens.
@@ -1276,6 +1491,14 @@ bool RtlSdrSource::bringUpLocked() {
     if (!ok) {
         setError(out.error);
         return false;
+    }
+    {
+        // WHAT THIS RADIO IS, as read from the device (the path, location and serial are put beside it by open()): a re-open compares against it.
+        std::lock_guard<std::mutex> wlk(link_->wantedMutex);
+        link_->identity = Link::Identity{};
+        link_->identity.tuner = out.tunerName;
+        link_->identity.manufacturer = out.manufacturer;
+        link_->identity.product = out.product;
     }
     eepromValid_.store(out.eepromValid, std::memory_order_relaxed);
     biasTForced_.store(out.biasForced, std::memory_order_relaxed);
@@ -1379,6 +1602,8 @@ bool RtlSdrSource::start() {
             setError("the radio is busy; try again");
             return false;
         }
+        // (A radio closed by a stop that landed inside a re-open is latched faulted, so setError below leaves the fault's own words in place: the refusal says
+        // "was being reconnected when it was stopped; pick the radio again", not "no radio open" - decision F1.)
         if (!link_->transport || !link_->rtl) {
             setError("start() with no radio open");
             return false;
@@ -1509,13 +1734,15 @@ bool RtlSdrSource::setSampleRateHz(double hz) {
 
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire)) {   // the radio is being reopened: kept, and put on with the rest
-            rememberWanted(*link_, [best](Link::Wanted& w) { w.rateHz = best; });
+        if (deferWhileReopening(*link_, [best](Link::Wanted& w) { w.rateHz = best; })) {   // the radio is being reopened: kept, and put on with the rest
             sampleRateHz_.store(best, std::memory_order_relaxed);
             return true;
         }
-        setError("the radio is busy; try again");
-        return false;
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
+        }
     }
     if (!link_->rtl || !link_->tuner) {
         setError("setSampleRateHz() with no radio open");
@@ -1644,13 +1871,15 @@ bool RtlSdrSource::retuneLocked(double hz) {
 bool RtlSdrSource::setCenterFrequencyHz(double hz) {
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire) && hz > 0.0) {   // the radio is being reopened: kept, and tuned to when it is back
-            rememberWanted(*link_, [hz](Link::Wanted& w) { w.freqHz = hz; });
+        if (hz > 0.0 && deferWhileReopening(*link_, [hz](Link::Wanted& w) { w.freqHz = hz; })) {   // the radio is being reopened: kept, and tuned to when it is back
             centerFrequencyHz_.store(hz, std::memory_order_relaxed);
             return true;
         }
-        setError("the radio is busy; try again");
-        return false;
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
+        }
     }
     if (!link_->rtl || !link_->tuner) {
         setError("setCenterFrequencyHz() with no radio open");
@@ -1693,13 +1922,15 @@ bool RtlSdrSource::setIfBandwidthHz(int hz) {
     }
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire)) {   // the radio is being reopened: kept, and put on with the rest
-            rememberWanted(*link_, [hz](Link::Wanted& w) { w.ifBandwidthHz = hz; });
+        if (deferWhileReopening(*link_, [hz](Link::Wanted& w) { w.ifBandwidthHz = hz; })) {   // the radio is being reopened: kept, and put on with the rest
             ifBandwidthHz_.store(hz, std::memory_order_relaxed);
             return true;
         }
-        setError("the radio is busy; try again");
-        return false;
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
+        }
     }
     if (!link_->rtl || !link_->tuner) {
         setError("setIfBandwidthHz() with no radio open");
@@ -1757,19 +1988,22 @@ bool RtlSdrSource::setDirectSamplingChoice(int choice) {
     if (choice < 0 || choice > 3) { return false; }
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire)) {   // the radio is being reopened: kept, and put on with the rest
-            bool v4 = false;
-            {
-                std::lock_guard<std::mutex> wlk(link_->wantedMutex);
-                v4 = link_->blogV4Cached;
-            }
-            if (choice != 0 && v4) { return false; }
-            rememberWanted(*link_, [choice](Link::Wanted& w) { w.directChoice = choice; });
+        // the radio is being reopened: kept, and put on with the rest (a Blog V4 never leaves its tuner, so it is refused here as it is on an open radio)
+        bool v4 = false;
+        {
+            std::lock_guard<std::mutex> wlk(link_->wantedMutex);
+            v4 = link_->blogV4Cached;
+        }
+        if (choice != 0 && v4 && link_->reopening.load(std::memory_order_acquire)) { return false; }
+        if (deferWhileReopening(*link_, [choice](Link::Wanted& w) { w.directChoice = choice; })) {
             directChoice_.store(choice, std::memory_order_relaxed);
             return true;
         }
-        setError("the radio is busy; try again");
-        return false;
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
+        }
     }
     if (!link_->rtl || !link_->tuner) {
         setError("setDirectSamplingChoice() with no radio open");
@@ -1868,12 +2102,27 @@ bool RtlSdrSource::setGainDb(const std::string& name, double db) {
     };
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire) && slot >= 0) {   // the radio is being reopened: kept, and put on with the rest
-            remember(false);
+        if (slot >= 0 && deferWhileReopening(*link_, [slot, tenths](Link::Wanted& w) {   // the radio is being reopened: kept, and put on with the rest
+                w.gainSet = true;
+                if (slot == 0) {
+                    int lo = 0;
+                    int hi = 0;
+                    TunerR82xx::aggregateRangeTenthDb(lo, hi);
+                    w.gainByStage = false;
+                    w.aggregateTenthDb = std::min(std::max(tenths, lo), hi);
+                } else {
+                    w.gainByStage = true;
+                    w.stageTenthDb[slot - 1] = tenths;
+                    w.stageSet[slot - 1] = true;
+                }
+            })) {
             return true;
         }
-        setError("the radio is busy; try again");
-        return false;
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
+        }
     }
     if (!link_->rtl || !link_->tuner) {
         setError("setGainDb() with no radio open");
@@ -1927,12 +2176,12 @@ double RtlSdrSource::gainDb(const std::string& name) const {
 bool RtlSdrSource::setAutoGain(bool on) {
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire)) {   // the radio is being reopened: kept, and put on with the rest
-            rememberWanted(*link_, [on](Link::Wanted& w) { w.autoGainSet = true; w.autoGain = on; });
-            return true;
+        if (deferWhileReopening(*link_, [on](Link::Wanted& w) { w.autoGainSet = true; w.autoGain = on; })) { return true; }   // the radio is being reopened: kept, and put on with the rest
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
         }
-        setError("the radio is busy; try again");
-        return false;
     }
     if (!link_->rtl || !link_->tuner) {
         setError("setAutoGain() with no radio open");
@@ -1998,15 +2247,21 @@ bool RtlSdrSource::setAntenna(const std::string& name) {
 
 // --- extras -----------------------------------------------------------------
 
+bool RtlSdrSource::biasT() const {
+    if (link_->reopening.load(std::memory_order_acquire)) { return wantedCopy(*link_).biasTee; }
+    return link_->biasTee.load(std::memory_order_relaxed);
+}
+
 bool RtlSdrSource::setBiasT(bool on) {
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire)) {   // the radio is being reopened: kept, and switched when it is back (the re-open may withhold an ON, and says so)
-            rememberWanted(*link_, [on](Link::Wanted& w) { w.biasTee = on; });
-            return true;
+        // the radio is being reopened: kept, and switched when it is back (the re-open may withhold an ON, and says so); the readback answers from it meanwhile
+        if (deferWhileReopening(*link_, [on](Link::Wanted& w) { w.biasTee = on; })) { return true; }
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
         }
-        setError("the radio is busy; try again");
-        return false;
     }
     if (!link_->rtl) {
         setError("the radio is busy; try again");
@@ -2024,13 +2279,15 @@ bool RtlSdrSource::setBiasT(bool on) {
 bool RtlSdrSource::setFreqCorrectionPpm(int ppm) {
     std::unique_lock<std::timed_mutex> lk = controlLock(*link_);
     if (!lk.owns_lock()) {
-        if (link_->reopening.load(std::memory_order_acquire)) {   // the radio is being reopened: kept, and put on with the rest
-            rememberWanted(*link_, [ppm](Link::Wanted& w) { w.ppm = ppm; });
+        if (deferWhileReopening(*link_, [ppm](Link::Wanted& w) { w.ppm = ppm; })) {   // the radio is being reopened: kept, and put on with the rest
             ppm_.store(ppm, std::memory_order_relaxed);
             return true;
         }
-        setError("the radio is busy; try again");
-        return false;
+        lk = retakeAfterReopen(*link_);
+        if (!lk.owns_lock()) {
+            setError("the radio is busy; try again");
+            return false;
+        }
     }
     if (!link_->rtl || !link_->tuner) {
         setError("the radio is busy; try again");
@@ -2074,8 +2331,9 @@ void RtlSdrSource::setReopenForTest(ReopenFn fn, std::function<int()> listed) {
     link_->listed = std::move(listed);
 }
 
-void RtlSdrSource::setReopenBoundsForTest(int waitMs, int pollMs, int forgiveMs) {
+void RtlSdrSource::setReopenBoundsForTest(int waitMs, int pollMs, int forgiveMs, int bringUpMs) {
     link_->reopenForgiveAfterMs.store(forgiveMs, std::memory_order_relaxed);
+    link_->reopenBringUpMs.store(bringUpMs, std::memory_order_relaxed);
     link_->reopenWaitMs.store(waitMs, std::memory_order_relaxed);
     link_->reopenPollMs.store(pollMs, std::memory_order_relaxed);
 }
