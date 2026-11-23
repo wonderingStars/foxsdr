@@ -6,6 +6,8 @@
 +60 state decodersRunning >= 1
 +300 state kit.mapPages >= 1
 +1 click "ADS-B map"
+# 394337d9 (2026-11-19, first in 0.99.111) folded the coverage, trail and GPS rows of the map's bar under a "Map options" key, closed by default
++1 click "Map options"
 +10 state cfg.mapTrailStyle == 0
 +1 expect "Ribbon" enabled equals "true"
 +1 click "Ribbon"
