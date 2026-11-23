@@ -277,6 +277,38 @@ int main() {
         }
     }
 
+    // --- 4c. ...AND BOTH THREADS SAY IT IN THE LOG (the real pipeline threads, the seam making the refusal) ------------------------------
+    {
+        const auto count = [](const char* needle) {
+            std::size_t n = 0;
+            for (const std::string& line : DiagLog::instance().ringSnapshot()) {
+                if (line.find(needle) != std::string::npos) { ++n; }
+            }
+            return n;
+        };
+        const std::size_t dspBefore = count("DSP thread MMCSS registration failed");
+        const std::size_t srcBefore = count("source thread MMCSS registration failed");
+        ThreadPriorityScope::setMmcssDisabledForTest(true);
+        {
+            Pipeline p(appConfig());
+            auto owned = std::make_unique<BudgetSource>(2000000.0);
+            BudgetSource* src = owned.get();
+            p.setSource(std::move(owned));
+            p.start();
+            src->grant(8192);
+            CHECK(waitFor([&] { return hasFrame(p); }, 5000));
+            p.stop();
+        }
+        ThreadPriorityScope::setMmcssDisabledForTest(false);
+#if defined(_WIN32)
+        for (const std::string& line : DiagLog::instance().ringSnapshot()) {
+            if (line.find("MMCSS registration failed") != std::string::npos) { std::printf("%s\n", line.c_str()); }
+        }
+        CHECK(count("DSP thread MMCSS registration failed") == dspBefore + 1);
+        CHECK(count("source thread MMCSS registration failed") == srcBefore + 1);
+#endif
+    }
+
     // --- 5. THE DSP THREAD'S ACCOUNTING (the one measurement that settles the rest) ---------------------------------------------------
     // The audio mutex is held for 400 ms while samples arrive: the DSP thread reads one block and then WAITS inside it. Wall time inside
     // blocks must rise by about the hold, its own CPU time must not, and the longest gap between two ring reads must be the hold and name
