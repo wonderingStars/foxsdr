@@ -59,6 +59,7 @@
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/bias_tee.hpp"
+#include "engine/saved_radio_retry.hpp"
 #include "source/iiod_client.hpp"
 #include "source/rtl_tcp_source.hpp"
 #include "test_check.hpp"
@@ -147,7 +148,8 @@ public:
         BadMagic,        // twelve bytes that are not an rtl_tcp header
         Silent,          // accept, say nothing
         Pieces,          // the header in two parts, headerDelayMs apart (5 bytes, then 7)
-        CloseImmediately // accept, hang up
+        CloseImmediately, // accept, hang up
+        FiveThenClose    // five bytes of a header, then hang up (a service that is not rtl_tcp, or one that died mid-header)
     };
 
     ~FakeRtlTcp() { stop(); }
@@ -274,6 +276,11 @@ private:
         setNonBlocking(s);
         const Header h = header.load();
         if (h == Header::CloseImmediately) {
+            closeSock(s);
+            return;
+        }
+        if (h == Header::FiveThenClose) {
+            sendFully(s, Bytes{'R', 'T', 'L', '0', 0});
             closeSock(s);
             return;
         }
@@ -1328,6 +1335,170 @@ int main() {
         CHECK(hasWord(again.lastError(), "was cancelled"));
     }
     {
+        // A SERVICE THAT SENDS PART OF A HEADER IS NOT AN rtl_tcp SERVER (2026-11-23 review, E4): one clear sentence that says "speaks rtl_tcp", which the
+        // saved-radio series does not retry - whether it goes quiet or hangs up. A header that never started is still a timeout (retried).
+        const auto notThere = [](const std::string& err) {
+            return cascade::gui::savedNetworkServerNotThere(
+                "rtltcp", health::classifyRadioOpen("rtltcp", err) == health::RadioReason::Absent || health::classifyRadioOpen("rtltcp", err) == health::RadioReason::Timeout, err);
+        };
+        {
+            FakeRtlTcp daemon;
+            CHECK(daemon.start());
+            daemon.header.store(FakeRtlTcp::Header::Pieces);
+            daemon.headerDelayMs.store(6000);   // five bytes, then nothing for longer than the wait below
+            RtlTcpSource::setWaitsForTest(std::chrono::milliseconds(900), std::chrono::milliseconds(0));
+            RtlTcpSource src;
+            CHECK(!src.open(daemon.args()));
+            const std::string err = src.lastError();
+            std::printf("     five bytes then quiet: \"%s\"\n", err.c_str());
+            CHECK(hasWord(err, "speaks rtl_tcp"));
+            CHECK(hasWord(err, "5 of the 12 bytes"));
+            CHECK(!hasWord(err, "timed out"));
+            CHECK(!notThere(err));   // not retried
+            RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, RtlTcpSource::kRefusedRetryDefault);
+        }
+        {
+            FakeRtlTcp daemon;
+            CHECK(daemon.start());
+            daemon.header.store(FakeRtlTcp::Header::FiveThenClose);
+            RtlTcpSource src;
+            CHECK(!src.open(daemon.args()));
+            const std::string err = src.lastError();
+            std::printf("     five bytes then closed: \"%s\"\n", err.c_str());
+            CHECK(hasWord(err, "speaks rtl_tcp"));
+            CHECK(hasWord(err, "5 of the 12 bytes"));
+            CHECK(hasWord(err, "closed the connection"));
+            CHECK(!notThere(err));
+        }
+        {
+            // the cases the series DOES retry, through the same function: silence from the start, a close from the start, a refusal
+            FakeRtlTcp silent;
+            CHECK(silent.start());
+            silent.header.store(FakeRtlTcp::Header::Silent);
+            RtlTcpSource::setWaitsForTest(std::chrono::milliseconds(600), std::chrono::milliseconds(0));
+            RtlTcpSource a;
+            CHECK(!a.open(silent.args()));
+            CHECK(notThere(a.lastError()));
+            RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, RtlTcpSource::kRefusedRetryDefault);
+            FakeRtlTcp closer;
+            CHECK(closer.start());
+            closer.header.store(FakeRtlTcp::Header::CloseImmediately);
+            RtlTcpSource b;
+            CHECK(!b.open(closer.args()));
+            CHECK(notThere(b.lastError()));
+            // ...and a wrong header and a cancelled open are not retried
+            FakeRtlTcp junk;
+            CHECK(junk.start());
+            junk.header.store(FakeRtlTcp::Header::BadMagic);
+            RtlTcpSource c;
+            CHECK(!c.open(junk.args()));
+            CHECK(!notThere(c.lastError()));
+            CHECK(!cascade::gui::savedNetworkServerNotThere("rtltcp", true, cascade::source::iiod::kOpenCancelledText));
+            CHECK(!cascade::gui::savedNetworkServerNotThere("rtlsdr", true, "nothing at that address"));
+            CHECK(!cascade::gui::savedNetworkServerNotThere("rtltcp", false, "connected to H:1, but nothing came back within 4 s (timed out)"));
+        }
+    }
+    {
+        // THE SHARED START-UP BUDGET (setOpenBudget): a silent server and the default 4 s short wait, a budget of 1 s - the open ends after about a second
+        // and says so in the seconds it was allowed.
+        FakeRtlTcp daemon;
+        CHECK(daemon.start());
+        daemon.header.store(FakeRtlTcp::Header::Silent);
+        RtlTcpSource src;
+        src.setOpenBudget(std::chrono::milliseconds(1000));
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(!src.open(daemon.args()));
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("     budget of 1 s against a silent server: %lld ms\n", static_cast<long long>(ms));
+        CHECK(ms >= 900 && ms < 2200);
+        CHECK(hasWord(src.lastError(), "within 1 s"));
+        // a budget already spent: the dial does not even connect
+        RtlTcpSource spent;
+        spent.setOpenBudget(std::chrono::milliseconds(0));
+        const std::size_t acceptedBefore = daemon.connections();
+        CHECK(!spent.open(daemon.args()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(daemon.connections() == acceptedBefore);
+    }
+    {
+        // SERIES TRIES ARE PATIENT BUT DO NOT RETRY A REFUSAL (decision B): the long header wait with setRefusalRetry(false) - one connect and out, where a
+        // user's pick (setPatient(true)) retries the refusal for its 6 s window.
+        FakeRtlTcp probe;
+        CHECK(probe.start());
+        const std::string args = probe.args();
+        probe.stop();
+        RtlTcpSource series;
+        series.setPatient(true);
+        series.setRefusalRetry(false);
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(!series.open(args));
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("     patient header, no refusal retry, refused port: %lld ms\n", static_cast<long long>(ms));
+        CHECK(ms < 3500);   // one connect (about 2 s on Windows); with the retry it is 6 s and more
+        // the patient header wait itself: a header 5 s late opens
+        FakeRtlTcp late;
+        CHECK(late.start());
+        late.headerDelayMs.store(5000);
+        late.streamEnabled.store(false);
+        RtlTcpSource ok;
+        ok.setPatient(true);
+        ok.setRefusalRetry(false);
+        CHECK(ok.open(late.args()));
+        ok.closeDevice();
+    }
+    {
+        // A REFUSAL'S PAUSE LOOKS AT THE CANCEL FLAG (decision G): pause stretched to 5 s, the flag raised in the middle of it. Back within a fraction of a
+        // second; without the check in the pause the pause is slept out first (about 5 s). (The connect after it would catch the flag too - hence the long pause.)
+        FakeRtlTcp probe;
+        CHECK(probe.start());
+        const std::string args = probe.args();
+        probe.stop();
+        RtlTcpSource::setRefusalPauseForTest(std::chrono::milliseconds(5000));
+        auto flag = std::make_shared<std::atomic<bool>>(false);
+        RtlTcpSource src;
+        src.setPatient(true);
+        src.setCancelFlag(flag);
+        std::chrono::steady_clock::time_point raisedAt{};
+        std::thread canceller([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(3500));   // a Windows refusal arrives after about 2 s; the pause then runs to about 7 s
+            raisedAt = std::chrono::steady_clock::now();
+            flag->store(true);
+        });
+        CHECK(!src.open(args));
+        const auto backAt = std::chrono::steady_clock::now();
+        canceller.join();
+        const auto afterRaise = std::chrono::duration_cast<std::chrono::milliseconds>(backAt - raisedAt).count();
+        std::printf("     cancel raised in the refusal pause: back %lld ms later\n", static_cast<long long>(afterRaise));
+        CHECK(afterRaise < 400);
+        CHECK(hasWord(src.lastError(), "was cancelled"));
+        RtlTcpSource::setRefusalPauseForTest(std::chrono::milliseconds(300));
+    }
+#if defined(_WIN32)
+    {
+        // A CANCEL DURING THE CONNECT (decision G): a refused loopback connect takes about 2 s on Windows (the connect stays in progress while the stack
+        // retries), so a flag raised at 500 ms is what the connect's own 50 ms slices must hear. Without them the connect runs out and the open fails as
+        // "refused" at about 2 s instead of "cancelled" at about 0.5 s. (Windows only: elsewhere the refusal is instant.)
+        FakeRtlTcp probe;
+        CHECK(probe.start());
+        const std::string args = probe.args();
+        probe.stop();
+        auto flag = std::make_shared<std::atomic<bool>>(false);
+        RtlTcpSource src;
+        src.setCancelFlag(flag);
+        std::thread canceller([flag] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            flag->store(true);
+        });
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(!src.open(args));
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        canceller.join();
+        std::printf("     cancel raised during a refused connect: back after %lld ms\n", static_cast<long long>(ms));
+        CHECK(ms >= 450 && ms < 1300);
+        CHECK(hasWord(src.lastError(), "was cancelled"));
+    }
+#endif
+    {
         // An address that is not one.
         RtlTcpSource src;
         CHECK(!src.open("rtltcp=host:99999"));
@@ -1466,7 +1637,10 @@ int main() {
         CHECK(ms >= 1500);  // the lower edge: nothing faulted instantly
         CHECK(src.deviceDead());
         CHECK(hasWord(src.lastError(), "timed out"));
-        CHECK(hasWord(src.lastError(), "lost while reading samples"));
+        // A STREAM THAT WENT SILENT is not a lost connection (2026-11-23 review): the sentence says the server is connected and sent nothing.
+        CHECK(hasWord(src.lastError(), "is connected but sent no samples"));
+        CHECK(!hasWord(src.lastError(), "connection to the rtl_tcp server was lost"));
+        CHECK(!hasWord(src.lastError(), "lost while"));
         src.stop();
         src.closeDevice();
     }

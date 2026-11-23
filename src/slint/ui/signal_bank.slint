@@ -53,6 +53,7 @@ export struct SourceModel {
     iq-browse: bool, iq-opening: bool,                 // ADDED (docs 6.63): Browse is drawn (a file dialog exists); the header is being read, Browse and Open are greyed
     pluto-address: string, pluto-help: string,
     rtltcp-address: string, rtltcp-help: string,
+    rtltcp-opening: bool,                              // a radio is being opened on a worker (deviceOpening): the rtl_tcp Open key is greyed, as the classic window's is
     card-busy: string, card-none: string, cards: [SelectItem], card-index: int, card-format-index: int, card-channel-index: int,
     card-swap-iq: bool, card-centre-mhz: string, card-rates: [SelectItem], card-rate-index: int, card-receives: string, card-warning: string,
     airspy-decimations: [SelectItem], airspy-decimation-index: int, airspy-hardware-rate: string, airspy-gain-mode: int,
@@ -886,7 +887,7 @@ export component SourceBody inherits VerticalLayout {
         tag: "rtl_tcp";   // not-translated: a program name
         Line {
             rtf := LineInput { horizontal-stretch: 1; value: root.model.rtltcp-address; name: @tr("rtl_tcp host and port"); committed(t) => { root.rtltcp-address-committed(t); } }
-            Mid { Key { label: @tr("Open"); xs: true; clicked => { rtf.flush(); root.rtltcp-open(); } } }
+            Mid { Key { label: @tr("Open"); xs: true; enabled: !root.model.rtltcp-opening; clicked => { rtf.flush(); root.rtltcp-open(); } } }
         }
         if root.model.rtltcp-help != "" : Note { text: root.model.rtltcp-help; }
     }

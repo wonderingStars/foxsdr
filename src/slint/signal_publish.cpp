@@ -702,6 +702,7 @@ void SignalPublisher::updateClocks() {
     o.pluto_help = ss(m.pluto_help);
     o.rtltcp_address = ss(m.rtltcp_address);
     o.rtltcp_help = ss(m.rtltcp_help);
+    o.rtltcp_opening = m.opening;
     o.card_busy = ss(m.card_busy);
     o.card_none = ss(m.card_none);
     o.cards = lists_->cards.set(items(m.cards));
@@ -1055,7 +1056,7 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
                                     m.source.auto_gain, m.source.auto_gain_shown, m.source.agc_note, m.source.stages, m.source.bias_shown, m.source.bias_on,
                                     m.source.bias_enabled, m.source.ppm_on, m.source.ppm_radio_line, m.source.ppm_text, m.source.ppm_note, m.source.ppm_refusal,
                                     m.source.error_line, m.source.mismatch_note, m.source.advisory, m.source.advisory_tone, m.source.stopped_line, m.source.variant,
-                                    m.source.iq_path, m.source.iq_note, m.source.pluto_address, m.source.pluto_help, m.source.rtltcp_address, m.source.rtltcp_help,
+                                    m.source.iq_path, m.source.iq_note, m.source.pluto_address, m.source.pluto_help, m.source.rtltcp_address, m.source.rtltcp_help, m.source.opening,
                                     m.source.card_busy, m.source.card_none, m.source.cards, m.source.card_index, m.source.card_format_index, m.source.card_channel_index,
                                     m.source.card_swap_iq, m.source.card_centre_mhz, m.source.card_rates, m.source.card_rate_index, m.source.card_receives, m.source.card_can_open,
                                     m.source.card_warning, m.source.airspy_decimations, m.source.airspy_decimation_index, m.source.airspy_hardware_rate,

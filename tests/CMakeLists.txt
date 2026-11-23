@@ -15,6 +15,7 @@ if(NOT WIN32)
         test_vendor_lib test_g33ddc_source test_g39ddc_source test_sdriq_d2xx test_fobos_source    # stand-in vendor DLLs loaded by path (tests/eol_fixture.hpp)
         test_engine_api_wireb_ftdi test_engine_api_wireb_winradio test_engine_api_wireb_neededlibs
         test_hardware_guard
+        test_rtl_tcp_realpeer        # starts the installed rtl_tcp.exe with CreateProcessA (<windows.h>); it skips itself when FOXSDR_RTLTCP_REAL_EXE is unset anyway
         # Hot-plug detection (core/sys_device_watch.cpp) is a hidden window that receives WM_DEVICECHANGE; off Windows DeviceArrivalWatcher::start()
         # and inject() return false, so there is no watcher to test (a Linux one would listen to udev/netlink uevents: an open row in
         # docs/multi-radio-records/linux-local.md, section "The 30 reds").

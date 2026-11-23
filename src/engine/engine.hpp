@@ -1194,6 +1194,12 @@ private:
     std::unique_ptr<cascade::source::DeviceSource> openDeviceSync(const std::string& kind,
                                                                   const std::string& args,
                                                                   double requestRateHz);
+    // THE START-UP RESTORE'S SHARED WAIT FOR NETWORK RADIOS: applyConfig runs on the thread that shows the window, and every saved rtl_tcp server it
+    // opens (radio 1 and radios 2 to 8, every resolved address of each) spends from ONE budget, kRestoreNetworkBudget. When it is gone a server is not
+    // waited for: its open fails at once with a sentence that arms the background series (patient, cancellable), which tries it again.
+    static constexpr std::chrono::milliseconds kRestoreNetworkBudget{4000};
+    bool restoreNetBudgetOn_ = false;
+    std::chrono::steady_clock::time_point restoreNetBudgetEnd_{};
 
     // Constructs an unopened driver of `kind`; null for a kind this build
     // does not know. One place decides what a kind name means, so the
@@ -1557,6 +1563,11 @@ private:
     // The pending open is an rtl_tcp server's (the only open that listens for a cancel): raise its flag, wait up to ~400 ms for the worker to
     // return, apply the answer (a cancelled open files nothing). False when nothing cancellable is pending; the caller then still refuses to pick.
     bool cancelPendingNetworkOpen();
+    // A SECOND OPEN WHILE ONE IS PENDING never waits for the first: its cancel flag is raised and its future is parked in retiredOpens_ (a std::async
+    // future's destructor, or an assignment over it, waits for the worker - and the caller is the control thread). Returns at once. The answer of a
+    // retired open is never applied; a device it opened is closed when it is reaped (reapRetiredOpens, from pollDeviceOpen).
+    void retirePendingOpen();
+    void reapRetiredOpens();
     // The reopen itself, once pollSoapyRecovery has judged it due: reads the
     // rate, gains, running state and AIR centre off the dead radio (device_),
     // closes it and launches the open. Split from the gate so the carry-across

@@ -186,6 +186,15 @@ struct Receiver {
     // the polls at exact seconds, as master's test did with ImGui's clock. Never set in the product.
     double savedRadioRetryClockS_ = -1.0;
     std::future<DeviceOpenResult> deviceOpenFuture_;
+    // OPENS THE USER WALKED AWAY FROM (a second press of Open while the first is still on its worker): the first one's cancel flag is raised and its
+    // future is PARKED HERE instead of being assigned over - a std::async future's destructor waits for its worker, and that wait is the control
+    // thread's. Reaped without waiting (pollDeviceOpen: a ready one is drained, which closes any device it opened) and at quit (reapPendingDeviceOpen:
+    // the unfinished ones go to detached reapers, no wait).
+    std::vector<std::future<DeviceOpenResult>> retiredOpens_;
+    // What the PENDING open closed to make its attempt (DeviceOpenResult::closedRadio and its label), kept so that an open that replaces it while it is
+    // still pending carries the radio the user had before both: a failed second open must still remember it for the exit save (0.99.36).
+    cascade::gui::RememberedSource pendingClosedRadio_;
+    std::string pendingClosedLabel_;
     bool deviceOpenPending_ = false;
     bool pendingOpenIsNetwork_ = false;               // the pending open is an rtl_tcp server's (it listens for the cancel flag)
     std::shared_ptr<std::atomic<bool>> openCancel_;   // the pending open's cancel flag (see DeviceOpenResult::openCancel)
