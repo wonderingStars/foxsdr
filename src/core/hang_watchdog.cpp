@@ -456,6 +456,8 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     reported_.store(false, std::memory_order_relaxed);
     reports_.store(0, std::memory_order_relaxed);
     displayStalls_.store(0, std::memory_order_relaxed);
+    wakePending_.store(false, std::memory_order_relaxed);
+    wakesRefiled_.store(0, std::memory_order_relaxed);
     startupFramesLeft_.store(0, std::memory_order_relaxed);
     startupPassesLeft_.store(0, std::memory_order_relaxed);
     startupDeadlineMs_.store(0.0, std::memory_order_relaxed);
@@ -847,14 +849,18 @@ namespace {
 // Windows' own modules, for the display-wake rule only: a frame in anything else is the program's, a plugin's, a driver's or unknown, and keeps the stall a freeze.
 bool isSystemWindowModule(const char* name) {
     return equalsNoCase(name, "win32u.dll") || equalsNoCase(name, "user32.dll") || equalsNoCase(name, "ntdll.dll") || equalsNoCase(name, "kernel32.dll") ||
-           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "imm32.dll") || equalsNoCase(name, "msctf.dll") || equalsNoCase(name, "combase.dll") ||
-           equalsNoCase(name, "rpcrt4.dll");
+           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "imm32.dll") || equalsNoCase(name, "msctf.dll");   // (not combase or rpcrt4: review F4)
 }
 }  // namespace
 
-bool HangWatchdog::isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs) {
-    if (frameModules == nullptr || count <= 0) { return false; }
-    if (edgeAgeMs < 0 || edgeAgeMs >= static_cast<long long>(kDisplayGraceMs) + static_cast<long long>(kDisplayWakeCapMs)) { return false; }
+bool HangWatchdog::isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs, long long stalledMs, unsigned framesPresentedSinceEdge) {
+    if (frameModules == nullptr || count < kDisplayWakeMinFrames) { return false; }   // (a) a short walk proves nothing about what is above it
+    if (edgeAgeMs < 0) { return false; }                                               // no display-on edge ever seen
+    if (framesPresentedSinceEdge != 0) { return false; }                               // (c) a frame was presented since the edge: the window had come back
+    // (c) JUDGED BY WHEN THE STALL BEGAN, not when it was captured. The beat that starts a stall is taken at the top of the frame that notes the edge, so a start a little
+    // BEFORE the edge is the same frame; one earlier than the grace is a stall that was already under way and is not the wake's.
+    const long long startAge = edgeAgeMs - (stalledMs > 0 ? stalledMs : 0);
+    if (startAge < -static_cast<long long>(kDisplayGraceMs) || startAge >= static_cast<long long>(kDisplayGraceMs) + static_cast<long long>(kDisplayWakeCapMs)) { return false; }
     if (!equalsNoCase(frameModules[0], "win32u.dll") && !equalsNoCase(frameModules[0], "user32.dll")) { return false; }
     const int scan = (count < kDisplayStallScanFrames) ? count : kDisplayStallScanFrames;
     for (int i = 0; i < scan; ++i) {
@@ -863,7 +869,12 @@ bool HangWatchdog::isDisplayWakeStall(const char* const* frameModules, int count
     return true;
 }
 
-void HangWatchdog::noteDisplayEdge() { displayEdgeAtMs_.store(nowMs(), std::memory_order_relaxed); }
+void HangWatchdog::noteDisplayEdge() {
+    presentedSinceEdge_.store(0, std::memory_order_relaxed);
+    displayEdgeAtMs_.store(nowMs(), std::memory_order_relaxed);
+}
+
+void HangWatchdog::notePresented() { presentedSinceEdge_.fetch_add(1, std::memory_order_relaxed); }
 
 long long HangWatchdog::displayEdgeAgeMs() const {
     const long long forced = displayEdgeAgeForTest_.load(std::memory_order_relaxed);
@@ -1101,6 +1112,7 @@ void HangWatchdog::threadMain() {
             // app is never killed.
             pumpExcusedSinceMs = 0.0;
             if (reported_.exchange(false, std::memory_order_relaxed)) {
+                wakePending_.store(false, std::memory_order_release);
                 DiagLog::instance().writef("warn", "%s thread recovered after a stall", role() == Role::Control ? "control" : "gui");
                 // THE OUTCOME (freeze diagnosis section 7): how long the stall lasted, appended to the file that was written for it. The report on disk said "pending" until now;
                 // a report with no such section is one whose process ended while it was stalled, and the uploader sends it as `not recovered`.
@@ -1119,8 +1131,17 @@ void HangWatchdog::threadMain() {
             }
             continue;
         }
-        if (reported_.load(std::memory_order_relaxed)) { continue; }
-        const Excuse why = excuse();
+        // (d) A STALL EXCUSED AS A DISPLAY WAKE MUST END. One that has not ended when the cap has passed is filed as a freeze after all (the capture's note says it
+        // began at a display wake), by the same path as any other: so a window that never comes back is always reported.
+        bool afterWake = false;
+        if (reported_.load(std::memory_order_relaxed)) {
+            if (!wakePending_.load(std::memory_order_acquire) || stalled < static_cast<double>(wakeCapMs_.load(std::memory_order_relaxed))) { continue; }
+            wakePending_.store(false, std::memory_order_release);
+            wakesRefiled_.fetch_add(1, std::memory_order_release);
+            afterWake = true;
+            diagLogf("watchdog: the stall excused as a display wake has lasted %.0f ms and has not ended; filed as a freeze", stalled);
+        }
+        const Excuse why = afterWake ? Excuse::None : excuse();
         if (why == Excuse::Standing) {
             pumpExcusedSinceMs = 0.0;
             continue;
@@ -1170,7 +1191,9 @@ void HangWatchdog::threadMain() {
         std::snprintf(name, sizeof(name), "/hang-%lu-%u.txt", pid,
                       reports_.load(std::memory_order_relaxed) + 1u);
         const std::string path = dir + name;
+        captureAfterWake_ = afterWake;
         captureAllThreads(path, stalled);
+        captureAfterWake_ = false;
         {
             std::error_code ec;
             if (std::filesystem::exists(path, ec)) {
@@ -1579,7 +1602,8 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
                                : nullptr;
             }
             displayStall = (wedge == nullptr) && HangWatchdog::isDisplayPresentationStall(names, scan);
-            if (!displayStall && wedge == nullptr && HangWatchdog::isDisplayWakeStall(names, scan, displayEdgeAgeMs())) {
+            if (!displayStall && wedge == nullptr && !captureAfterWake_ &&
+                HangWatchdog::isDisplayWakeStall(names, n, displayEdgeAgeMs(), static_cast<long long>(stalledMs), presentedSinceEdge_.load(std::memory_order_relaxed))) {
                 displayStall = true;
                 displayWake = true;
                 std::snprintf(wakeModule, sizeof(wakeModule), "%s", names[0] != nullptr ? names[0] : "?");
@@ -1594,6 +1618,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     }
 #endif
     if (wedge == nullptr && forceDisplayStall_.load(std::memory_order_relaxed)) { displayStall = true; }  // test hook
+    if (wedge == nullptr && !captureAfterWake_ && !displayStall && forceDisplayWake_.load(std::memory_order_relaxed)) {   // test hook: the wake's own wiring
+        displayStall = true;
+        displayWake = true;
+        std::snprintf(wakeModule, sizeof(wakeModule), "%s", "win32u.dll");
+    }
 
     // 0x48414E47 is 'HANG' - a hang and a crash at the same address are
     // different bugs and must not group together. 0x5354414C is 'STAL', and it
@@ -1620,9 +1649,10 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     if (displayWake) {
         // ONE LINE, AND COUNTED (displayWakesRecorded): written here, after every thread has been let go, for the reason the count above is.
         displayWakes_.fetch_add(1, std::memory_order_release);
+        wakePending_.store(true, std::memory_order_release);   // (d): filed as a freeze after all if it is still stalled when the cap has passed
         diagLogf("watchdog: display wake - the window thread sat in the system's window code (%s) with none of FoxSDR's frames above it, "
-                 "%lld ms after the display came back; recorded as a display stall, not filed as a freeze",
-                 wakeModule, displayEdgeAgeMs());
+                 "%lld ms after the display came back; recorded as a display stall, and filed as a freeze if it is still stalled after %u ms",
+                 wakeModule, displayEdgeAgeMs(), wakeCapMs_.load(std::memory_order_relaxed));
     }
 
     // THE IDENTIFYING HALF GOES TO DISK FIRST, and is flushed, exactly as
@@ -1649,17 +1679,23 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     out << "kind: " << (displayStall ? "stall" : "hang") << "\n";
     out << "note: "
         << (displayStall
-                ? "presentation stalled in the display driver - the frames under the wait "
-                  "are the graphics stack, not this application. A monitor switched off, a "
-                  "resolution change, a GPU reset or a remote session will do this."
+                ? (displayWake
+                       ? "the window thread sat in the system's own window code after the display came back - nothing of this application's is above the wait. "
+                         "It is kept on the machine unless it outlasts the display-wake cap, when it is filed as a freeze."
+                       : "presentation stalled in the display driver - the frames under the wait "
+                         "are the graphics stack, not this application. A monitor switched off, a "
+                         "resolution change, a GPU reset or a remote session will do this.")
                 : (wedge != nullptr
                        ? (wedge->stage != 0
                               ? "a call into a plugin did not return within its budget - the plugin and the entry point are named "
                                 "below, and the first stack is the thread that is inside the call"
                               : "a worker thread did not beat within its budget - the thread named below is the first stack, "
                                 "and the frames under it are where it stopped")
-                       : (role() == Role::Control ? "the engine's control thread did not complete a pass within the threshold"
-                                                  : "the gui thread did not complete a frame within the threshold")))
+                       : (captureAfterWake_
+                              ? "the gui thread did not complete a frame within the threshold - it began at a display wake (the display had just come back) "
+                                "and had still not come back when the display-wake cap passed, so it is filed as a freeze"
+                              : (role() == Role::Control ? "the engine's control thread did not complete a pass within the threshold"
+                                                         : "the gui thread did not complete a frame within the threshold"))))
         << "\n";
     out << "stalled-ms: " << static_cast<long long>(stalledMs) << "\n";
     // The threshold IN FORCE, which is what tells a reader whether this stall

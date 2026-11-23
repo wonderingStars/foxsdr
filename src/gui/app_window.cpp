@@ -2390,6 +2390,7 @@ int AppWindow::run(int frames) {
         } else {
             frameScope.to(cascade::core::FrameScope::Present);
             glfwSwapBuffers(window);
+            watchdog_.notePresented();   // a frame really reached the screen since the last display-on edge: a later stall is not the wake's (HangWatchdog::isDisplayWakeStall)
         }
         frameScope.to(cascade::core::FrameScope::Other);
         if (frameLog_) { frameLog_->frameEnd(); }

@@ -674,26 +674,43 @@ public:
     // the display was off, and the present grace (kDisplayGraceMs) covers the first seconds after it comes back; what this covers is the system taking longer
     // than that to give the thread back, which is the system's stall and not this program's.
     //
-    // THE WINDOW OF TIME: kDisplayGraceMs plus kDisplayWakeCapMs after the display-on edge. The diagnosis gives no number for the cap (it only says "grace plus
-    // cap"), so the cap is 120 s, a judgement and not a measurement; the report that motivated it stalled for 35 to 65 s. Outside it the stall is filed.
-    static constexpr unsigned kDisplayWakeCapMs = 120000;
+    // NARROWED BY THE REVIEW OF fix/freezes, part 3 (F4). A stall is a display wake ONLY when ALL of these hold:
+    //   (a) the walk has at least kDisplayWakeMinFrames frames (a one-frame walk never qualifies: it proves nothing about what is above it);
+    //   (b) frame 0 is win32u.dll or user32.dll and every one of the first kDisplayStallScanFrames frames is one of win32u, user32, ntdll, kernel32, kernelbase,
+    //       imm32, msctf (combase and rpcrt4 are NOT on the list: a cross-process call blocked on a hung server has a dozen of them under the wait);
+    //   (c) the stall BEGAN (judged by when it started, not when it was captured) less than kDisplayGraceMs + kDisplayWakeCapMs after the display-on edge, and no
+    //       frame has been presented since that edge (notePresented), so the window thread's first present after the wake is the one that is stuck;
+    //   (d) the stall ENDS: one that has not ended kDisplayWakeCapMs after it began is filed as a freeze after all, with the note saying it began at a display
+    //       wake. A window that never comes back is therefore always reported.
+    // The cap is a judgement and not a measurement: the report that motivated the rule stalled for 35 to 65 s, so 90 s covers it with margin and a stall that
+    // outlives it is not that report.
+    static constexpr unsigned kDisplayWakeCapMs = 90000;
+    // The shortest walk that can show "nothing of FoxSDR's above the pump".
+    static constexpr int kDisplayWakeMinFrames = 4;
 
-    // THE PURE DECISION, over module names (top frame first) and the age of the last display-on edge in milliseconds (negative: there has been none).
-    // True ONLY when ALL of these hold: an edge is known and is younger than kDisplayGraceMs + kDisplayWakeCapMs; frame 0 is win32u.dll or user32.dll; and EVERY
-    // frame in the first kDisplayStallScanFrames is one of Windows' own modules (win32u, user32, ntdll, kernel32, kernelbase, imm32, msctf, combase, rpcrt4). A
-    // frame of the program's own image, of a plugin, of a driver, of an OpenGL stack (that is the older display-stall rule's), or a frame the module table
-    // cannot name, means the stall is NOT excused here and is filed as before. The walk ends at the frames it could take, so a short list of system frames
-    // counts; an empty list does not.
-    static bool isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs);
+    // THE PURE DECISION, over module names (top frame first), the age of the last display-on edge at the capture in milliseconds (negative: there has been none),
+    // how long the stall had lasted at the capture, and the frames presented since the edge. True only when (a), (b) and (c) above all hold. A frame of the
+    // program's own image, of a plugin, of a driver, of an OpenGL stack (that is the older display-stall rule's), or a frame the module table cannot name, means
+    // the stall is NOT excused here and is filed as before. (d) is the watchdog's own loop, not this function.
+    static bool isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs, long long stalledMs, unsigned framesPresentedSinceEdge);
 
-    // The window's loop calls this when the display comes back on (the off-to-on edge, the code that already notes it); the age is read at the capture.
+    // The window's loop calls this when the display comes back on (the off-to-on edge, the code that already notes it); the age is read at the capture. It also
+    // zeroes the count of frames presented since.
     void noteDisplayEdge();
+    // The window's loop calls this after each frame it really presented (the swap returned).
+    void notePresented();
     // Milliseconds since the last noteDisplayEdge(), or -1 when there has been none.
     long long displayEdgeAgeMs() const;
     // Stalls recorded as a display wake since start(), for this watchdog only.
     unsigned displayWakesRecorded() const;
     // TESTS ONLY: pretend the last edge was `ageMs` ago (negative: never).
     void setDisplayEdgeAgeForTest(long long ageMs);
+    // TESTS ONLY: the next capture treats the stall as a display wake whatever its frames say (the frames cannot be staged from ctest); the rest is the real code.
+    void setForceDisplayWakeForTest(bool on) { forceDisplayWake_.store(on, std::memory_order_relaxed); }
+    // TESTS ONLY: how long a wake-excused stall may last before it is filed as a freeze (default kDisplayWakeCapMs).
+    void setDisplayWakeCapMsForTest(unsigned ms) { wakeCapMs_.store(ms > 0 ? ms : kDisplayWakeCapMs, std::memory_order_relaxed); }
+    // Freezes filed after a display wake outlived the cap, since start().
+    unsigned displayWakesRefiled() const { return wakesRefiled_.load(std::memory_order_acquire); }
 
     // Pauses taken by this PROCESS, counted from process start rather than
     // from start(): the first blocking work in a session - the plugin scan -
@@ -781,6 +798,12 @@ private:
     std::atomic<double> displayEdgeAtMs_{-1.0};        // steady-clock ms of the last display-on edge, or -1
     std::atomic<long long> displayEdgeAgeForTest_{-2}; // -2: not set; otherwise the age the test wants
     std::atomic<bool> forceDisplayStall_{false};  // setForceDisplayStallForTest
+    std::atomic<unsigned> presentedSinceEdge_{0};      // notePresented(), zeroed by noteDisplayEdge()
+    std::atomic<bool> forceDisplayWake_{false};        // setForceDisplayWakeForTest
+    std::atomic<unsigned> wakeCapMs_{kDisplayWakeCapMs};
+    std::atomic<bool> wakePending_{false};             // the open report was excused as a display wake and has not yet ended: it is filed as a freeze if it outlives the cap
+    std::atomic<unsigned> wakesRefiled_{0};
+    bool captureAfterWake_ = false;                    // watchdog thread only: this capture is the freeze filed after a wake outlived the cap
     // Guards the sink's pointer only; the sink itself is called outside it.
     mutable std::mutex sinkMutex_;
     std::function<void()> displayStallSink_;
