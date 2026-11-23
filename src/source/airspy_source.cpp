@@ -1077,10 +1077,23 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
     // The re-arm budget (kMaxStreamRearms) and when it was last spent.
     int rearms = 0;
     auto lastRearm = std::chrono::steady_clock::now();
+    // THE OUTCOME OF A RESTART is what is reported, not its start (diagnosis 2026-11-23): `pending` is set when a restart was made and cleared by the first
+    // samples after it. A stop while it is pending raises nothing. The one place the two words are raised (held by tests/test_health_paths.cpp).
+    bool pending = false;
+    auto pendingSince = lastRearm;
+    auto outcome = [](bool ok) {
+        core::health::raiseRecovered(ok ? core::health::Recovered::StreamBack : core::health::Recovered::StreamFail);
+    };
 
     while (link->run.load(std::memory_order_relaxed)) {
         const int got = link->dev->readBulk(raw.data(), raw.size(), timeoutMs);
         if (!link->run.load(std::memory_order_relaxed)) { break; }
+        if (got > 0 && pending) {
+            pending = false;
+            core::diagLogf("%s: the stream is back after a restart (%lld ms without samples)", link->tag,
+                           static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - pendingSince).count()));
+            outcome(true);
+        }
 
         if (got < 0) {
             // A FAILED READ IS A HALTED PIPE, which is not yet a dead radio.
@@ -1098,11 +1111,15 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
                 std::snprintf(tail, sizeof(tail), ", and again after %d restarts of the stream",
                               kMaxStreamRearms);
                 noteTransportFaultOn(*link, "reading samples", detail + tail);
+                outcome(false);   // restarts were made and did not hold
                 break;
             }
             ++rearms;
             lastRearm = std::chrono::steady_clock::now();
-            core::health::raiseRecovered(core::health::Recovered::StreamRestart);
+            if (!pending) {
+                pending = true;
+                pendingSince = lastRearm;
+            }
             core::diagWarnf(
                 "%s: %s; restarting the stream the way libairspy starts it - receiver off, "
                 "clear the halt, receiver on (attempt %d of %d)",
@@ -1113,6 +1130,7 @@ void AirspySource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             if (r == Rearm::Failed) {
                 noteTransportFaultOn(*link, "reading samples",
                                      detail + "; restarting the stream failed: " + why);
+                outcome(false);
                 break;
             }
             // A fresh stream, so a fresh converter - the same reset libairspy
