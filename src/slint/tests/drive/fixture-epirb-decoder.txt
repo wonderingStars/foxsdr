@@ -8,4 +8,6 @@ state deviceName contains epirb-decoder
 state list.decoderLines.details contains "DISTRESS BEACON"
 state list.decoderLines.details contains "country=232 (United Kingdom"
 # The decoderLines detail is cut at about 120 characters by the host, so only the head of the line is assertable: the position, protocol and channel are in the tail.
-state list.decoderLines.details contains "hexid=1D0C3DA3AE6B407"
+# epirb-decoder 1.1.0 (foxsdr-plugins-dev 0d940a9, 2026-11-11, "position-free 15 Hex ID") fills the position bits of the 15 Hex ID with the standard's default, so a beacon keeps one ID while its position changes:
+# the burst's bits 65-85 (position, ...6B407 as sent) read FFBFF. The rest of the ID is the burst's own.
+state list.decoderLines.details contains "hexid=1D0C3DA3AEFFBFF"
