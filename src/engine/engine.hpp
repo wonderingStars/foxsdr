@@ -2482,6 +2482,7 @@ private:
     std::atomic<bool> controlRun_{false};
     std::atomic<std::thread::id> controlThreadId_{};
     cascade::core::HangWatchdog controlWatchdog_;
+    bool controlWatchdogArmed_ = false;   // armControlWatchdog() has started it and stopControlThread() has not stopped it (the caller's thread only)
     std::atomic<std::uint64_t> controlPasses_{0};
     // TESTS ONLY: while true the control thread is parked at the top of its
     // loop - no pass, no tick, no heartbeat (tests/test_engine_control_thread).
@@ -3833,6 +3834,9 @@ public:
     static constexpr std::chrono::milliseconds kPassWaitNet{20};
     void startControlThread();
     void startControlThread(const ControlThreadOptions& options);
+    // Starts the control thread's watchdog (and its start-up budget) WITHOUT the thread, so a first pass run on the caller's thread before the thread exists
+    // (EngineService::start) is already watched (review of fix/freezes, finding 5). startControlThread() then finds it running and does not start it again.
+    void armControlWatchdog(const ControlThreadOptions& options);
     void stopControlThread();
     bool controlThreadRunning() const { return controlRun_.load(); }
     // Where the control thread's hang reports go (empty: none); the front end moves it with its own diagnostics switch.

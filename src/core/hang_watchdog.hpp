@@ -399,6 +399,16 @@ public:
     void beginStartup(unsigned thresholdMs = kStartupThresholdMs,
                       unsigned frames = kStartupFrames);
 
+    // THE SAME BUDGET FOR A WATCHDOG THAT IS NOT BEATEN ONCE A FRAME, BY TIME AND PASSES (review of fix/freezes, finding 5). The engine's control thread beats twice a pass
+    // (and many times a second even when idle), so "30 beats" ended the budget after about 14 passes - a quarter of a second - and a wedge from pass 15 on was judged at 5 s.
+    // This budget is `thresholdMs` until `passes` complete passes have been counted (notePassCompleted(), called by the pass's loop once a pass has run) or `maxMs` has
+    // passed since this call, whichever comes first; the beats are not counted at all. The drop is made by whichever notices first (the pass, or the watchdog's own poll, so
+    // it ends on time even when no pass completes); a beginShutdown() inside the budget wins, as for beginStartup().
+    static constexpr unsigned kStartupPasses = 30;
+    static constexpr unsigned kStartupMaxMs = 30000;
+    void beginStartupByTime(unsigned thresholdMs = kStartupThresholdMs, unsigned passes = kStartupPasses, unsigned maxMs = kStartupMaxMs);
+    void notePassCompleted();
+
     // Stops the watchdog thread and joins it. The poll wait is interruptible,
     // so this returns in about as long as an in-flight capture takes rather
     // than in the rest of a poll interval.
@@ -775,8 +785,12 @@ private:
     // and the two thresholds the drop swaps between. Only the GUI thread
     // writes them; the watchdog thread only ever reads thresholdMs_.
     std::atomic<unsigned> startupFramesLeft_{0};
-    unsigned startupThresholdMs_ = 0;
-    unsigned steadyThresholdMs_ = kDefaultThresholdMs;
+    std::atomic<unsigned> startupThresholdMs_{0};   // (atomic: beginStartupByTime's drop is also made by the watchdog's own thread)
+    std::atomic<unsigned> steadyThresholdMs_{kDefaultThresholdMs};
+    // beginStartupByTime(): passes still to be counted, and the instant (nowMs()) the budget ends at the latest; 0 = none.
+    std::atomic<unsigned> startupPassesLeft_{0};
+    std::atomic<double> startupDeadlineMs_{0.0};
+    void dropStartupBudget();
 
     // THE POLL WAIT, MADE INTERRUPTIBLE. stop() used to set a flag that was
     // only read at the top of the loop while the loop slept in a plain

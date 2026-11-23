@@ -107,9 +107,52 @@ void testStartupStallIsNotReportedButALaterOneIs() {
     fs::remove_all(dir, ec);
 }
 
+// THE CONTROL THREAD'S BUDGET IS BY TIME AND PASSES, NOT BEATS (review of fix/freezes, finding 5). The pass's loop beats twice a pass, so 30 beats were 14 passes.
+void testStartupByTimeBothEnds() {
+    std::printf("the by-time budget survives any number of beats; it ends after its passes, or at its time, whichever is first\n");
+    {
+        HangWatchdog w;
+        w.start(std::string(), 5000);
+        w.beginStartupByTime(30000, 30, 30000);
+        CHECK(w.thresholdMs() == 30000u);
+        for (int i = 0; i < 200; ++i) { w.heartbeat(); }   // (200 beats: the old budget ended at the 30th)
+        CHECK(w.thresholdMs() == 30000u);
+        for (int i = 0; i < 29; ++i) { w.notePassCompleted(); }
+        CHECK(w.thresholdMs() == 30000u);                    // 29 of 30 passes
+        w.notePassCompleted();
+        CHECK(w.thresholdMs() == 5000u);                     // the 30th: back to the steady threshold
+        w.notePassCompleted();
+        CHECK(w.thresholdMs() == 5000u);
+        w.stop();
+    }
+    {
+        // the time end: no pass ever completes (the first pass is wedged), and the budget still ends when its time has gone, on the watchdog's own poll
+        HangWatchdog w;
+        w.start(std::string(), 5000);
+        w.beginStartupByTime(30000, 30, 700);
+        CHECK(w.thresholdMs() == 30000u);
+        sleepMs(300);
+        CHECK(w.thresholdMs() == 30000u);
+        sleepMs(1200);                                       // past 700 ms plus two polls
+        CHECK(w.thresholdMs() == 5000u);
+        w.stop();
+    }
+    {
+        // a shutdown that begins inside the budget keeps its threshold
+        HangWatchdog w;
+        w.start(std::string(), 5000);
+        w.beginStartupByTime(30000, 30, 30000);
+        w.beginShutdown(59500);
+        for (int i = 0; i < 30; ++i) { w.notePassCompleted(); }
+        CHECK(w.thresholdMs() == 59500u);
+        w.stop();
+    }
+}
+
 }  // namespace
 
 int main() {
+    testStartupByTimeBothEnds();
     testThresholdDropsAfterTheStartupFrames();
     testShutdownDuringStartupIsNotOverwritten();
     testDegenerateCallsChangeNothing();

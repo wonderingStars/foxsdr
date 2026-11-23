@@ -11681,16 +11681,24 @@ cascade::core::AppConfig Engine::configSnapshot() const {
 
 void Engine::startControlThread() { startControlThread(ControlThreadOptions{}); }
 
-void Engine::startControlThread(const ControlThreadOptions& options) {
-    if (controlThread_.joinable()) { return; }
-    txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
+void Engine::armControlWatchdog(const ControlThreadOptions& options) {
+    if (controlWatchdogArmed_) { return; }
     controlDiagDir_ = options.diagnosticsDir;
     // THE SENTINEL'S HEARTBEAT IS THE FRAME LOOP'S, and this thread's is that only when no window follows (ControlThreadOptions::sentinelHeartbeat; deep review of
     // engine/stage4, batch A, docs/engine-stage4.md 6.31): the watcher outside the process must not read this thread's 62 beats a second as a window that is alive.
     controlWatchdog_.setSentinelHeartbeat(options.sentinelHeartbeat);
     controlWatchdog_.setRole(cascade::core::HangWatchdog::Role::Control);   // its reports say `watchdog: control` and the pass's phase, not the window's frame scope
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
-    if (options.startupBudget) { controlWatchdog_.beginStartup(); }   // the first passes get the start-up budget (ControlThreadOptions::startupBudget)
+    // THE START-UP BUDGET IS BY TIME AND PASSES, NOT BEATS (review of fix/freezes, finding 5): 30 s until 30 passes have completed or 30 s have gone, whichever is first.
+    // (It was 30 beats, and the loop beats twice a pass: the budget was over after about 14 passes, a quarter of a second.)
+    if (options.startupBudget) { controlWatchdog_.beginStartupByTime(); }   // ControlThreadOptions::startupBudget
+    controlWatchdogArmed_ = true;
+}
+
+void Engine::startControlThread(const ControlThreadOptions& options) {
+    if (controlThread_.joinable()) { return; }
+    txPluginStopping_.store(false, std::memory_order_seq_cst);   // a thread restarted after a stop may drive a plugin's key again (the window is closed)
+    armControlWatchdog(options);   // (a no-op when EngineService::start armed it before its first pass)
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
         controlExited_ = false;
@@ -11775,6 +11783,7 @@ void Engine::stopControlThread() {
     controlThread_.join();
     controlThreadId_.store(std::thread::id{});
     controlWatchdog_.stop();
+    controlWatchdogArmed_ = false;
 #ifdef _WIN32
     if (timerResolutionApplied_ > 0) {
         (void)timeEndPeriod(timerResolutionApplied_);
@@ -11913,6 +11922,7 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
             lk.lock();
             if (part == PassPart::Back) {
                 controlPasses_.fetch_add(1);
+                controlWatchdog_.notePassCompleted();
                 passesEnded_.store(passesBegun_.load());
             }
             ++stepsDone_;
@@ -11988,6 +11998,7 @@ void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::millisec
         }
         controlPass();
         controlPasses_.fetch_add(1);
+        controlWatchdog_.notePassCompleted();   // (the start-up budget counts passes, not beats)
         {
             const std::uint64_t us = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(SteadyClock::now() - passStart).count());

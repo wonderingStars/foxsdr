@@ -456,6 +456,8 @@ void HangWatchdog::start(const std::string& reportDir, unsigned thresholdMs) {
     reports_.store(0, std::memory_order_relaxed);
     displayStalls_.store(0, std::memory_order_relaxed);
     startupFramesLeft_.store(0, std::memory_order_relaxed);
+    startupPassesLeft_.store(0, std::memory_order_relaxed);
+    startupDeadlineMs_.store(0.0, std::memory_order_relaxed);
     skipGap_.store(true, std::memory_order_relaxed);
     stop_.store(false, std::memory_order_relaxed);
     {
@@ -499,7 +501,34 @@ void HangWatchdog::beginStartup(unsigned thresholdMs, unsigned frames) {
     if (frames == 0 || startupThresholdMs_ <= steadyThresholdMs_) { return; }
     thresholdMs_.store(startupThresholdMs_, std::memory_order_relaxed);
     startupFramesLeft_.store(frames, std::memory_order_relaxed);
-    diagLogf("watchdog: start-up budget %u ms for %u frames", startupThresholdMs_, frames);
+    diagLogf("watchdog: start-up budget %u ms for %u frames", startupThresholdMs_.load(std::memory_order_relaxed), frames);
+}
+
+void HangWatchdog::dropStartupBudget() {
+    startupPassesLeft_.store(0, std::memory_order_relaxed);
+    startupDeadlineMs_.store(0.0, std::memory_order_relaxed);
+    unsigned expect = startupThresholdMs_.load(std::memory_order_relaxed);
+    if (expect != 0 && thresholdMs_.compare_exchange_strong(expect, steadyThresholdMs_.load(std::memory_order_relaxed), std::memory_order_relaxed)) {
+        diagLogf("watchdog: start-up budget over, threshold %u ms", thresholdMs_.load(std::memory_order_relaxed));
+    }
+}
+
+void HangWatchdog::beginStartupByTime(unsigned thresholdMs, unsigned passes, unsigned maxMs) {
+    steadyThresholdMs_.store(thresholdMs_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    const unsigned startup = (thresholdMs > 0) ? thresholdMs : kStartupThresholdMs;
+    startupThresholdMs_.store(startup, std::memory_order_relaxed);
+    if (passes == 0 || maxMs == 0 || startup <= steadyThresholdMs_.load(std::memory_order_relaxed)) { return; }
+    startupPassesLeft_.store(passes, std::memory_order_relaxed);
+    startupDeadlineMs_.store(nowMs() + static_cast<double>(maxMs), std::memory_order_relaxed);
+    thresholdMs_.store(startup, std::memory_order_relaxed);
+    diagLogf("watchdog: start-up budget %u ms for %u passes or %u ms", startup, passes, maxMs);
+}
+
+void HangWatchdog::notePassCompleted() {
+    const unsigned left = startupPassesLeft_.load(std::memory_order_relaxed);
+    if (left == 0) { return; }
+    startupPassesLeft_.store(left - 1, std::memory_order_relaxed);
+    if (left == 1) { dropStartupBudget(); }
 }
 
 unsigned HangWatchdog::thresholdMs() const {
@@ -970,6 +999,8 @@ void HangWatchdog::threadMain() {
         // THE WORKERS (thread_beats.hpp), on the same wake and the same clock - before the frame loop's own rules, which have
         // `continue`s of their own that must not skip this.
         pollThreadBeats(pollInterval);
+        // THE START-UP BUDGET'S TIME LIMIT (beginStartupByTime): ends on time even when no pass completes.
+        if (const double dl = startupDeadlineMs_.load(std::memory_order_relaxed); dl > 0.0 && now >= dl) { dropStartupBudget(); }
         const double threshold = static_cast<double>(thresholdMs_.load(std::memory_order_relaxed));
 
         // 3. THE WHOLE MACHINE STOPPED. Sleep, hibernate or a paused VM freezes

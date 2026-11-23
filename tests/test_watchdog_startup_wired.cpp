@@ -63,8 +63,13 @@ int main() {
 
     std::printf("the control thread's watchdog (the Slint window's only one) gets it through the service\n");
     CHECK(has(service, "opt.startupBudget = true"));
-    CHECK(has(engine, "controlWatchdog_.beginStartup("));
+    CHECK(has(engine, "controlWatchdog_.beginStartupByTime("));   // by time and passes, not by beats (review of fix/freezes, finding 5)
     CHECK(has(engine, "options.startupBudget"));
+    CHECK(has(engine, "controlWatchdog_.notePassCompleted()"));
+    // ...and the watchdog is armed BEFORE the first pass the service runs on its own thread
+    const std::size_t arm = service.find("engine_.armControlWatchdog(opt)");
+    const std::size_t first = service.find("engine_.controlPass()");
+    CHECK(arm != std::string::npos && first != std::string::npos && arm < first);
 
     return testSummary("test_watchdog_startup_wired");
 }

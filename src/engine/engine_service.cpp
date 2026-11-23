@@ -368,6 +368,7 @@ bool EngineService::start(std::string& why) {
     opt.watchdogReportDir = reportDir;
     opt.startupBudget = true;   // the first passes are judged against the start-up budget (the Slint window has no watchdog of its own)
     opt.diagnosticsDir = options_.diagnosticsDir;   // where the interface's half moves the control watchdog to when it switches Diagnostics on (shell retirement R5)
+    engine_.armControlWatchdog(opt);   // BEFORE the first pass, so a first pass that wedges is watched too, against the start-up budget
     if (!options_.stepped) { engine_.controlPass(); }   // a stepped run's first frame runs the pass's front part: that IS the first pass
     engine_.startControlThread(opt);
     // WHICH PASS THIS RUN HAS, in the log (the window's run() wrote it when it started the thread; tests/test_stop_ends_recordings.cpp reads it back to
