@@ -24,7 +24,7 @@ namespace slk = foxsdr::slintlanek;
 using slk::Row;
 
 std::string tr(const char* s) { return cascade::i18n::tr(s); }
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 KRow toK(const Row& r) {
     KRow k;

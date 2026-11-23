@@ -46,7 +46,7 @@ namespace cc = cascade::core;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {
@@ -407,7 +407,7 @@ void SystemPublisher::applyWindow(const Effect& e) {
     if ((e.apply & kApplyLanguage) != 0u) {
         // As main.cpp does at start: the catalogue in force, then the compiled-in bundle for the window's own words. English is "en" (the default language).
         const std::string inForce = cascade::i18n::setLanguage(e.value);
-        const bool ok = slint::select_bundled_translation(inForce);
+        const bool ok = foxsdr::slintsafe::selectBundledTranslation(inForce);
         std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), ok ? (inForce == "en" ? "english" : "bundled") : "not bundled");
         const foxsdr::slintfonts::Registered faces = foxsdr::slintfonts::registerForLanguage(ui_.window(), inForce);   // docs 6.62: the system's CJK face for the new language, or Inter again
         ui_.global<Theme>().set_cjk_family(ss(faces.family));

@@ -23,7 +23,7 @@ namespace cc = cascade::core;
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 template <class T> std::shared_ptr<slint::Model<T>> model(std::vector<T> v) { return std::make_shared<slint::VectorModel<T>>(std::move(v)); }
 

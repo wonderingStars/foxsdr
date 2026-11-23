@@ -25,7 +25,7 @@ namespace foxsdr::slintscope {
 
 namespace {
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 // the table's read_scope as the seam's reader
 struct LiveTaps : ScopeTapReader {

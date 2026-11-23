@@ -51,7 +51,7 @@ constexpr int kTickSettleFrames = 3;       // frames after the last row went out
 constexpr std::int64_t kSquelchEveryMs = 100;   // a drag of the squelch slider reaches the engine ten times a second at most, the last position always
 constexpr double kRenameWantS = 4.0;       // a group just renamed: the filter follows it for this long, then gives up
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 ::ChipTone tone(Tone t) {
     switch (t) {

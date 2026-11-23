@@ -154,7 +154,7 @@ std::string lower(std::string s) {
 }
 
 std::string fmt(const char* f, double v) { std::string s; cascade::core::formatUtf8(s, f, v); return s; }   // a std::string, never a fixed buffer (test_i18n)
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 // (Signatures - publish a model only when its content changed - is signatures.hpp, shared with the plugin kit's publisher.)
 std::string sigOf(const std::vector<Tick>& t) { std::string s; for (const auto& k : t) { s += fmt("%.6f|", k.frac) + k.label + ";"; } return s; }
@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
         cascade::i18n::setDrawablePredicate(&foxsdr::slintfonts::languageDrawable);
         const std::string inForce = cascade::i18n::setLanguage(languageSetting);
         const char* how = "english";
-        if (inForce != "en") { how = slint::select_bundled_translation(inForce) ? "bundled" : "not bundled"; }
+        if (inForce != "en") { how = foxsdr::slintsafe::selectBundledTranslation(inForce) ? "bundled" : "not bundled"; }
         std::fprintf(stderr, "foxsdr-slint: language %s (%s)\n", inForce.c_str(), how);
         // THE CJK FACES (docs 6.62): the system's own, chosen as the classic window chooses them, registered with this window (nothing for a language that needs none).
         const foxsdr::slintfonts::Registered faces = foxsdr::slintfonts::registerForLanguage(ui->window(), inForce);

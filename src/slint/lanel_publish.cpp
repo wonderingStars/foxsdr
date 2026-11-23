@@ -46,7 +46,7 @@ using slk::rTick;
 // the screen's words: every literal below goes through the string tables (tools/i18n_keys.py finds the tr("...") calls)
 std::string tr(const char* s) { return cascade::i18n::tr(s); }
 
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 
 KRow toK(const Row& r) {
     KRow k;

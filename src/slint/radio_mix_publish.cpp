@@ -15,7 +15,7 @@ namespace foxsdr::slintworkspace {
 using namespace foxsdr::slinthost;
 
 namespace {
-slint::SharedString ss(const std::string& s) { return foxsdr::slintsafe::shared(s, __FILE__); }
+slint::SharedString ss(const std::string& s, std::source_location loc = std::source_location::current()) { return foxsdr::slintsafe::shared(s, loc); }
 template <class T>
 std::shared_ptr<slint::Model<T>> modelOf(std::vector<T> rows) { return std::make_shared<slint::VectorModel<T>>(std::move(rows)); }
 }  // namespace
