@@ -524,6 +524,33 @@ void checkMicrophoneIsNotOpenedOnTheGuiThread() {
     CHECK(openerUses >= 1);
 }
 
+// --- THE WATCHDOG'S RE-OPEN DOES NOT HOLD THE CALLER (2026-11-23, the ringdrop diagnosis, item 7) --------------
+// request() waits up to kOpenBound (1.5 s) per attempt; a watchdog that retried a device whose open always took longer held the engine's pass
+// thread for 1.5 s every cycle. requestNoWait() starts the worker and returns at once; poll() takes the answer, and a second request while the
+// first is out is queued, never raced. Break-it: make requestNoWait wait (call waitBounded) and the timing CHECK is RED.
+void checkNoWaitRequestReturnsAtOnce() {
+    FakeDriver driver;
+    driver.blockMs.store(700);   // far under kOpenBound: request() would hold the caller for all of it
+    AudioOpen gate;
+    gate.bind(driver.opener(), nullptr, nullptr);
+    const double began = nowMs();
+    CHECK(gate.requestNoWait(4, 7) == AudioOpen::Outcome::Busy);
+    const double tookMs = nowMs() - began;
+    std::printf("requestNoWait returned in %.1f ms (the open takes 700)\n", tookMs);
+    CHECK(tookMs < 300.0);
+    CHECK(gate.inFlight());
+    CHECK(gate.requestNoWait(9, 7) == AudioOpen::Outcome::Queued);   // never two at once
+    const double until = nowMs() + 6000.0;
+    int collects = 0;
+    while (nowMs() < until && collects < 2) {
+        if (gate.poll()) { ++collects; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(collects == 2);
+    CHECK(gate.result().deviceIndex == 9 && gate.result().tag == 7 && gate.result().ok);
+    CHECK(driver.maxConcurrent.load() == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -536,5 +563,6 @@ int main() {
     checkRealOpenerOnAWorkerThread();
     checkUnboundGateRefuses();
     checkMicrophoneIsNotOpenedOnTheGuiThread();
+    checkNoWaitRequestReturnsAtOnce();
     return testSummary("test_audio_open");
 }

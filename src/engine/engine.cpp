@@ -1327,7 +1327,7 @@ void Engine::pollAudioHealth() {
     // slow enough that a genuinely absent device is not hammered with open
     // attempts. ImGui's clock is the frame clock, which is what "once per
     // second of running UI" should mean here.
-    if (now - rx().lastAudioProbeSec_ < 1.0) { return; }
+    if (now - rx().lastAudioProbeSec_ < rx().audioProbeIntervalS_) { return; }
     rx().lastAudioProbeSec_ = now;
 
     // AN OPEN IN FLIGHT ALREADY OWNS THE SINK. Asking a sink that a worker is
@@ -1337,7 +1337,13 @@ void Engine::pollAudioHealth() {
     // frame after the open completes asks the question again.
     if (rx().audioOpen_.inFlight()) { return; }
 
-    if (out.streamAlive()) { return; }
+    if (out.streamAlive()) {
+        rx().audioProbeIntervalS_ = 1.0;   // alive: the next death is retried within a second again
+        return;
+    }
+    // BACK OFF BETWEEN ATTEMPTS (2026-11-23, the ringdrop diagnosis, item 7): a device that keeps refusing was asked once a second for ever; each
+    // failed attempt doubles the wait to a ceiling of 30 s.
+    rx().audioProbeIntervalS_ = std::min(30.0, rx().audioProbeIntervalS_ * 2.0);
 
     // The stream is dead. Re-enumerate before choosing a target: the device
     // list is how recoveryDeviceIndex() resolves the remembered NAME to a
@@ -1354,12 +1360,13 @@ void Engine::pollAudioHealth() {
     // as the condition lasted. requestAudioOpen answers false when the device
     // has not replied inside the bound; the result lands in pollAudioOpen when
     // it does, and this tick goes back to rendering.
-    (void)requestAudioOpen(target, true);
+    // (The watchdog's re-open does not WAIT for the answer at all, so the pass is never held for the 1.5 s bound: item 7.)
+    (void)requestAudioOpen(target, true, /*wait=*/false);
 }
 
-bool Engine::requestAudioOpen(int deviceIndex, bool recovery) {
-    const cascade::gui::AudioOpen::Outcome outcome = rx().audioOpen_.request(
-        deviceIndex, recovery ? kAudioOpenByWatchdog : kAudioOpenByUser);
+bool Engine::requestAudioOpen(int deviceIndex, bool recovery, bool wait) {
+    const int tag = recovery ? kAudioOpenByWatchdog : kAudioOpenByUser;
+    const cascade::gui::AudioOpen::Outcome outcome = wait ? rx().audioOpen_.request(deviceIndex, tag) : rx().audioOpen_.requestNoWait(deviceIndex, tag);
     if (outcome != cascade::gui::AudioOpen::Outcome::Finished) {
         // Still inside the driver. Said in the panel rather than left to look
         // like nothing happened — "I picked the device and nothing changed" is

@@ -192,6 +192,22 @@ public:
         return waitBounded();
     }
 
+    // THE WATCHDOG'S RE-OPEN (2026-11-23, the ringdrop diagnosis, item 7): the same as request() but it does NOT wait. It starts the worker and
+    // returns Busy at once; the answer is taken by poll() on a later pass, exactly as a queued request's is. request() holds the calling thread for
+    // up to kOpenBound (1.5 s) per attempt, and a device whose open always takes longer than that stopped the engine's pass thread (commands,
+    // publishes, the minute digests) for 1.5 s in every cycle. Nothing here blocks, so there is nothing for the hang watchdog's pause to bracket
+    // (the same reasoning as the queued start in poll()).
+    Outcome requestNoWait(int deviceIndex, int tag = 0) {
+        if (inFlight()) {
+            queued_ = deviceIndex;
+            queuedTag_ = tag;
+            hasQueued_ = true;
+            return Outcome::Queued;
+        }
+        start(deviceIndex, tag);
+        return Outcome::Busy;
+    }
+
     // Once per frame. Collects a worker that has finished and starts whatever
     // was queued behind it. Returns true when a result was collected - the
     // caller republishes the channel layout and refreshes its device list on

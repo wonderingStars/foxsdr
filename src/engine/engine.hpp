@@ -519,7 +519,7 @@ private:
     // immediately when the device answered inside the bound. `recovery` marks
     // a request the audio watchdog made rather than the user, so only those
     // are counted as recoveries. Returns true when the open completed here.
-    bool requestAudioOpen(int deviceIndex, bool recovery);
+    bool requestAudioOpen(int deviceIndex, bool recovery, bool wait = true);   // wait=false: start the worker and return at once (the watchdog's re-open)
     // The GUI-thread half of an open, wherever it completed: republishes the
     // channel layout for the DSP thread, re-enumerates, and puts the Sinks
     // combo back on the device that is actually playing.

@@ -565,6 +565,8 @@ struct Receiver {
     std::uint64_t dspBlocksAtMinute_ = 0;
     std::uint64_t genResyncsAtMinute_ = 0;
     std::uint64_t genSkippedAtMinute_ = 0;
+    // THE AUDIO WATCHDOG'S BACK-OFF (item 7): seconds between re-open attempts while the output stays dead: 1, 2, 4 ... 30; back to 1 when it lives.
+    double audioProbeIntervalS_ = 1.0;
     // ---- the slot's own life (multi-radio stage 4) ----
     // Which radio this is, from 1 (slot + 1); set once when the slot is built.
     std::uint32_t radioNumber_ = 1;
