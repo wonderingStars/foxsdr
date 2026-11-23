@@ -562,6 +562,7 @@ private:
     // Queue the bulk ring, RECEIVER_MODE on, spawn the reader. Assumes
     // devMutex_ held and the device open and not already running.
     bool startStreamingLocked();
+    void clearRxHaltLogged();  // resetPipe(0x81), its failure logged; never stops a start
     // RECEIVER_MODE off, join the reader (bounded), tear the bulk ring down.
     // Idempotent; assumes devMutex_ held.
     void stopStreamingLocked();

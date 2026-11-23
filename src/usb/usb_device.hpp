@@ -68,6 +68,25 @@ constexpr const char* kBindHint = "reachable through usbfs (see installer/linux/
 // contention - matches the transports' own text rather than a copy of it.
 constexpr const char* kInUseError = "the radio is already in use by another program";
 
+// The words a transport's lastError() starts with when the radio's own USB
+// layout cannot be streamed by the endpoint a driver asked for (the endpoint
+// does not exist, is isochronous, or points the wrong way): a fact about the
+// device, not a cable fault. A driver that sees this prefix must NOT tell the
+// user to unplug and replug the radio, and must not use words the radio-close
+// classifier reads as "unplugged" (radio_events.cpp closeCauseFor).
+constexpr const char* kLayoutErrorPrefix = "the radio's USB layout cannot be streamed by this driver: ";
+
+// The tag a takeStreamNote() text starts with: a fallback to plain reads
+// (RAW_IO refused) or a move to another alternate setting / interface with
+// RAW_IO on. Drivers file them under different words.
+constexpr const char* kStreamNoteFallback = "[rawiofallback] ";
+constexpr const char* kStreamNoteMoved = "[altmoved] ";
+
+inline bool errorIsLayoutProblem(const std::string& error) {
+    return error.compare(0, std::char_traits<char>::length(kLayoutErrorPrefix),
+                         kLayoutErrorPrefix) == 0;
+}
+
 inline bool errorSaysInUse(const std::string& error) {
     return error.find(kInUseError) != std::string::npos;
 }
@@ -218,6 +237,43 @@ public:
     virtual int readBulk(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs) = 0;
     virtual void endBulkStream() = 0;
     virtual bool streaming() const = 0;
+
+    // --- what the transport knows about the stream's endpoint (NOT PURE) --------
+    //
+    // ADDED FOR THE RAW_IO FIELD FAULT (Airspy HF+ and Mirics MSi2500 closed with
+    // "WinUsb_SetPipePolicy(RAW_IO) failed (Windows error 87)" on every start,
+    // 19-23 Nov 2026): a transport that can describe the device's endpoints
+    // does, so one log line settles which interface, alternate setting,
+    // transfer type and packet size a driver streams from. Defaults say nothing.
+    //
+    // endpointLayout(): one line, "interface N alt M: 0x81 bulk-in packet 512;
+    // ...", no serial number, empty when the transport cannot look.
+    virtual std::string endpointLayout() { return std::string(); }
+    // takeStreamNote(): set by a beginBulkStream() that SUCCEEDED by taking a
+    // fallback (plain overlapped reads because the pipe refused RAW_IO). Returned
+    // once and cleared; the driver logs it and counts it in the radio report.
+    virtual std::string takeStreamNote() { return std::string(); }
+
+    // Selects alternate setting `setting` (the descriptor's bAlternateSetting
+    // value) of interface `interfaceIndex` (0 = the interface the transport
+    // opened). A radio whose streaming pipe exists only in a non-default
+    // setting (the Airspy HF+: libairspyhf selects setting 1 of interface 0 at
+    // open) must have it selected BEFORE it is programmed. NOT PURE: the default
+    // refuses (false, empty lastError()).
+    virtual bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) {
+        (void)interfaceIndex;
+        (void)setting;
+        return false;
+    }
+
+    // If the current setting does not carry `endpoint` as a bulk or interrupt IN
+    // pipe but another does, selects that one. True when a streamable setting is
+    // in place afterwards; false (nothing changed) for an absent or
+    // isochronous-only endpoint, and for a transport that cannot look.
+    virtual bool ensureStreamingSetting(std::uint8_t endpoint) {
+        (void)endpoint;
+        return false;
+    }
 
     // Clears a halted pipe (WinUsb_ResetPipe). Some firmware stalls the bulk
     // endpoint after a mode change; the driver knows when.

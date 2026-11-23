@@ -109,6 +109,46 @@ public:
         controls_.clear();
     }
 
+    // THE FIELD FAULT'S RULE (19-23 Nov 2026): "the streaming pipe does not exist in
+    // the current alternate setting". With streamAltRequired >= 0 beginBulkStream
+    // refuses, with the text the field reports, unless that setting has been
+    // selected. THAT WinUSB ANSWERS ERROR 87 FOR SUCH A PIPE IS INFERRED, NOT
+    // DOCUMENTED (Microsoft documents 87 only for a wrong ValueLength); the rule
+    // models the cause the review of 5f085271 and libairspyhf's open sequence
+    // point to, and the bench probe (tests/probe_winusb_rawio.cpp) settles it.
+    int streamAltRequired = -1;
+    bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) override {
+        std::lock_guard<std::mutex> lk(mutex_);
+        altCalls_.emplace_back(interfaceIndex, setting);
+        if (altCalls_.size() == 1) { controlsAtFirstAlt_ = controls_.size(); }
+        currentAlt_ = setting;
+        return true;
+    }
+    std::vector<std::pair<int, int>> altCalls() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return altCalls_;
+    }
+    std::size_t controlsAtFirstAlt() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return controlsAtFirstAlt_;
+    }
+    int currentAlt() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return currentAlt_;
+    }
+    // The device's own descriptors, as the driver asks for them at open: the
+    // setting carrying bulk IN 0x81 is selected when it is required and not current.
+    int ensureCalls() const { return ensureCalls_.load(); }
+    bool ensureStreamingSetting(std::uint8_t) override {
+        ensureCalls_.fetch_add(1);
+        if (streamAltRequired >= 0 && currentAlt() != streamAltRequired) {
+            std::lock_guard<std::mutex> lk(mutex_);
+            altCalls_.emplace_back(0, streamAltRequired);
+            currentAlt_ = streamAltRequired;
+        }
+        return true;
+    }
+
     int beginBulkCalls() const { return beginBulkCalls_.load(); }
     int endBulkCalls() const { return endBulkCalls_.load(); }
     std::uint8_t lastBulkEndpoint() const { return lastEndpoint_.load(); }
@@ -167,6 +207,10 @@ public:
 
     bool beginBulkStream(std::uint8_t endpoint, std::size_t bufferBytes,
                          std::size_t bufferCount) override {
+        if (streamAltRequired >= 0 && currentAlt() != streamAltRequired) {
+            lastError_ = "WinUsb_SetPipePolicy(RAW_IO) failed (Windows error 87)";
+            return false;
+        }
         lastEndpoint_.store(endpoint);
         lastBufferBytes_.store(bufferBytes);
         lastBufferCount_.store(bufferCount);
@@ -254,6 +298,10 @@ private:
     std::atomic<bool> streaming_{false};
     std::atomic<bool> inFlight_{false};
     std::atomic<int> beginBulkCalls_{0};
+    std::atomic<int> ensureCalls_{0};
+    std::vector<std::pair<int, int>> altCalls_;
+    std::size_t controlsAtFirstAlt_ = 0;
+    int currentAlt_ = 0;
     std::atomic<int> endBulkCalls_{0};
     std::atomic<std::uint8_t> lastEndpoint_{0};
     std::atomic<std::size_t> lastBufferBytes_{0};

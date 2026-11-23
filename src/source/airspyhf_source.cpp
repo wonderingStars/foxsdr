@@ -10,6 +10,7 @@
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
+#include "source/usb_stream_note.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -158,9 +159,7 @@ void AirspyHfSource::noteTransportFaultOn(ReaderLink& link, const char* what,
         // later transfer on it fails too, and the last message is the least
         // informative one there is.
         if (!link.deviceDead) {
-            link.lastError = std::string("the radio stopped answering while ") + what +
-                             (detail.empty() ? std::string() : (": " + detail)) +
-                             "; unplug it and plug it back in";
+            link.lastError = transportFaultSentence(what, detail);
             link.deadWhat = what;
         }
         link.faulted = true;
@@ -480,7 +479,7 @@ bool AirspyHfSource::programRateIndexLocked(std::size_t index, const char* what)
     // rate is programmed. That pre-tune looks redundant beside the retune at
     // the end of this function and is not: the synthesiser must already be
     // somewhere legal for the new architecture when the rate lands.
-    if (dev_ != nullptr) { dev_->resetPipe(airspyhf::kRxEndpoint); }
+    clearRxHaltLogged();
 
     if (!lowIf && loKhz_ < airspyhf::kMinZeroIfLoKhz) {
         std::uint8_t payload[airspyhf::kFreqPayloadBytes];
@@ -690,6 +689,16 @@ bool AirspyHfSource::resolveDevice(const std::string& args, cascade::usb::UsbDev
     return true;
 }
 
+// The reference clears the endpoint's halt before streaming (airspyhf.c:1220,
+// libusb_clear_halt). A failure used to be dropped without a word; it is logged
+// (once per call site is enough: the next transfer reports a dead pipe itself)
+// and never stops the start.
+void AirspyHfSource::clearRxHaltLogged() {
+    if (dev_ != nullptr && !dev_->resetPipe(airspyhf::kRxEndpoint)) {
+        core::diagWarnf("airspyhf: clearing the receive pipe failed: %s", dev_->lastError().c_str());
+    }
+}
+
 bool AirspyHfSource::open(const std::string& args) {
     std::lock_guard<std::mutex> lk(devMutex_);
     if (dev_ != nullptr) {
@@ -717,6 +726,20 @@ bool AirspyHfSource::open(const std::string& args) {
     dev_ = std::move(dev);
     link_->dev = dev_.get();
     clearError();
+    logUsbLayout(*dev_, "airspyhf");
+    // THE STREAMING ALTERNATE SETTING, FIRST. libairspyhf does libusb_set_configuration(1),
+    // libusb_claim_interface(0) and libusb_set_interface_alt_setting(0, 1) before any vendor
+    // request (https://raw.githubusercontent.com/airspy/airspyhf/master/libairspyhf/src/airspyhf.c
+    // lines 820, 829, 838; the open-by-serial paths repeat it at 731 and 776). In setting 0
+    // endpoint 0x81 is (inferred, no descriptor dump of 03eb:800c was found) not a pipe at
+    // all, which is why the first call naming it failed with Windows error 87 in the
+    // field. A refusal is a warning, not a failed open: the transport's own recovery
+    // at the first start looks for the setting that carries the pipe.
+    if (!dev_->selectAlternateSetting(0, airspyhf::kStreamingAlternateSetting)) {
+        core::diagWarnf("airspyhf: could not select alternate setting %u of interface 0: %s",
+                        static_cast<unsigned>(airspyhf::kStreamingAlternateSetting),
+                        dev_->lastError().c_str());
+    }
 
     const auto giveUp = [this]() {
         dev_.reset();
@@ -869,13 +892,14 @@ bool AirspyHfSource::startStreamingLocked() {
     if (!setReceiverModeLocked(airspyhf::ReceiverMode::Off, "quiescing the receiver")) {
         return false;
     }
-    if (dev_ != nullptr) { dev_->resetPipe(airspyhf::kRxEndpoint); }
+    clearRxHaltLogged();
 
     if (!dev_->beginBulkStream(airspyhf::kRxEndpoint, airspyhf::kTransferBufferBytes,
                                airspyhf::kTransferCount)) {
         noteTransportFault("queueing the sample transfers", dev_->lastError());
         return false;
     }
+    reportStreamNote(*dev_, link_->owner, "airspyhf");
     if (!setReceiverModeLocked(airspyhf::ReceiverMode::On, "starting the receiver")) {
         dev_->endBulkStream();
         return false;

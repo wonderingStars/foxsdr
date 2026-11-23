@@ -1424,5 +1424,37 @@ int main() {
         src.closeDevice();
     }
 
+    // =====================================================================
+    // THE STREAMING ALTERNATE SETTING (field fault 19-23 Nov 2026). libairspyhf
+    // selects interface 0 alternate setting 1 at open, before any vendor request
+    // (airspyhf.c:838). The fake refuses the stream, with the field's own error
+    // text, unless that setting was selected - so this passes only if open()
+    // selects it, BEFORE the first control transfer, and samples then arrive.
+    // =====================================================================
+    {
+        AirspyHfSource src;
+        FakeAirspyHfUsb* fake = attachFake(src);
+        fake->streamAltRequired = 1;
+        std::vector<std::uint8_t> buf(airspyhf::kTransferBufferBytes);
+        for (std::size_t i = 0; i < buf.size(); ++i) { buf[i] = static_cast<std::uint8_t>(i * 7 + 1); }
+        fake->queueBulk(buf);
+        CHECK(src.open(""));
+        const auto calls = fake->altCalls();
+        CHECK(calls.size() == 1);
+        CHECK(!calls.empty() && calls[0].first == 0 && calls[0].second == 1);
+        CHECK(fake->controlsAtFirstAlt() == 0);  // selected before rate, frequency, calibration
+        CHECK(fake->currentAlt() == 1);
+        CHECK(src.start());
+        CHECK(src.running());
+        std::size_t total = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (total == 0 && std::chrono::steady_clock::now() < deadline) {
+            std::complex<float> chunk[32];
+            total += src.read(chunk, 32);
+        }
+        CHECK(total > 0);
+        src.closeDevice();
+    }
+
     return testSummary("test_airspyhf_source");
 }

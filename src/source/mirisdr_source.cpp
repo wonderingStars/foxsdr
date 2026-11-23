@@ -9,6 +9,7 @@
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
+#include "source/usb_stream_note.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/sdrplay_source.hpp"
 
@@ -131,9 +132,7 @@ void MiriSdrSource::noteTransportFaultOn(ReaderLink& link, const char* what,
         // transfer on it fails too, and the last message is the least
         // informative one there is.
         if (!link.deviceDead) {
-            link.lastError = std::string("the radio stopped answering while ") + what +
-                             (detail.empty() ? std::string() : (": " + detail)) +
-                             "; unplug it and plug it back in";
+            link.lastError = transportFaultSentence(what, detail);
             link.deadWhat = what;
         }
         link.faulted = true;
@@ -418,6 +417,20 @@ bool MiriSdrSource::open(const std::string& args) {
     dev_ = std::move(dev);
     link_->dev = dev_.get();
     clearError();
+    logUsbLayout(*dev_, "mirisdr");
+    // THE SETTING THAT CARRIES THE STREAM. FoxSDR never selected an alternate setting
+    // for this radio, and the open of 19-23 Nov 2026 failed on the first call that named
+    // endpoint 0x81. From the device's own descriptors only: if the current setting
+    // has no bulk IN 0x81 but another one has, select that one now, before anything is
+    // programmed. If 0x81 is only isochronous (or absent) nothing changes and the start
+    // refuses in words that say so.
+    if (dev_->ensureStreamingSetting(msi2500::kRxEndpoint)) {
+        core::diagLogf("mirisdr: a setting with bulk IN 0x%02X is in place",
+                       static_cast<unsigned>(msi2500::kRxEndpoint));
+    } else {
+        core::diagWarnf("mirisdr: no setting with bulk IN 0x%02X could be selected: %s",
+                        static_cast<unsigned>(msi2500::kRxEndpoint), dev_->lastError().c_str());
+    }
 
     const msi2500::DeviceModel* model = msi2500::modelFor(info.vid, info.pid);
     // ...and it decides the BAND PLAN too, which is the half that matters: an
@@ -536,6 +549,7 @@ bool MiriSdrSource::startStreamingLocked() {
         noteTransportFault("queueing the sample transfers", dev_->lastError());
         return false;
     }
+    reportStreamNote(*dev_, link_->owner, "mirisdr");
     if (!commandLocked(msi2500::VendorRequest::StartStreaming, "starting the stream")) {
         dev_->endBulkStream();
         return false;
