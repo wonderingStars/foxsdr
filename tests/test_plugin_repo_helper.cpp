@@ -15,6 +15,7 @@
 //   H7  the store's words: the badge line, the detail lines, the consent sentence
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>

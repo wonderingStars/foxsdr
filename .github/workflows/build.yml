@@ -87,11 +87,26 @@ jobs:
           test -f "$sdk/lib/libslint_cpp.so"
           echo "SLINT_SDK=$sdk" >> "$GITHUB_ENV"
 
+      # THE x64 BUILD MAKES ABOUT 3300 TARGETS (every Slint test is its own executable) and the job has died partway through it on every push from 0.99.110
+      # to 0.99.112 ("The hosted runner lost communication with the server" / "received a shutdown signal", at target 987 to 1066 of 3300 or after 75 minutes),
+      # with no compiler error in the log. The cause is NOT PROVEN (a runner that dies leaves no log of its own); the ubuntu-22.04 runner has about 14 GB of
+      # free disk, which that many linked executables can fill. These two steps remove tool chains this job never uses and put disk and memory in the log
+      # every two minutes, so the next death names its cause.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCASCADE_BUILD_SLINT=ON "-DCMAKE_PREFIX_PATH=$SLINT_SDK"
 
       - name: Build
-        run: cmake --build build -j"$(nproc)"
+        run: |
+          ( while true; do sleep 120; echo "resources: $(date +%T) $(df -h / | tail -n 1 | tr -s ' ') | $(free -m | sed -n 2p | tr -s ' ')"; done ) &
+          monitor=$!
+          trap 'kill "$monitor" 2>/dev/null || true' EXIT
+          cmake --build build -j"$(nproc)"
 
       # The runner has no audio device at all. Rather than let that fail the
       # job, a dummy ALSA device is provided so the audio path is still

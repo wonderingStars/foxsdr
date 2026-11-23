@@ -14,6 +14,7 @@
 //      FILES IN ONE FOLDER keep a marker and a store of their own; and the marker's pages STAY IN THE WORKING SET when memory is trimmed.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>

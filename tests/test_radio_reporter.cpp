@@ -8,6 +8,7 @@
 #if !defined(_WIN32)
 #include <sys/wait.h>
 #endif
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
