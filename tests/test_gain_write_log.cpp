@@ -50,6 +50,19 @@ int main() {
         CHECK(log.note("LNA", 3.0, 20).empty());
         CHECK(log.note("MIXER", 4.0, 30).empty());
     }
+    {   // KEYED BY RADIO AS WELL AS STAGE (review A5): two radios' "TUNER" are two stages, each with its own gap; the first radio's lines are as they always were, the second's name it
+        GainWriteLog log;
+        const auto first = log.note("TUNER", 10.0, 0, 0);
+        const auto second = log.note("TUNER", 20.0, 10, 1);          // inside the first radio's gap, but another radio: logged at once
+        CHECK(first.size() == 1 && first[0] == "source: gain TUNER 10.0 dB");
+        CHECK(second.size() == 1 && second[0] == "source: gain TUNER 20.0 dB (radio 2)");
+        CHECK(log.note("TUNER", 11.0, 20, 0).empty() && log.note("TUNER", 21.0, 30, 1).empty());   // each radio's own gap holds its own writes
+        const auto out = log.flush(600);
+        CHECK(out.size() == 2);                                       // both held values come out, each as its own radio's
+        bool one = false, two = false;
+        for (const std::string& l : out) { one = one || l == "source: gain TUNER 11.0 dB"; two = two || l == "source: gain TUNER 21.0 dB (radio 2)"; }
+        CHECK(one && two);
+    }
     {   // a write after a quiet gap is logged at once
         GainWriteLog log;
         CHECK(log.note("TUNER", 1.0, 0).size() == 1);

@@ -362,7 +362,7 @@ order they were made.
 | `set_bandwidth(hz)` | settings | 100 Hz..10 MHz | clamped to the live channel |
 | `set_squelch(db)` | settings | -200..+20 dB | -200 is always open |
 | `set_sample_rate(hz)` | settings | 8 kS/s..61.44 MS/s | `NO_DEVICE` without a radio; the radio may round or refuse - read it back |
-| `set_gain(name, db)` | settings | within the stage's range, half a step of slack | `UNSUPPORTED` for a name the radio has not got |
+| `set_gain(name, db)` | settings | within the stage's range, half a step of slack | `UNSUPPORTED` for a name the radio has not got. **Under automatic gain** the write is honoured and, on a radio whose driver leaves automatic mode with a manual gain (the RTL-SDR, rtl_tcp and the Pluto do; an SDRplay, a Soapy radio and an Airspy keep their own switches), automatic gain is switched off **for the session**: the receiver's flag (`FOXAPI_RX_DEVICE_AGC`) and the window's Auto gain switch follow, but the user's remembered Auto gain setting for that radio is not changed - the next start and the next open of the radio come back as the user saved it. The diagnostics log says so (`source: automatic gain switched off for this session by a gain setting from ...`). Read the flag back, or send `set_device_agc(false)` first, if the gain must stay |
 | `set_device_agc(on)` | settings | | `UNSUPPORTED` when the radio has no AGC |
 | `set_running(on)` | settings | | start or stop the receiver |
 | `set_volume(v)` | settings | 0..1 | the user's volume dial |

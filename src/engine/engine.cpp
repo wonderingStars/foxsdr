@@ -7595,7 +7595,7 @@ void Engine::runPassWork() {
 
 namespace {
 // USER BUG A (2026-11-23): each manual gain write is one plain line in the diagnostics log ("source: gain LNA 16.3 dB"), at most one per 500 ms per stage, the last value of a burst winning
-// (core/gain_write_log.hpp). One state for the process: the stage name is the key, and every engine thread that writes a gain shares it under its lock.
+// (core/gain_write_log.hpp). One state for the process: the radio and the stage name are the key, and every engine thread that writes a gain shares it under its lock.
 struct GainLogState {
     std::mutex mutex;
     cascade::core::GainWriteLog log;
@@ -7607,12 +7607,12 @@ GainLogState& gainLogState() {
 std::int64_t gainLogNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-void noteGainWrite(const std::string& stage, double db) {
+void noteGainWrite(const std::string& stage, double db, unsigned radio) {
     GainLogState& s = gainLogState();
     std::vector<std::string> lines;
     {
         std::lock_guard<std::mutex> lk(s.mutex);
-        lines = s.log.note(stage, db, gainLogNowMs());
+        lines = s.log.note(stage, db, gainLogNowMs(), radio);
     }
     for (const std::string& l : lines) { cascade::core::diagLogf("%s", l.c_str()); }
 }
@@ -8611,23 +8611,28 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 refusalWatch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Gain, rx().sourceError_);
                 return refuse(FOXAPI_FAILED, "the radio refused the gain");
             }
-            // A GAIN WRITTEN BY HAND ENDS AUTOMATIC GAIN (user bug A): where the driver left automatic mode with the write (the RTL-SDR's setGainDb does, for the aggregate and for every
-            // stage), the engine's own flag, the radio's remembered switch and so the control on screen follow it - the same steps as changeAutoGain(false), without its restore of
-            // the other stages (the write itself has just set this one). An Airspy's two switches are its own (the readback below is their authority).
+            // A GAIN WRITTEN WHILE AUTOMATIC GAIN IS ON ENDS IT FOR THE SESSION (user bug A, owner's decision 2026-11-23): where the driver left automatic mode with the write (the RTL-SDR's
+            // setGainDb does, for the aggregate and for every stage; so do rtl_tcp's and the Pluto's: this applies to every radio whose driver reports leaving automatic mode), the engine's own
+            // flag, and so the control on screen, follow it. The user's REMEMBERED automatic-gain setting is NOT changed - the next start, and the next open of this radio, come back as the user
+            // saved it - and neither is the radio's remembered manual gain (a figure somebody else chose is not the user's). The windows disable their gain sliders under automatic gain, so a write
+            // that gets here is software's (a plugin with the radio-settings grant, the web remote, a script); the origin is not known at this point, so the line says "a control request".
+            // An Airspy's two switches are its own (the readback below is their authority).
+            bool endedAutoForSession = false;
             if (rx().deviceAgc_ && asAirspyDevice() == nullptr && !rx().device_->autoGain()) {
                 rx().deviceAgc_ = false;
                 manualGainsBeforeAgc_.clear();
-                rememberAutoGain(*rx().device_, rx().deviceArgs_, false);
+                endedAutoForSession = true;
+                cascade::core::diagLogf("source: automatic gain switched off for this session by a gain setting from a control request");
             }
-            noteGainWrite(text, rx().device_->gainDb(text));
+            noteGainWrite(text, rx().device_->gainDb(text), static_cast<unsigned>(scopedSlot()));
             // THE READBACK, not the request: every one of these radios
             // quantises, and a slider left on the request would be a lie.
             for (std::size_t i = 0; i < rx().deviceGainNames_.size(); ++i) {
                 if (rx().deviceGainNames_[i] == text && i < rx().deviceGainsDb_.size()) {
                     rx().deviceGainsDb_[i] = static_cast<float>(rx().device_->gainDb(text));
                     res.applied[0] = floatAsDecimal(rx().deviceGainsDb_[i]);
-                    // A gain somebody chose is remembered for this radio (0.99.75; not an Airspy's, not under auto gain).
-                    rememberManualGain(i);
+                    // A gain somebody chose is remembered for this radio (0.99.75; not an Airspy's, not under auto gain, not one that ended automatic gain for the session only).
+                    if (!endedAutoForSession) { rememberManualGain(i); }
                 }
             }
             if (res.applied[0] != c.num[0]) { res.flags |= FOXAPI_RESULT_CLAMPED; }
@@ -8653,7 +8658,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     refusalWatch.noteRefusalIfSilent(rx().device_, rx().sourceKind_.c_str(), rre::Control::Gain, rx().sourceError_);
                 } else {
                     airspyRememberOpen();  // a no-op for any radio but an Airspy
-                    noteGainWrite(text, static_cast<double>(rx().deviceGainsDb_[i]));
+                    noteGainWrite(text, static_cast<double>(rx().deviceGainsDb_[i]), static_cast<unsigned>(scopedSlot()));
                 }
                 res.applied[0] = rx().deviceGainsDb_[i];
                 return res;

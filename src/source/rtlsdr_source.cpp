@@ -2198,6 +2198,7 @@ bool RtlSdrSource::setGainDb(const std::string& name, double db) {
     if (!lk.owns_lock()) {
         if (slot >= 0 && deferWhileReopening(*link_, [slot, tenths](Link::Wanted& w) {   // the radio is being reopened: kept, and put on with the rest
                 w.gainSet = true;
+                if (w.autoGain) { w.autoGainSet = true; w.autoGain = false; }   // a manual write ends automatic gain here too (review A2): else the re-open put automatic gain back and skipped this gain (applyWanted)
                 if (slot == 0) {
                     int lo = 0;
                     int hi = 0;
