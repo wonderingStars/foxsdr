@@ -313,6 +313,14 @@ if(WIN32)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixture_late/$<CONFIG>")
 endif()
 
+# DEVELOPER BENCH PROBE, not a test: no add_test, excluded from ALL, never shipped. Settles what WinUsb_SetPipePolicy(RAW_IO) answers for a pipe the
+# interface does not carry (tests/probe_winusb_rawio.cpp). Build on demand: --target probe_winusb_rawio.
+if(WIN32)
+    add_executable(probe_winusb_rawio EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/probe_winusb_rawio.cpp")
+    target_link_libraries(probe_winusb_rawio PRIVATE cascade_engine)
+    target_include_directories(probe_winusb_rawio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+
 foreach(src ${CASCADE_TESTS})
     get_filename_component(name "${src}" NAME_WE)
     add_executable(${name} "${src}")

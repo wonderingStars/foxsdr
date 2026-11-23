@@ -390,11 +390,15 @@ public:
         // endpoint, falls back to plain overlapped reads when the endpoint is a
         // usable bulk or interrupt IN pipe, and refuses - in words that say
         // what is wrong - only when the endpoint cannot be streamed at all.
-        streamHandle_ = winusb_;
+        // A route found earlier for this endpoint (a later interface) is kept,
+        // so a second start neither re-discovers it nor re-reports it.
+        if (!(routedEndpoint_ == endpoint && streamHandle_ != nullptr)) {
+            streamHandle_ = winusb_;
+        }
         rawIo_ = true;
         streamNote_.clear();
         UCHAR raw = TRUE;
-        if (api_->setPipePolicy(winusb_, endpoint, RAW_IO, sizeof(raw), &raw) == FALSE) {
+        if (api_->setPipePolicy(streamHandle_, endpoint, RAW_IO, sizeof(raw), &raw) == FALSE) {
             if (!recoverStreamPipe(endpoint, ::GetLastError())) { return false; }
         }
 
@@ -469,6 +473,49 @@ public:
     }
 
     std::string endpointLayout() override { return layoutText(walkLayout()); }
+
+    // WinUsb_SetCurrentAlternateSetting on interface `interfaceIndex` (0 = the
+    // interface WinUsb_Initialize opened, n = WinUsb_GetAssociatedInterface
+    // index n-1). The setting is the descriptor's bAlternateSetting value.
+    bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) override {
+        if (winusb_ == nullptr || api_->setCurrentAlternateSetting == nullptr) {
+            setError("selecting an alternate setting is not available on this transport");
+            return false;
+        }
+        probeHandles();
+        const WINUSB_INTERFACE_HANDLE h = handleOf(interfaceIndex);
+        if (h == nullptr) {
+            setError("this radio has no such USB interface to select an alternate setting on");
+            return false;
+        }
+        if (api_->setCurrentAlternateSetting(h, setting) == FALSE) {
+            setError(lastErrorText("WinUsb_SetCurrentAlternateSetting", ::GetLastError()));
+            return false;
+        }
+        return true;
+    }
+
+    // If no setting of any interface currently carries `endpoint` as a bulk or
+    // interrupt IN pipe but another setting does, select that one. True when a
+    // streamable setting is in place afterwards. Isochronous-only or absent
+    // endpoints return false and change nothing: start-up says why in words.
+    bool ensureStreamingSetting(std::uint8_t endpoint) override {
+        const std::vector<PipeFact> facts = walkLayout();
+        const PipeFact* hit = chooseCandidate(facts, endpoint);
+        if (hit == nullptr || !isStreamable(*hit, endpoint)) { return false; }
+        if (hit->current) { return true; }
+        const WINUSB_INTERFACE_HANDLE h = handleOf(hit->iface);
+        if (h == nullptr || api_->setCurrentAlternateSetting == nullptr ||
+            api_->setCurrentAlternateSetting(h, hit->alt) == FALSE) {
+            setError(lastErrorText("WinUsb_SetCurrentAlternateSetting", ::GetLastError()));
+            return false;
+        }
+        if (hit->iface != 0) {
+            streamHandle_ = h;
+            routedEndpoint_ = endpoint;
+        }
+        return true;
+    }
 
     std::string takeStreamNote() override {
         std::string out;
@@ -922,7 +969,37 @@ private:
         UCHAR id = 0;
         int type = 0;  // USBD_PIPE_TYPE: 0 control, 1 isochronous, 2 bulk, 3 interrupt
         USHORT maxPacket = 0;
+        bool noEndpoints = false;  // a row for a setting that has none (id/type unused)
     };
+
+    static bool isStreamable(const PipeFact& f, UCHAR endpoint) {
+        return !f.noEndpoints && (endpoint & 0x80) != 0 && (f.type == 2 || f.type == 3);
+    }
+
+    // Which fact describes `endpoint`: a bulk or interrupt IN pipe in the
+    // current setting, else one in any setting (an isochronous 0x81 in an
+    // earlier setting must not hide a bulk 0x81 in a later one), else one in
+    // the current setting, else the first.
+    static const PipeFact* chooseCandidate(const std::vector<PipeFact>& facts, UCHAR endpoint) {
+        const PipeFact* anyStreamable = nullptr;
+        const PipeFact* current = nullptr;
+        const PipeFact* first = nullptr;
+        for (const PipeFact& f : facts) {
+            if (f.noEndpoints || f.id != endpoint) { continue; }
+            if (first == nullptr) { first = &f; }
+            if (f.current && current == nullptr) { current = &f; }
+            if (isStreamable(f, endpoint)) {
+                if (f.current) { return &f; }
+                if (anyStreamable == nullptr) { anyStreamable = &f; }
+            }
+        }
+        if (anyStreamable != nullptr) { return anyStreamable; }
+        return current != nullptr ? current : first;
+    }
+
+    // Windows' words for a device that left the bus or failed outright; a
+    // failure with one of these is not a fact about the layout.
+    static bool isGoneCode(DWORD e) { return e == 1167 || e == 433 || e == 22 || e == 31; }
 
     static const char* pipeTypeName(int t) {
         switch (t) {
@@ -968,17 +1045,31 @@ private:
             UCHAR cur = 0;
             const bool haveCur = api_->getCurrentAlternateSetting != nullptr &&
                                  api_->getCurrentAlternateSetting(h, &cur) != FALSE;
-            for (UCHAR alt = 0; alt < 16; ++alt) {
+            // `idx` is WinUSB's INDEX of a setting; the setting's own number is
+            // the descriptor's bAlternateSetting, and that is what is compared
+            // with the current setting, printed and passed to the setter.
+            for (UCHAR idx = 0; idx < 16; ++idx) {
                 USB_INTERFACE_DESCRIPTOR d{};
-                if (api_->queryInterfaceSettings(h, alt, &d) == FALSE) { break; }
-                for (UCHAR p = 0; p < d.bNumEndpoints; ++p) {
-                    WINUSB_PIPE_INFORMATION pi{};
-                    if (api_->queryPipe(h, alt, p, &pi) == FALSE) { continue; }
+                if (api_->queryInterfaceSettings(h, idx, &d) == FALSE) { break; }
+                const bool isCurrent =
+                    haveCur ? (d.bAlternateSetting == cur) : (idx == 0);
+                if (d.bNumEndpoints == 0) {
                     PipeFact f;
                     f.iface = iface;
                     f.interfaceNumber = d.bInterfaceNumber;
-                    f.alt = alt;
-                    f.current = haveCur ? (alt == cur) : (alt == 0);
+                    f.alt = d.bAlternateSetting;
+                    f.current = isCurrent;
+                    f.noEndpoints = true;
+                    out.push_back(f);
+                }
+                for (UCHAR p = 0; p < d.bNumEndpoints; ++p) {
+                    WINUSB_PIPE_INFORMATION pi{};
+                    if (api_->queryPipe(h, idx, p, &pi) == FALSE) { continue; }
+                    PipeFact f;
+                    f.iface = iface;
+                    f.interfaceNumber = d.bInterfaceNumber;
+                    f.alt = d.bAlternateSetting;
+                    f.current = isCurrent;
                     f.id = pi.PipeId;
                     f.type = static_cast<int>(pi.PipeType);
                     f.maxPacket = pi.MaximumPacketSize;
@@ -1009,6 +1100,10 @@ private:
             } else {
                 out += ",";
             }
+            if (f.noEndpoints) {
+                out += " no endpoints";
+                continue;
+            }
             std::snprintf(buf, sizeof(buf), " 0x%02X %s packet %u", static_cast<unsigned>(f.id),
                           pipeTypeName(f.type), static_cast<unsigned>(f.maxPacket));
             out += buf;
@@ -1028,11 +1123,7 @@ private:
         const std::vector<PipeFact> facts = walkLayout();
         const std::string layout = layoutText(facts);
         char head[200];
-        const PipeFact* hit = nullptr;
-        for (const PipeFact& f : facts) {
-            if (f.id != endpoint) { continue; }
-            if (hit == nullptr || (f.current && !hit->current)) { hit = &f; }
-        }
+        const PipeFact* hit = chooseCandidate(facts, endpoint);
         if (!facts.empty()) {
             if (hit == nullptr) {
                 std::snprintf(head, sizeof(head),
@@ -1042,8 +1133,7 @@ private:
                 return false;
             }
             const bool in = (endpoint & 0x80) != 0;
-            const bool streamable = hit->type == 2 /*bulk*/ || hit->type == 3 /*interrupt*/;
-            if (!in || !streamable) {
+            if (!isStreamable(*hit, endpoint)) {
                 std::snprintf(head, sizeof(head),
                               "endpoint 0x%02X is %s%s and cannot be read as a bulk or "
                               "interrupt stream (Windows error %lu); ",
@@ -1062,12 +1152,20 @@ private:
                 if (!hit->current) {
                     if (api_->setCurrentAlternateSetting == nullptr ||
                         api_->setCurrentAlternateSetting(h, hit->alt) == FALSE) {
+                        const DWORD e2 = ::GetLastError();
+                        if (isGoneCode(e2)) {
+                            // The radio left the bus or failed outright: that is
+                            // not a fact about its layout, and must keep the
+                            // words (and the "unplug" advice) of a transfer fault.
+                            setError(lastErrorText("WinUsb_SetCurrentAlternateSetting", e2));
+                            return false;
+                        }
                         std::snprintf(head, sizeof(head),
                                       "endpoint 0x%02X is only in alternate setting %u, which "
                                       "could not be selected (Windows error %lu); ",
                                       static_cast<unsigned>(endpoint),
                                       static_cast<unsigned>(hit->alt),
-                                      static_cast<unsigned long>(::GetLastError()));
+                                      static_cast<unsigned long>(e2));
                         setError(std::string(kLayoutErrorPrefix) + head + layout);
                         return false;
                     }
@@ -1075,14 +1173,14 @@ private:
                 streamHandle_ = h;
                 routedEndpoint_ = endpoint;
                 if (trySetRawIo(h, endpoint)) {
+                    // RAW_IO is ON: this is a move, not a fallback.
                     std::snprintf(head, sizeof(head),
-                                  "pipe 0x%02X moved to interface %u alt %u after RAW_IO was "
-                                  "refused on the first interface (Windows error %lu): ",
+                                  "pipe 0x%02X is in interface %u alt %u; selected it after the "
+                                  "first pipe call failed (Windows error %lu); RAW_IO on: ",
                                   static_cast<unsigned>(endpoint),
                                   static_cast<unsigned>(hit->interfaceNumber),
                                   static_cast<unsigned>(hit->alt), static_cast<unsigned long>(err));
-                    streamNote_ = std::string(head) + layout;
-                    ++rawIoFallbacks_;
+                    streamNote_ = std::string(kStreamNoteMoved) + head + layout;
                     return true;
                 }
             }
@@ -1091,7 +1189,6 @@ private:
         // RAW_IO is only an optimisation, and several queued reads work without
         // it. The buffers are whole multiples of the packet size either way.
         rawIo_ = false;
-        ++rawIoFallbacks_;
         if (hit != nullptr) {
             std::snprintf(head, sizeof(head),
                           "RAW_IO refused on pipe 0x%02X (Windows error %lu); plain reads: "
@@ -1105,7 +1202,7 @@ private:
                           "RAW_IO refused on pipe 0x%02X (Windows error %lu); plain reads: ",
                           static_cast<unsigned>(endpoint), static_cast<unsigned long>(err));
         }
-        streamNote_ = std::string(head) + layout;
+        streamNote_ = std::string(kStreamNoteFallback) + head + layout;
         return true;
     }
 
@@ -1267,7 +1364,6 @@ private:
     std::uint8_t routedEndpoint_ = 0;
     bool rawIo_ = true;
     std::string streamNote_;
-    unsigned rawIoFallbacks_ = 0;
     std::vector<WINUSB_INTERFACE_HANDLE> assoc_;
     bool assocProbed_ = false;
 

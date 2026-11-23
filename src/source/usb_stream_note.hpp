@@ -12,6 +12,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <string>
 
 #include "core/diag_log.hpp"
@@ -30,12 +31,34 @@ inline void logUsbLayout(cascade::usb::UsbDevice& dev, const char* driverTag) {
 // After a beginBulkStream() that succeeded: if the transport took a fallback,
 // say so once in the log and count it in the radio report as an absorbed
 // recovery ("rawiofallback").
+//
+// TWO WORDS, because they mean different things. "rawiofallback": the stream is
+// running WITHOUT RAW_IO. "altmoved": RAW_IO is on and the transport had to
+// select another alternate setting / interface for the pipe; filed once per
+// process (it is set-up, not a fault, and the driver now selects the setting
+// itself at open where the radio needs it). Both are `what` words of
+// docs/radio-reports-contract.md 3.6 (^[a-z0-9]{3,24}$).
 inline void reportStreamNote(cascade::usb::UsbDevice& dev, const void* owner,
                              const char* driverKey) {
-    const std::string note = dev.takeStreamNote();
+    std::string note = dev.takeStreamNote();
     if (note.empty()) { return; }
+    const std::string fb = cascade::usb::kStreamNoteFallback;
+    const std::string mv = cascade::usb::kStreamNoteMoved;
+    const char* word = "rawiofallback";
+    bool once = false;
+    if (note.compare(0, mv.size(), mv) == 0) {
+        word = "altmoved";
+        once = true;
+        note.erase(0, mv.size());
+    } else if (note.compare(0, fb.size(), fb) == 0) {
+        note.erase(0, fb.size());
+    }
     core::diagWarnf("%s: %s", driverKey, note.c_str());
-    core::radioreport::noteVendorCallFault(owner, driverKey, "rawiofallback", note, true);
+    if (once) {
+        static std::atomic<bool> filed{false};
+        if (filed.exchange(true)) { return; }
+    }
+    core::radioreport::noteVendorCallFault(owner, driverKey, word, note, true);
 }
 
 // The user-facing sentence for a transfer that failed while `what`. A fault in

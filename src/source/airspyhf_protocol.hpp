@@ -134,6 +134,11 @@ enum class BoardId : std::uint32_t {
 // as LIBUSB_ENDPOINT_IN | that.
 constexpr std::uint8_t kRxEndpoint = 0x81;
 
+// airspyhf.c:838 (and 731, 776 on the open-by-serial paths):
+// libusb_set_interface_alt_setting(device, 0, 1), straight after claiming
+// interface 0 and before any vendor request.
+constexpr std::uint8_t kStreamingAlternateSetting = 1;
+
 // airspyhf.c:55 and :939-990 - SAMPLES_TO_TRANSFER and transfer_count. 4096
 // complex samples of four bytes each per transfer, sixteen transfers in
 // flight. At the Discovery's top rate of 912 kS/s one buffer is 4.5 ms of

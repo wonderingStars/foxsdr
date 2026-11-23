@@ -76,6 +76,12 @@ constexpr const char* kInUseError = "the radio is already in use by another prog
 // classifier reads as "unplugged" (radio_events.cpp closeCauseFor).
 constexpr const char* kLayoutErrorPrefix = "the radio's USB layout cannot be streamed by this driver: ";
 
+// The tag a takeStreamNote() text starts with: a fallback to plain reads
+// (RAW_IO refused) or a move to another alternate setting / interface with
+// RAW_IO on. Drivers file them under different words.
+constexpr const char* kStreamNoteFallback = "[rawiofallback] ";
+constexpr const char* kStreamNoteMoved = "[altmoved] ";
+
 inline bool errorIsLayoutProblem(const std::string& error) {
     return error.compare(0, std::char_traits<char>::length(kLayoutErrorPrefix),
                          kLayoutErrorPrefix) == 0;
@@ -247,6 +253,27 @@ public:
     // fallback (plain overlapped reads because the pipe refused RAW_IO). Returned
     // once and cleared; the driver logs it and counts it in the radio report.
     virtual std::string takeStreamNote() { return std::string(); }
+
+    // Selects alternate setting `setting` (the descriptor's bAlternateSetting
+    // value) of interface `interfaceIndex` (0 = the interface the transport
+    // opened). A radio whose streaming pipe exists only in a non-default
+    // setting (the Airspy HF+: libairspyhf selects setting 1 of interface 0 at
+    // open) must have it selected BEFORE it is programmed. NOT PURE: the default
+    // refuses (false, empty lastError()).
+    virtual bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) {
+        (void)interfaceIndex;
+        (void)setting;
+        return false;
+    }
+
+    // If the current setting does not carry `endpoint` as a bulk or interrupt IN
+    // pipe but another does, selects that one. True when a streamable setting is
+    // in place afterwards; false (nothing changed) for an absent or
+    // isochronous-only endpoint, and for a transport that cannot look.
+    virtual bool ensureStreamingSetting(std::uint8_t endpoint) {
+        (void)endpoint;
+        return false;
+    }
 
     // Clears a halted pipe (WinUsb_ResetPipe). Some firmware stalls the bulk
     // endpoint after a mode change; the driver knows when.

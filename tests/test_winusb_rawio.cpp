@@ -4,15 +4,19 @@
 //
 // Driven through the fake WinUSB table (usb/winusb_device.hpp) with a device
 // whose layout is scripted: interfaces, alternate settings, endpoint types and
-// packet sizes, and which handle may read which pipe. The fake answers the way
-// the documentation says WinUSB does - RAW_IO only on a Bulk or Interrupt IN
-// pipe that the handle's interface carries in its CURRENT alternate setting,
-// and a read of a pipe the handle cannot see is Windows error 87 - which is a
-// model of the documented rules, not a recording of a real HF+. What a real
+// packet sizes, and which handle may read which pipe. The fake answers
+// RAW_IO only on a Bulk or Interrupt IN pipe (documented) that the handle's
+// interface carries in its CURRENT alternate setting, and answers Windows error
+// 87 to a call naming a pipe the current setting does not carry. THAT 87 IS
+// INFERRED, NOT DOCUMENTED (Microsoft documents 87 only for a wrong
+// ValueLength); it models the cause the review of 5f085271 points to, and the
+// bench probe tests/probe_winusb_rawio.cpp settles it. A model, not a
+// recording of a real HF+. What a real
 // HF+ or MSi2500 reports is UNVERIFIED without one on the bench; the layout
 // line this change adds to the open log is what settles it.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -48,6 +52,8 @@ struct PipeSpec {
 
 struct Fake {
     std::vector<PipeSpec> pipes;
+    std::vector<std::pair<int, int>> emptyAlts;  // (iface, alt number) settings with no endpoints
+    DWORD setAltFails = 0;                       // nonzero: setCurrentAlternateSetting fails with it
     int numIfaces = 1;
     int currentAlt[4] = {0, 0, 0, 0};
     bool rawIoAlways87 = false;  // refuse RAW_IO even on a pipe that is fine
@@ -57,6 +63,7 @@ struct Fake {
     int queryCalls = 0;
     int frees = 0;
     int altSets = 0;
+    std::vector<int> altSetNumbers;  // every setting number passed to the setter
     std::vector<std::pair<WINUSB_INTERFACE_HANDLE, UCHAR>> readOn;   // (handle, pipe) of every read
     std::vector<std::pair<WINUSB_INTERFACE_HANDLE, UCHAR>> resetOn;
     std::vector<OVERLAPPED*> inFlight;
@@ -68,6 +75,22 @@ int ifaceOf(WINUSB_INTERFACE_HANDLE h) {
     return v == 0x5678 ? 0 : static_cast<int>(v - 0x6000);
 }
 WINUSB_INTERFACE_HANDLE handleFor(int iface) { return iface == 0 ? H(0x5678) : H(0x6000 + iface); }
+
+// The alternate settings of an interface, as WinUSB indexes them: sorted by
+// bAlternateSetting. The NUMBER is the descriptor's value; the INDEX is the
+// position in this list (WinUsb_QueryInterfaceSettings takes the index).
+std::vector<int> altNumbers(int iface) {
+    std::vector<int> out;
+    for (const PipeSpec& p : g.pipes) {
+        if (p.iface == iface) { out.push_back(p.alt); }
+    }
+    for (const auto& e : g.emptyAlts) {
+        if (e.first == iface) { out.push_back(e.second); }
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
 
 const PipeSpec* findIn(int iface, UCHAR id) {
     for (const PipeSpec& p : g.pipes) {
@@ -137,37 +160,39 @@ BOOL __stdcall fCancel(HANDLE, LPOVERLAPPED ov) {
 }
 BOOL __stdcall fClose(HANDLE) { return TRUE; }
 
-BOOL __stdcall fQueryIf(WINUSB_INTERFACE_HANDLE h, UCHAR alt, PUSB_INTERFACE_DESCRIPTOR d) {
+BOOL __stdcall fQueryIf(WINUSB_INTERFACE_HANDLE h, UCHAR idx, PUSB_INTERFACE_DESCRIPTOR d) {
     ++g.queryCalls;
     const int iface = ifaceOf(h);
-    int n = 0;
-    bool altExists = false;
-    for (const PipeSpec& p : g.pipes) {
-        if (p.iface == iface && p.alt == alt) { ++n; altExists = true; }
-    }
-    // An alternate setting with no endpoints still exists if a LATER one does.
-    for (const PipeSpec& p : g.pipes) {
-        if (p.iface == iface && p.alt > alt) { altExists = true; }
-    }
-    if (!altExists) {
+    const std::vector<int> alts = altNumbers(iface);
+    if (idx >= alts.size()) {
         ::SetLastError(ERROR_NO_MORE_ITEMS);
         return FALSE;
     }
+    const int alt = alts[idx];
+    int n = 0;
+    for (const PipeSpec& p : g.pipes) {
+        if (p.iface == iface && p.alt == alt) { ++n; }
+    }
     std::memset(d, 0, sizeof(*d));
     d->bInterfaceNumber = static_cast<UCHAR>(iface);
-    d->bAlternateSetting = alt;
+    d->bAlternateSetting = static_cast<UCHAR>(alt);
     d->bNumEndpoints = static_cast<UCHAR>(n);
     return TRUE;
 }
 
-BOOL __stdcall fQueryPipe(WINUSB_INTERFACE_HANDLE h, UCHAR alt, UCHAR idx,
+BOOL __stdcall fQueryPipe(WINUSB_INTERFACE_HANDLE h, UCHAR idx, UCHAR pipeIdx,
                           PWINUSB_PIPE_INFORMATION pi) {
     ++g.queryCalls;
     const int iface = ifaceOf(h);
+    const std::vector<int> alts = altNumbers(iface);
+    if (idx >= alts.size()) {
+        ::SetLastError(ERROR_NO_MORE_ITEMS);
+        return FALSE;
+    }
     int seen = 0;
     for (const PipeSpec& p : g.pipes) {
-        if (p.iface != iface || p.alt != alt) { continue; }
-        if (seen++ == idx) {
+        if (p.iface != iface || p.alt != alts[idx]) { continue; }
+        if (seen++ == pipeIdx) {
             std::memset(pi, 0, sizeof(*pi));
             pi->PipeType = p.type;
             pi->PipeId = p.id;
@@ -190,6 +215,11 @@ BOOL __stdcall fAssoc(WINUSB_INTERFACE_HANDLE, UCHAR idx, PWINUSB_INTERFACE_HAND
 
 BOOL __stdcall fSetAlt(WINUSB_INTERFACE_HANDLE h, UCHAR alt) {
     ++g.altSets;
+    g.altSetNumbers.push_back(alt);
+    if (g.setAltFails != 0) {
+        ::SetLastError(g.setAltFails);
+        return FALSE;
+    }
     g.currentAlt[ifaceOf(h)] = alt;
     return TRUE;
 }
@@ -247,10 +277,10 @@ int main() {
     }
 
     // 2. RAW_IO REFUSED (error 87) ON A USABLE BULK IN PIPE: the stream carries
-    //    on with plain reads, says so once, and delivers samples. This is the
-    //    reproduction of the field fault: before the fix beginBulkStream returned
-    //    false with "WinUsb_SetPipePolicy(RAW_IO) failed (Windows error 87)" and
-    //    the radio was closed with zero samples.
+    //    on with plain reads, says so once, and delivers samples. (The fake's
+    //    forced refusal is a rule no source says WinUSB has; it reproduces the old
+    //    RETURN VALUE of beginBulkStream - false with "WinUsb_SetPipePolicy(RAW_IO)
+    //    failed (Windows error 87)" - not a proven field cause.)
     {
         reset();
         g.pipes = {{0, 0, 0x81, UsbdPipeTypeBulk, 512}};
@@ -340,7 +370,7 @@ int main() {
             CHECK(allOnSecond);
             std::uint8_t buf[16384];
             CHECK(r.dev->readBulk(buf, sizeof(buf), 1000) == 16384);
-            CHECK(has(r.dev->takeStreamNote(), "moved to interface 1"));
+            CHECK(has(r.dev->takeStreamNote(), "is in interface 1 alt 0"));
             r.dev->endBulkStream();
             CHECK(r.dev->resetPipe(0x81));
             CHECK(g.resetOn.back().first == H(0x6001));
@@ -390,6 +420,101 @@ int main() {
         CHECK(l == "interface 0 alt 0 (current): 0x81 bulk packet 512; "
                    "interface 0 alt 1: 0x81 isochronous packet 1024; "
                    "interface 1 alt 0 (current): 0x02 bulk packet 64");
+    }
+
+    // 12. AN ISOCHRONOUS 0x81 IN AN EARLIER SETTING MUST NOT HIDE A BULK 0x81 IN A
+    //     LATER ONE (review finding 1): the stream moves to setting 3.
+    {
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeIsochronous, 1024}, {0, 3, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig r;
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(g.currentAlt[0] == 3);
+        std::uint8_t buf[16384];
+        CHECK(r.dev->readBulk(buf, sizeof(buf), 1000) == 16384);
+        const std::string note = r.dev->takeStreamNote();
+        CHECK(has(note, cascade::usb::kStreamNoteMoved));  // RAW_IO is on: a move, not a fallback
+        CHECK(!has(note, cascade::usb::kStreamNoteFallback));
+        r.dev->endBulkStream();
+    }
+
+    // 13. NON-CONTIGUOUS SETTING NUMBERS (finding 4): the setter gets the
+    //     descriptor's bAlternateSetting (5), not the index (1), and the layout
+    //     prints the number.
+    {
+        reset();
+        g.pipes = {{0, 2, 0x83, UsbdPipeTypeInterrupt, 8}, {0, 5, 0x81, UsbdPipeTypeBulk, 512}};
+        g.currentAlt[0] = 2;
+        Rig r;
+        CHECK(r.dev->endpointLayout() ==
+              "interface 0 alt 2 (current): 0x83 interrupt packet 8; "
+              "interface 0 alt 5: 0x81 bulk packet 512");
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(g.altSetNumbers.size() == 1 && g.altSetNumbers[0] == 5);
+        r.dev->endBulkStream();
+    }
+
+    // 14. THE HF+ SHAPE, and settings with no endpoints (finding 5): alt 0 is empty
+    //     and current, alt 1 carries bulk 0x81. The line says so.
+    {
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig r;
+        CHECK(r.dev->endpointLayout() ==
+              "interface 0 alt 0 (current): no endpoints; interface 0 alt 1: 0x81 bulk packet 512");
+        // Selected by the driver at open: no recovery is needed at start.
+        CHECK(r.dev->selectAlternateSetting(0, 1));
+        CHECK(g.currentAlt[0] == 1);
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(r.dev->takeStreamNote().empty());
+        CHECK(g.rawIoCalls == 1);
+        r.dev->endBulkStream();
+    }
+
+    // 15. ensureStreamingSetting (the Mirics open): selects the bulk setting when
+    //     the current one lacks it; isochronous-only changes nothing.
+    {
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig r;
+        CHECK(r.dev->ensureStreamingSetting(0x81));
+        CHECK(g.currentAlt[0] == 1);
+        reset();
+        g.pipes = {{0, 0, 0x81, UsbdPipeTypeIsochronous, 1024}};
+        Rig r2;
+        CHECK(!r2.dev->ensureStreamingSetting(0x81));
+        CHECK(g.altSets == 0);
+    }
+
+    // 16. A GENUINE UNPLUG while selecting the setting (finding 6): error 1167 is
+    //     not a layout fact, so the sentence keeps the transfer-fault words.
+    {
+        reset();
+        g.emptyAlts = {{0, 0}};
+        g.pipes = {{0, 1, 0x81, UsbdPipeTypeBulk, 512}};
+        g.setAltFails = ERROR_DEVICE_NOT_CONNECTED;
+        Rig r;
+        CHECK(!r.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(!cascade::usb::errorIsLayoutProblem(r.dev->lastError()));
+        CHECK(has(r.dev->lastError(), "Windows error 1167"));
+    }
+
+    // 17. A SECOND START keeps the route found by the first: no second note, and
+    //     RAW_IO stays on.
+    {
+        reset();
+        g.numIfaces = 2;
+        g.pipes = {{0, 0, 0x83, UsbdPipeTypeInterrupt, 8}, {1, 0, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig r;
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(!r.dev->takeStreamNote().empty());
+        r.dev->endBulkStream();
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(r.dev->takeStreamNote().empty());
+        r.dev->endBulkStream();
     }
 
     // 11. THE USER-FACING SENTENCE. A layout problem is not an unplugged radio:

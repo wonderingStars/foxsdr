@@ -584,6 +584,28 @@ public:
         return false;
     }
 
+    // USBDEVFS_SETINTERFACE: the Linux counterpart of
+    // WinUsb_SetCurrentAlternateSetting. Only the one interface this transport
+    // claims (kSdrInterface) can be selected on; any other index is refused.
+    bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) override {
+        if (fd_ < 0) {
+            setError("selecting an alternate setting on a closed device");
+            return false;
+        }
+        if (interfaceIndex != kSdrInterface) {
+            setError("this transport claims only one USB interface");
+            return false;
+        }
+        struct usbdevfs_setinterface si{};
+        si.interface = kSdrInterface;
+        si.altsetting = setting;
+        if (::ioctl(fd_, USBDEVFS_SETINTERFACE, &si) != 0) {
+            setError(errnoText("selecting an alternate setting", errno));
+            return false;
+        }
+        return true;
+    }
+
     // --- bulk OUT -----------------------------------------------------------
 
     int writeBulk(std::uint8_t endpoint, const std::uint8_t* data, std::size_t len,

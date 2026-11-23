@@ -170,6 +170,34 @@ public:
         controls_.clear();
     }
 
+    // THE FIELD FAULT'S RULE (19-23 Nov 2026): "the streaming pipe does not exist in
+    // the current alternate setting". With streamAltRequired >= 0 beginBulkStream
+    // refuses, with the text the field reports, unless that setting has been
+    // selected. THAT WinUSB ANSWERS ERROR 87 FOR SUCH A PIPE IS INFERRED, NOT
+    // DOCUMENTED (Microsoft documents 87 only for a wrong ValueLength); the rule
+    // models the cause the review of 5f085271 and libairspyhf's open sequence
+    // point to, and the bench probe (tests/probe_winusb_rawio.cpp) settles it.
+    int streamAltRequired = -1;
+    bool selectAlternateSetting(std::uint8_t interfaceIndex, std::uint8_t setting) override {
+        std::lock_guard<std::mutex> lk(mutex_);
+        altCalls_.emplace_back(interfaceIndex, setting);
+        if (altCalls_.size() == 1) { controlsAtFirstAlt_ = controls_.size(); }
+        currentAlt_ = setting;
+        return true;
+    }
+    std::vector<std::pair<int, int>> altCalls() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return altCalls_;
+    }
+    std::size_t controlsAtFirstAlt() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return controlsAtFirstAlt_;
+    }
+    int currentAlt() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return currentAlt_;
+    }
+
     int beginBulkCalls() const { return beginBulkCalls_.load(); }
     int endBulkCalls() const { return endBulkCalls_.load(); }
     int resetPipeCalls() const { return resetPipeCalls_.load(); }
@@ -297,6 +325,10 @@ public:
 
     bool beginBulkStream(std::uint8_t endpoint, std::size_t bufferBytes,
                          std::size_t bufferCount) override {
+        if (streamAltRequired >= 0 && currentAlt() != streamAltRequired) {
+            lastError_ = "WinUsb_SetPipePolicy(RAW_IO) failed (Windows error 87)";
+            return false;
+        }
         lastEndpoint_.store(endpoint);
         lastBufferBytes_.store(bufferBytes);
         lastBufferCount_.store(bufferCount);
@@ -409,6 +441,9 @@ private:
 
     mutable std::mutex mutex_;
     std::vector<AirspyHfControlRecord> controls_;
+    std::vector<std::pair<int, int>> altCalls_;
+    std::size_t controlsAtFirstAlt_ = 0;
+    int currentAlt_ = 0;
     std::deque<std::vector<std::uint8_t>> bulk_;
     std::string path_;
     std::string lastError_;

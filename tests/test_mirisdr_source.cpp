@@ -1560,5 +1560,35 @@ int main() {
         src.closeDevice();
     }
 
+    // =====================================================================
+    // THE SETTING THAT CARRIES THE STREAM (field fault 19-23 Nov 2026). The
+    // fake refuses the stream, with the field's error text, unless the setting
+    // with bulk IN 0x81 was selected; the driver must ask for it at open, from
+    // the device's descriptors alone, and samples then arrive.
+    // =====================================================================
+    {
+        MiriSdrSource src;
+        FakeMiriSdrUsb* fake = attachFake(src);
+        fake->streamAltRequired = 1;
+        {
+            std::vector<int> ramp(252 * 2);
+            for (std::size_t i = 0; i < ramp.size(); ++i) { ramp[i] = static_cast<int>(i) - 200; }
+            fake->queueBulk(pack16(ramp));
+        }
+        CHECK(src.open(""));
+        CHECK(fake->ensureCalls() == 1);
+        CHECK(fake->currentAlt() == 1);
+        CHECK(src.start());
+        CHECK(src.running());
+        std::size_t total = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (total == 0 && std::chrono::steady_clock::now() < deadline) {
+            std::complex<float> chunk[512];
+            total += src.read(chunk, 512);
+        }
+        CHECK(total > 0);
+        src.closeDevice();
+    }
+
     return testSummary("test_mirisdr_source");
 }
