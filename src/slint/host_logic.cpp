@@ -245,6 +245,10 @@ std::string gainText(bool haveStage, bool agcOn, double value, const std::string
     if (agcOn) { return "AUTO"; }
     return fmt("%.0f ", value) + unit;
 }
+std::string gainHintText(bool agcOn, const std::string& stage, const std::string& device) {
+    if (agcOn) { return cascade::i18n::tr("Automatic gain is on. Switch it off to set the gain by hand."); }
+    return stage + " stage \xC2\xB7 " + device;
+}
 
 // ---- axes ----
 std::vector<Tick> frequencyTicks(double centreHz, double spanHz, double widthPx, double targetPx) {

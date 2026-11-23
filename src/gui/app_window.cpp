@@ -8397,6 +8397,11 @@ void AppWindow::drawSourceSection() {
             ImGui::PopID();
         }
         ImGui::EndDisabled();
+        if (agc && !airspyPanel && !c.gains.empty()) {   // USER BUG A: the sliders above are off because automatic gain is on - say so, instead of a dead control
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", tr("Automatic gain is on. Switch it off to set the gain by hand."));
+            ImGui::PopStyleColor();
+        }
 
         // THE BIAS TEE, BELOW THE GAINS AND OUTSIDE THE AGC DISABLE. It is
         // not a gain and it is not affected by automatic gain control: it is

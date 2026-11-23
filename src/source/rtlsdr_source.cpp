@@ -459,11 +459,20 @@ bool chipGain(RtlSdrSource::Link& link, const std::string& name, int tenths, boo
         const TunerR82xx::Stage stage = (name == "LNA")     ? TunerR82xx::Stage::Lna
                                         : (name == "MIXER") ? TunerR82xx::Stage::Mixer
                                                             : TunerR82xx::Stage::Vga;
-        ok = link.tuner->setStageIndex(stage, TunerR82xx::nearestStageIndex(stage, tenths));
+        // A STAGE WRITTEN BY HAND LEAVES AUTOMATIC GAIN (user bug A, 2026-11-23): the part's LNA and mixer loops would overwrite the index within milliseconds, so a stage write under automatic
+        // gain did nothing and nothing said so. The aggregate setter above does the same through setAggregateGainTenthDb (it takes both off their loops and clears the tuner's flag).
+        ok = link.tuner->autoGain() ? link.tuner->setAutoGain(false) : true;
+        ok = ok && link.tuner->setStageIndex(stage, TunerR82xx::nearestStageIndex(stage, tenths));
     } else {
         known = false;
     }
     link.rtl->setI2cRepeater(false);
+    // The demodulator's digital AGC follows the tuner's (chipAutoGain turns the two on together): a manual gain turns it off with the tuner's, so the two cannot fight over the signal.
+    // Written only when it is on, so a session that never used automatic gain writes nothing more than it did.
+    if (known && ok && link.demodAgcOn) {
+        link.rtl->setDemodAgc(false);
+        link.demodAgcOn = false;
+    }
     return known && ok;
 }
 
@@ -473,6 +482,7 @@ bool chipAutoGain(RtlSdrSource::Link& link, bool on) {
     link.rtl->setI2cRepeater(false);
     // The demodulator's own digital AGC follows the tuner's, so the two cannot end up fighting each other over the same signal.
     link.rtl->setDemodAgc(on);
+    link.demodAgcOn = on;
     return ok;
 }
 
@@ -669,6 +679,7 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
     if (!link.readerRun.load(std::memory_order_relaxed) || link.abandoned.load(std::memory_order_relaxed)) { return Reopen::Stopped; }
     link.transport = std::move(fresh);
     link.rtl = std::make_unique<Rtl2832u>(*link.transport, static_cast<unsigned>(kControlTimeout.count()));
+    link.demodAgcOn = false;   // a fresh chip
     link.rtl->setKeepGoing(&link.readerRun);   // a stop() now ends the bring-up within the one transfer in flight
     link.rtl->setBeat(&link.readerBeatNs);     // and a long bring-up is a live reader, not a wedged one
     link.rtl->setDeadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(link.reopenBringUpMs.load(std::memory_order_relaxed)));   // and it is bounded as a whole
@@ -1391,6 +1402,7 @@ bool RtlSdrSource::openWithTransport(std::unique_ptr<usb::UsbDevice> transport,
     link_->transport = std::move(transport);
     link_->rtl =
         std::make_unique<Rtl2832u>(*link_->transport, static_cast<unsigned>(kControlTimeout.count()));
+    link_->demodAgcOn = false;   // a fresh chip
     link_->ring = std::make_unique<dsp::SpscRing<std::complex<float>>>(kRingCapacity);
     {
         std::lock_guard<std::mutex> elk(link_->errorMutex);
@@ -2214,13 +2226,18 @@ bool RtlSdrSource::setGainDb(const std::string& name, double db) {
         setError("this radio has faulted; reopen it");
         return false;
     }
+    // Automatic gain in force before this write: a manual write ends it (chipGain takes the tuner and the demodulator off automatic), and what the re-open puts back must say manual too.
+    const bool wasAuto = link_->tuner->autoGain() || link_->demodAgcOn;
     bool known = true;
     const bool ok = chipGain(*link_, name, tenths, known);
     if (!known) {
         setError("this radio has no gain called " + name);
         return false;
     }
-    if (ok) { remember(true); }
+    if (ok) {
+        remember(true);
+        if (wasAuto) { rememberWanted(*link_, [](Link::Wanted& w) { w.autoGainSet = true; w.autoGain = false; }); }
+    }
     if (!ok) { setError(rre::noteControlRefusedText(this, "rtlsdr", rre::Control::Gain, "the tuner refused that gain: " + link_->tuner->lastError())); }
     return ok;
 }

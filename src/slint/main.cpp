@@ -3262,8 +3262,8 @@ int main(int argc, char** argv) {
                 ui->set_gain_norm(static_cast<float>(std::clamp((it.value[3] - lists.gainMin) / range, 0.0, 1.0)));
                 gainTxt = gainText(true, agc, it.value[3], lists.gainUnit);
             }
-            ui->set_gain_hint(ss(lists.gainStage + " stage \xC2\xB7 " + state.deviceName));
-            ui->set_gain_tooltip(ss("Gain - the radio's first stage; drag the slider, or scroll over it (" + lists.gainStage + ")"));
+            ui->set_gain_hint(ss(gainHintText(agc, lists.gainStage, state.deviceName)));   // user bug A: under automatic gain the slider is off, and the hint says why
+            ui->set_gain_tooltip(ss(agc ? gainHintText(true, lists.gainStage, state.deviceName) : "Gain - the radio's first stage; drag the slider, or scroll over it (" + lists.gainStage + ")"));
         } else {
             ui->set_gain_norm(0.f); ui->set_gain_hint(ss(std::string(cascade::i18n::tr("no gain stage"))));
             std::string keep, srcError;   // WHY IT IS DEAD: no radio is open; when a saved radio did not open, the source error is the whole sentence (the Source section's own words)
@@ -4010,6 +4010,8 @@ int main(int argc, char** argv) {
             if (what == "physw") { out = std::to_string(ui->window().size().width); return std::string(); }   // the window's real size in physical pixels (drive fixes 1)
             if (what == "physh") { out = std::to_string(ui->window().size().height); return std::string(); }
             if (what == "maximised") { out = ui->window().is_maximized() ? "1" : "0"; return std::string(); }
+            if (what == "gainhint") { out = std::string(ui->get_gain_hint()); return std::string(); }   // user bug A: the words beside the gain slider
+            if (what == "gainenabled") { out = ui->get_gain_enabled() ? "1" : "0"; return std::string(); }
             if (what == "x") { out = std::to_string(ui->window().position().x); return std::string(); }   // user bug C: where the window is, and what the start-time fit did
             if (what == "y") { out = std::to_string(ui->window().position().y); return std::string(); }
             if (what == "startmax") { out = startMaximised ? "1" : "0"; return std::string(); }
@@ -4018,7 +4020,7 @@ int main(int argc, char** argv) {
             if (what == "bg") { out = hex(ui->global<Theme>().get_bg()); return std::string(); }
             if (what == "accent") { out = hex(ui->global<Theme>().get_accent()); return std::string(); }
             if (what == "face") { out = face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain"; return std::string(); }
-            return "look.scale|width|height|physw|physh|maximised|x|y|startmax|minw|minh|bg|accent|face, not " + name;
+            return "look.scale|width|height|physw|physh|maximised|x|y|startmax|minw|minh|gainhint|gainenabled|bg|accent|face, not " + name;
         }
         if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
         if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }

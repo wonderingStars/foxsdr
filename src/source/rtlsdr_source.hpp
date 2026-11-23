@@ -338,6 +338,7 @@ public:
         std::function<void(int)> retakeProbeForTest;   // (see setRetakeProbeForTest)
         std::atomic<int> unlockedTunes{0};   // (moved here from the source: the re-open's retune counts into it too)
         std::atomic<bool> biasTee{false};    // (likewise: the re-open may leave the bias tee off, and the readout must say so)
+        bool demodAgcOn = false;             // the demodulator's own digital AGC bit is on (set by chipAutoGain; a fresh chip starts with it off; under the control lock): a manual gain write turns it off only when it is on
         // What the user last asked of the radio, kept so a re-open can put it back. Written by each setter when it succeeds (or, while a re-open runs,
         // when it is asked), under `wantedMutex`.
         struct Wanted {

@@ -111,6 +111,9 @@ struct Registry {
     // TWENTY stages, S00..S19 (0..40 dB, 1 dB steps), for the cap on how many stages of one radio the
     // manual gain memory keeps (0.99.75). Takes the place of the LNA/PGA pair.
     std::atomic<bool> manyStages{false};
+    // THE RTL-SDR'S WAY (user bug A): a manual gain written to any stage takes the radio out of automatic gain (its setGainDb clears the tuner's flag). Off, the fake keeps its
+    // automatic gain through a gain write, as every earlier test here relies on.
+    std::atomic<bool> manualLeavesAuto{false};
 };
 Registry g_reg;
 
@@ -193,6 +196,7 @@ public:
         if (name == "LNA") {
             lna_ = std::round(std::min(std::max(db, 0.0), kLnaMax));
             rec_->gainNow[name] = lna_;
+            if (g_reg.manualLeavesAuto.load()) { agc_ = false; }
             return true;
         }
         if (name == "PGA" && !g_reg.refusePga.load()) {
@@ -337,6 +341,7 @@ void resetRegistry() {
     g_reg.refusePga = false;
     g_reg.autoGainGetterStale = false;
     g_reg.manyStages = false;
+    g_reg.manualLeavesAuto = false;
     cc::DiagLog::instance().resetForTest();
 }
 
@@ -1202,6 +1207,44 @@ void testManualRestart() {
     }
 }
 
+// USER BUG A (2026-11-23): "changing gain has no effect". A gain written by hand to any stage of an RTL-SDR takes the radio out of automatic gain; the engine's own switch (what the
+// control on screen shows: the FOXAPI_RX_DEVICE_AGC flag, the slider's enabled state) and the radio's remembered switch have to follow, or the screen says AUTO over a radio that is on manual
+// gain. And each write is one plain line in the diagnostics log (stage and value, no frequency).
+void testManualWriteLeavesAutoGain() {
+    std::printf("  a manual gain written by hand leaves automatic gain: the box, the memory and the log follow\n");
+    resetRegistry();
+    g_reg.stages = true;
+    g_reg.manualLeavesAuto = true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));   // the engine's gain log is one per stage per 500 ms for the whole process: earlier tests here wrote LNA moments ago
+    {
+        th::TestWindow app;
+        const std::size_t r = openStaged(app, false);
+        CHECK(Access::toggle(app, true));
+        CHECK(Access::agc(app));
+        CHECK(entry(Access::memory(app), kKeyA) == 1);
+        CHECK(Access::userGain(app, 0, 12.0));   // LNA, by hand
+        CHECK(!Access::agc(app));                // the engine's own flag followed the driver
+        CHECK(entry(Access::memory(app), kKeyA) == 0);   // and the radio's remembered switch says manual
+        CHECK(made(r).gainNow.at("LNA") == 12.0);
+        // the write is in the diagnostics log, as one plain line without a frequency
+        bool logged = false;
+        for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) {
+            if (line.find("source: gain LNA 12.0 dB") != std::string::npos) { logged = true; CHECK(line.find("Hz") == std::string::npos); }
+        }
+        CHECK(logged);
+    }
+    // a radio that stays on automatic gain through a write (every other driver here) keeps the box on
+    resetRegistry();
+    g_reg.stages = true;
+    {
+        th::TestWindow app2;
+        (void)openStaged(app2, false);
+        CHECK(Access::toggle(app2, true));
+        CHECK(Access::userGain(app2, 0, 12.0));
+        CHECK(Access::agc(app2));
+    }
+}
+
 void testManualCaps() {
     std::printf("  manual gain: at most 64 radios and 16 stages of one radio are remembered; an entry already "
                 "there is always updated\n");
@@ -1292,6 +1335,7 @@ int main() {
     testManualBeforeTheRememberedAutoGain();
     testManualRestart();
     testManualCaps();
+    testManualWriteLeavesAutoGain();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

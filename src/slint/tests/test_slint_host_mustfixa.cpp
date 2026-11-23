@@ -201,6 +201,15 @@ void theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing() {
     CHECK(has(pg, "tiles-note: root.page.map.tiles-note;"));
 }
 
+// USER BUG A (2026-11-23): under automatic gain the gain slider is disabled and said nothing. It is still disabled (the radio sets its own gain), and the hint beside it now says why.
+void theGainSliderSaysWhyItIsOffUnderAutomaticGain() {
+    const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
+    CHECK(has(m, "ui->set_gain_enabled(lists.haveGain && !agc);"));
+    CHECK(has(m, "ui->set_gain_hint(ss(gainHintText(agc, lists.gainStage, state.deviceName)));"));
+    const std::string w = slurp(repoRoot() / "src" / "gui" / "app_window.cpp");   // the classic window: the same sentence under the sliders it greys out
+    CHECK(has(w, "if (agc && !airspyPanel && !c.gains.empty())") && has(w, "Automatic gain is on. Switch it off to set the gain by hand."));
+}
+
 // WINDOW STRIP LANE (look review B1): the receiver strip and the spectrum toolbar FOLD to a second row instead of being cut off, so the smallest window the drag edges allow
 // is 1024 x 640. OLD expectation: kMinWindowW = 1480.0f, kMinWindowH = 560.0f (a window cannot be dragged smaller than a screen it does not fit). NEW: 1024.0f and 640.0f.
 void theSmallestWindowIsTheMeasuredOne() {
@@ -306,6 +315,7 @@ int main() {
     theNeededLibrariesTextIsForPeople();
     theSmallestWindowIsTheMeasuredOne();
     theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing();
+    theGainSliderSaysWhyItIsOffUnderAutomaticGain();
     theEmptyCommunityRowIsNotDrawn();
     theDropDownGrabsFocusWithoutATimer();
     theWindowSaysNothingOfWhatIsNotThere();
