@@ -541,21 +541,23 @@ struct Receiver {
     // bundle's dsp-ring line; publishRingFigures() adds the minute still open to them and publishes (core::setRingFigures).
     std::size_t dspRingHighWaterSession_ = 0;
     std::uint64_t dspBlockLongestNsSession_ = 0;
-    // THE DIGESTS' SHARED EVENT MASK (2026-11-23, core/minute_events.hpp): each digest keeps its OWN mark of the monotonic event counts (a
-    // source switch, a rate change, a plugin reload or wake, an output open) so each minute's mask is its own; and its count of consecutive
-    // loss minutes, which overrides the discount at three. ringDroppedAbsent_ mark: the samples discarded while the DSP thread was
-    // deliberately absent (Pipeline::ringDroppedAbsent), as they stood when the DSP minute last closed.
-    // THE DIGEST MINUTES START WITH THE STREAM (2026-11-23): firstDrainSeenS_ is the engine's clock when the pass first saw the DSP thread read
-    // the ring (negative until then); both digests take their marks and start their first minute kDigestGraceS after it, and close no minute
-    // before. The first minute used to start at the engine's construction and held the plugin scan, the saved radio's open and the window's
-    // creation: 117 of the field's ringdrop reports and 72 of its audiolead reports are a session's FIRST minute.
+    // THE DSP MINUTE NAMES ITS EVENTS (2026-11-23, core/minute_events.hpp): a mark of the monotonic event counts (a source switch, a rate
+    // change, a plugin reload or wake, an output open) so the minute's `events=` word is its own. The events are CONTEXT ONLY: they never
+    // decide whether a minute is filed (review of 70d16f00, finding 3). dspAbsentAtMinute_: the samples discarded while the DSP thread was
+    // deliberately absent (Pipeline::ringDroppedAbsent), as they stood when the DSP minute last closed; dspAbsentLogged_: as far as the
+    // pass has SAID them in the log (each episode, the moment it ends, before or after the minute clock arms).
+    // THE DIGEST MINUTES START WITH THE STREAM (2026-11-23): firstDrainSeenS_ is the engine's clock when the digests armed - at the DSP
+    // thread's first read of the ring, or ten seconds after the receiver was started if it has not read by then (negative until then) - and
+    // both digests take their marks then and close no minute before; the first judged minute is a full minute. The first minute used to
+    // start at the engine's construction and held the plugin scan, the saved radio's open and the window's creation: 117 of the field's
+    // ringdrop reports and 72 of its audiolead reports are a session's FIRST minute. dspMinuteBeganS_ is where the minute being closed began
+    // (the origin of its marks), which the radio journal's window length shares.
     double firstDrainSeenS_ = -1.0;
+    double dspMinuteBeganS_ = 0.0;
     bool dspMinuteArmed_ = false;
     bool audioMinuteArmed_ = false;
     cascade::core::MinuteEventCounts dspEventMark_;
-    cascade::core::MinuteEventCounts audioEventMark_;
-    int dspLossRun_ = 0;
-    int audioLossRun_ = 0;
+    std::uint64_t dspAbsentLogged_ = 0;
     std::uint64_t dspAbsentAtMinute_ = 0;
     // The DSP thread's accounting as the minute opened (Pipeline::dspBusyNs and friends: cumulative counters, so the minute is a difference).
     std::uint64_t dspBusyAtMinute_ = 0;

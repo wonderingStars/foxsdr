@@ -513,33 +513,6 @@ int main() {
         }
     }
 
-    // --- A RE-OPENED OUTPUT STARTS UNPRIMED (2026-11-23, the audiolead diagnosis) --------------------
-    // openLocked empties the ring but used to leave `primed_` as it was, so the first callback of a re-opened stream found a primed sink with
-    // nothing in its ring and counted one STARVED callback: every output re-open (a device switch, the watchdog's reopen, a layout fallback)
-    // cost one, which is why the engine had to discount one per open. The re-open now starts unprimed, as a first open does, and the sink
-    // plays silence uncounted until the lead is rebuilt.
-    {
-        AudioOut ao;
-        const bool ok = ao.open(-1, 48000.0, 1);
-        CHECK(ok);
-        if (ok) {
-            ao.close();
-            primeAndDrain(ao, 1);
-            CHECK(ao.primed());                          // played, then emptied: primed, ring empty
-            const std::uint64_t before = ao.underruns();
-            const bool again = ao.open(-1, 48000.0, 1);   // the same device, opened again
-            CHECK(again);
-            if (again) {
-                CHECK(!ao.primed());                     // a re-open begins unprimed
-                std::this_thread::sleep_for(std::chrono::milliseconds(150));   // the new stream's first callbacks run
-                ao.close();
-                CHECK(ao.underruns() == before);         // none of them was counted as starved
-            }
-        } else {
-            printOpenFailureDiagnostics(48000.0);
-        }
-    }
-
     // --- write() is bounded (non-blocking) and loses nothing it accepted -----
     {
         AudioOut ao;

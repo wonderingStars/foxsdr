@@ -5945,7 +5945,7 @@ The same report taken while the radio is keyed says `transmitting: yes` (`test_t
 
 | thread (report word) | kind: budget | where | phases it says | declared waits |
 |---|---|---|---|---|
-| `dsp` | dsp: 10 s | core/pipeline.cpp `dspThreadMain` | ring, spectrum, audio-lock, taps, plugin-iq, patch, demod, plugin-audio, plugin-chain, sink | none: the empty-ring sleep is the loop's idle and it beats through it |
+| `dsp` | dsp: 10 s | core/pipeline.cpp `dspThreadMain` | ring, spectrum, audio-lock, taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink | none: the empty-ring sleep is the loop's idle and it beats through it |
 | `source` | source: 30 s | core/pipeline.cpp `sourceThreadMain` (retired by the generation's stop token) | read, pace | none: a read() that returns 0 at its timeout is a beat |
 | `patch-source` | source: 30 s | core/patch_radio.cpp `readerBody` (retired when stop() clears `run`) | read, decode | none |
 | `transmit` | transmit: 10 s | core/transmitter.cpp `threadBody` (exists for one transmission) | block, sink-write, silence | none |

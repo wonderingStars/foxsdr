@@ -48,6 +48,7 @@
 #define CASCADE_CORE_THREAD_BEATS_HPP
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -224,6 +225,9 @@ public:
 
     // Alive, and in `phase` (a string literal; nullptr keeps the last one). Ends a declared wait.
     void beat(const char* phase = nullptr) noexcept;
+    // The same beat, stamped from a clock reading the caller already took (the DSP thread's own phase accounting reads the steady clock at
+    // every beat: one reading serves both, review of 70d16f00 finding 7). `now` must be a std::chrono::steady_clock time.
+    void beat(const char* phase, std::chrono::steady_clock::time_point now) noexcept;
     // Parked on purpose. Counts as alive for as long as the wait's cap (none, for a wait with no cap).
     void wait(const WaitSpec& w) noexcept;
     void endWait(const char* phase = nullptr) noexcept { beat(phase); }

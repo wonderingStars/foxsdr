@@ -261,7 +261,12 @@ void Engine::journalRecovery(const std::string& kind, const std::string& args, c
 // ONCE A MINUTE PER OPEN RADIO (closeDspMinute calls it under the radio's own scope). The figures are the minute's: samples the source thread read,
 // samples the ring dropped, the ring's high water. They are summed until the stream event's window (a minute, five after a radio's 500th of the day)
 // has passed, and said with that window.
-void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples) {
+// THE WINDOW'S ORIGIN IS ONE (review of 70d16f00, finding 4): the figures are the DSP minute's, taken from the marks that began at `beganS` (the
+// minute clock's arming, or the previous close), so the window's length is measured from the same instant - not from the radio's open, which
+// understated the first window's rate by the whole start-up. A radio opened INSIDE the minute counts from its open, with the samples read
+// since it (readNow - readAtOpen), so the pre-open generator's samples are not credited to it either.
+void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::uint64_t samplesAbsent, std::size_t ringHighWaterSamples,
+                                 double beganS, std::uint64_t readNow) {
     RadioJournalSlot& j = radioJournal_[scopedSlot()];
     // A FAULTED RADIO IS OVER (field data 2026-11-19: 38 windows after a close): its slot stays open until the pass sees it leave, but no window is said for it
     if (!j.open || j.faulted) { return; }
@@ -275,14 +280,20 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     RadioRun& run = (*radioRun_)[scopedSlot()];
     const double ranSec = run.runningSec;
     run.runningSec = 0.0;
-    if (samplesRead == 0 && ranSec < 0.5 * std::max(1.0, now - j.lastMinuteS)) {
+    double origin = beganS;
+    if (j.openedAtS > origin) {
+        origin = j.openedAtS;
+        samplesRead = readNow >= j.readAtOpen ? std::min(samplesRead, readNow - j.readAtOpen) : samplesRead;
+    }
+    if (samplesRead == 0 && ranSec < 0.5 * std::max(1.0, now - origin)) {
         j.lastMinuteS = now;
         return;
     }
-    const double dt = std::max(1.0, now - j.lastMinuteS);
+    const double dt = std::max(1.0, now - origin);
     j.lastMinuteS = now;
     j.accRead += samplesRead;
     j.accDropped += samplesDropped;
+    j.accAbsent += samplesAbsent;
     j.accSec += dt;
     j.accHigh = std::max(j.accHigh, ringHighWaterSamples);
     const int window = rr::global().streamWindowSec(j.rid.key);
@@ -294,6 +305,9 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     ev.set("windowSec", seconds);
     ev.set("samplesPerSec", static_cast<long long>(std::llround(static_cast<double>(j.accRead) / static_cast<double>(seconds))));
     ev.set("drops", static_cast<long long>(std::min<std::uint64_t>(j.accDropped, 1000000000ull)));
+    // THE APPLICATION'S OWN PAUSE, under its own name: samples the ring could not hold while the DSP thread was deliberately absent (bounded to
+    // 2 s an absence), never folded into `drops` and never left out.
+    if (j.accAbsent > 0) { ev.set("absentDrops", static_cast<long long>(std::min<std::uint64_t>(j.accAbsent, 1000000000ull))); }
     const double expected = rx().pipeline_.activeSource().sampleRateHz();
     if (expected > 0.0) { ev.set("expectedSps", rateSps(expected)); }
     const std::size_t cap = rx().pipeline_.ringCapacity();
@@ -302,6 +316,7 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     rr::global().event(ev);
     j.accRead = 0;
     j.accDropped = 0;
+    j.accAbsent = 0;
     j.accSec = 0.0;
     j.accHigh = 0;
 }

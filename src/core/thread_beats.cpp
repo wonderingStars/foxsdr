@@ -86,10 +86,13 @@ std::int64_t realMs() {
     return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t).count());
 }
 
-std::int64_t clockMs() {
-    const std::int64_t base = g_frozen.load(std::memory_order_acquire) ? g_frozenAtMs.load(std::memory_order_relaxed) : realMs();
+// The beat clock for a steady-clock reading the caller already has (realNowMs), with the tests' freeze and skew applied as clockMs() does.
+std::int64_t clockMsAt(std::int64_t realNowMs) {
+    const std::int64_t base = g_frozen.load(std::memory_order_acquire) ? g_frozenAtMs.load(std::memory_order_relaxed) : realNowMs;
     return base + g_skewMs.load(std::memory_order_relaxed);
 }
+
+std::int64_t clockMs() { return clockMsAt(realMs()); }
 
 unsigned long currentTid() {
 #if defined(_WIN32)
@@ -178,17 +181,25 @@ Registration::Registration(const ThreadSpec& spec, std::shared_ptr<const std::at
 
 Registration::~Registration() { Registry::instance().remove(slot_.get()); }
 
-void Registration::beat(const char* phase) noexcept {
-    detail::Slot& s = *slot_;
+namespace {
+void beatAtMs(detail::Slot& s, const char* phase, std::int64_t stampMs) noexcept {
     if (phase != nullptr) { s.phase.store(phase, std::memory_order_relaxed); }
     // THE BEAT IS STAMPED BEFORE THE WAIT IS CLEARED (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31). A monitor that looks between the two
     // stores then sees a thread that is still in its wait - judged against the wait's own start and cap, an uncapped one never late - and not a thread with NO
     // wait and the stamp it had BEFORE the wait: for a worker that has sat in a declared accept or job wait for hours that stamp is hours old, and it was
     // reported as a wedge (the second look re-reads the same pair if the worker has not yet run its second store - preempted, or still in its store buffer on
     // arm64). The only reading the new order can give that the old one could not is a wait past its own cap seen while its thread is waking, and that wait WAS late.
-    s.lastBeatMs.store(clockMs(), std::memory_order_release);
+    s.lastBeatMs.store(stampMs, std::memory_order_release);
     if (void (*const probe)() = g_beatGapProbe.load(std::memory_order_relaxed)) { probe(); }   // (tests only: the gap between the two stores)
     if (s.wait.load(std::memory_order_relaxed) != nullptr) { s.wait.store(nullptr, std::memory_order_release); }
+}
+}  // namespace
+
+void Registration::beat(const char* phase) noexcept { beatAtMs(*slot_, phase, clockMs()); }
+
+void Registration::beat(const char* phase, std::chrono::steady_clock::time_point now) noexcept {
+    const std::int64_t real = static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+    beatAtMs(*slot_, phase, clockMsAt(real));
 }
 
 void Registration::wait(const WaitSpec& w) noexcept {

@@ -4,9 +4,10 @@
 // after starved callbacks) are the two largest groups on the crash page, and neither a code diagnosis nor a bench run could name a
 // cause. This test pins the pieces that make the NEXT report name one (docs/DIAGNOSTICS.md, "The DSP minute"):
 //
-//   1. the shared event mask and the three-minute override (core/minute_events.hpp), by themselves;
+//   1. the events' NAMES (core/minute_events.hpp), by themselves - they are context in a log line and decide nothing;
 //   2. samples discarded while the DSP thread is deliberately ABSENT (a thread start; a live sample-rate change joins and respawns it)
-//      are counted apart and are NOT ringdrop, while a real stall still is;
+//      are counted apart and are NOT ringdrop - for AT MOST Pipeline::kDspAbsentMaxMs (2 s) of each absence: a thread that is still not
+//      there after that is a consumer that fell behind, and what is cut then is an ordinary drop (review of 70d16f00, finding 1);
 //   3. the pipeline counts its own deliberate quiesces (source switch, accepted rate change);
 //   4. the machine-state line is fixed words and numbers, fits the log's line, and survives the upload scrub;
 //   5. the DSP thread's accounting (busy time, own CPU time, block count, the longest gap between ring reads and the phase it was in) and
@@ -109,6 +110,10 @@ private:
     std::atomic<int> stalls_{0};
 };
 
+// "HH:MM:SS.mmm info " - what DiagLog::write puts before every line's text.
+constexpr std::size_t kStampBytes = 18;
+const char* kStamp = "12:34:56.789 info ";
+
 template <typename Pred>
 bool waitFor(Pred pred, int timeoutMs = 10000) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -162,19 +167,8 @@ int main() {
         minuteEventsText(kMinuteEventPlugins, words, sizeof(words));
         CHECK(std::string(words) == "plugins");
 
-        // THE JUDGMENT. A clean minute is never judged and ends the run; a loss minute with no event is judged; a loss minute with an
-        // event is not - until the third in a row.
-        int run = 0;
-        CHECK(!minuteJudged(false, 0u, run) && run == 0);
-        CHECK(minuteJudged(true, 0u, run) && run == 1);
-        CHECK(!minuteJudged(true, kMinuteEventRate, run) && run == 2);
-        CHECK(minuteJudged(true, kMinuteEventRate, run) && run == 3);          // the third consecutive: whatever it held
-        CHECK(minuteJudged(true, kMinuteEventSwitch | kMinuteEventAudio, run) && run == 4);
-        CHECK(!minuteJudged(false, kMinuteEventRate, run) && run == 0);        // a clean minute ends it
-        CHECK(!minuteJudged(true, kMinuteEventPlugins, run) && run == 1);
-        CHECK(!minuteJudged(true, kMinuteEventPlugins, run) && run == 2);
-        CHECK(!minuteJudged(false, 0u, run) && run == 0);                      // ...and the count starts again
-        CHECK(!minuteJudged(true, kMinuteEventPlugins, run) && run == 1);
+        // (There is no judgment function: the events are named in the DSP minute's line and decide nothing - review of 70d16f00, finding 3.
+        // tests/test_dsp_drop_minute_app.cpp section 3b holds that through the engine: a loss minute that held an event IS filed.)
     }
 
     // --- 2. SAMPLES LOST WHILE THE DSP THREAD IS DELIBERATELY ABSENT ARE NOT RINGDROP --------------------------------------------
@@ -203,6 +197,46 @@ int main() {
         Pipeline::setDspStartDelayForTest(0);
         // The DSP thread has come and drained; nothing is "absent" any more, and a real overflow would count as a drop again.
         CHECK(waitFor([&] { return hasFrame(p); }, 5000));
+        p.stop();
+    }
+
+    // --- 2b. THE ABSENT WINDOW IS BOUNDED (review of 70d16f00, finding 1) -------------------------------------------------------------
+    // A DSP thread whose start is delayed 5 s: the first 2 s of the source's writes (a ring's worth and more) are absent; once 2 s have passed
+    // the thread is still not there, and what is cut from then on is an ORDINARY drop - exactly what a thread that never arrives produced
+    // before this branch. Break-it: with the bound removed (every cut excused while absent) the drop count below stays 0 and the test is RED.
+    {
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        const std::size_t ring = p.ringCapacity();
+        Pipeline::setDspStartDelayForTest(5000);
+        p.start();
+        CHECK(p.running());
+        CHECK(p.dspAbsentActive());
+        CHECK(std::string(p.dspAbsentCauseWord()) == "start");
+        const std::uint64_t first = 3 * static_cast<std::uint64_t>(ring);
+        src->grant(first);
+        CHECK(waitFor([&] { return p.sourceSamplesRead() >= first; }));
+        const std::uint64_t absentFirst = p.ringDroppedAbsent();
+        CHECK(p.ringDroppedSamples() == 0u);                       // inside the 2 s: the application's own start
+        CHECK(absentFirst >= first - ring - 65536);
+        CHECK(p.dspHasDrained() == false);
+        // ...2.3 s after the start the window is over although the DSP thread has still not read the ring.
+        CHECK(waitFor([&] { return p.msSinceStart() >= 2300u; }, 6000));
+        CHECK(!p.dspAbsentActive());
+        CHECK(!p.dspHasDrained());
+        const std::uint64_t second = 2 * static_cast<std::uint64_t>(ring);
+        src->grant(second);
+        CHECK(waitFor([&] { return p.sourceSamplesRead() >= first + second; }));
+        const std::uint64_t dropped = p.ringDroppedSamples();
+        std::printf("5 s start delay: first 2 s %llu absent; after it %llu dropped, %llu absent in all, drained %d\n",
+                    static_cast<unsigned long long>(absentFirst), static_cast<unsigned long long>(dropped),
+                    static_cast<unsigned long long>(p.ringDroppedAbsent()), p.dspHasDrained() ? 1 : 0);
+        CHECK(dropped >= second - 65536);                           // the ring was full: everything written after the bound is a drop
+        CHECK(p.ringCutWrites() >= 1u);
+        CHECK(p.ringDroppedAbsent() == absentFirst);                // and none of it is excused
+        Pipeline::setDspStartDelayForTest(0);
         p.stop();
     }
 
@@ -241,7 +275,16 @@ int main() {
             CHECK(line.find(key) != std::string::npos);
         }
         CHECK(line.find("1552") == std::string::npos);   // only the first word of an outcome: no error text, no device
-        CHECK(line.size() < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+        // THE LOG ADDS AN 18-CHARACTER STAMP AND LEVEL ("HH:MM:SS.mmm info ") BEFORE THE TEXT (diag_log.cpp, DiagLog::write): the line as the log
+        // holds it must stay under kLineBytes - 1 or the upload scrub reads it as cut and masks its numbers (review of 70d16f00, finding 10).
+        CHECK(kStampBytes + line.size() < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+        // ...and the widest line a real machine can print (battery, throttled, a 256-processor host, a minimised window, the longest priority
+        // words) stays under it too, so no field report's machine line reads as cut.
+        const std::string widestMachine = std::string(kStamp) +
+            "machine: power=battery saver=off throttle=ctl:1,state:1 timer_100ns=156250 cpus=256 affinity=256 window=minimised display=dimmed "
+            "prio=dsp:above-normal,src:above-normal";
+        CHECK(widestMachine.size() < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+        CHECK(scrubUploadLine(widestMachine) == widestMachine);
         // The scrub leaves it as it was (a line that "sounds like tuning" has its numbers masked: this one must not).
         CHECK(scrubUploadLine(line) == line);
         // Changed-only logging: the second identical call says nothing; a forced one does.
@@ -369,6 +412,76 @@ int main() {
         CHECK(std::string(phase) == "sink");   // the delay is taken after the last beat of a block
     }
 
+    // --- 5b2. cpu_ms IS PROVED BOTH WAYS (review of 70d16f00, finding 5) --------------------------------------------------------------
+    // A seam makes every block BURN processor for 5 ms inside its span: the thread's own CPU time must be most of the busy time (at least
+    // 60% of the 5 ms x blocks it burned). A second seam makes every block SLEEP 5 ms in its span: busy time is high and the CPU time is
+    // near zero. Break-it: delete publishDspCpu() (or its call) and the first CHECK is RED; make it count wall time and the second is.
+    {
+        constexpr int kBlocks = 40;
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        Pipeline::setDspBlockLoadForTest(5, 0);
+        p.start();
+        src->grant(1024u * kBlocks);
+        CHECK(waitFor([&] { return p.dspBlocks() >= static_cast<std::uint64_t>(kBlocks); }, 20000));
+        Pipeline::setDspBlockLoadForTest(0, 0);
+        p.stop();   // the thread's last CPU time is published as it ends
+        const std::uint64_t blocks = p.dspBlocks();
+        const std::uint64_t burnedMs = blocks * 5u;
+        const std::uint64_t cpuMs = p.dspCpuNs() / 1000000u;
+        const std::uint64_t busyMs = p.dspBusyNs() / 1000000u;
+        std::printf("burn 5 ms x %llu blocks: cpu known %d, cpu %llu ms, busy %llu ms\n", static_cast<unsigned long long>(blocks),
+                    p.dspCpuKnown() ? 1 : 0, static_cast<unsigned long long>(cpuMs), static_cast<unsigned long long>(busyMs));
+        CHECK(p.dspCpuKnown());
+        CHECK(busyMs >= burnedMs);
+        CHECK(cpuMs * 10u >= burnedMs * 6u);   // at least 60% of the time it burned
+    }
+    {
+        constexpr int kBlocks = 40;
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        Pipeline::setDspBlockLoadForTest(0, 5);
+        p.start();
+        src->grant(1024u * kBlocks);
+        CHECK(waitFor([&] { return p.dspBlocks() >= static_cast<std::uint64_t>(kBlocks); }, 20000));
+        Pipeline::setDspBlockLoadForTest(0, 0);
+        p.stop();
+        const std::uint64_t blocks = p.dspBlocks();
+        const std::uint64_t slept = blocks * 5u;
+        const std::uint64_t cpuMs = p.dspCpuNs() / 1000000u;
+        const std::uint64_t busyMs = p.dspBusyNs() / 1000000u;
+        std::printf("sleep 5 ms x %llu blocks: cpu %llu ms, busy %llu ms\n", static_cast<unsigned long long>(blocks),
+                    static_cast<unsigned long long>(cpuMs), static_cast<unsigned long long>(busyMs));
+        CHECK(p.dspCpuKnown());
+        CHECK(busyMs >= slept);
+        CHECK(cpuMs * 4u < busyMs);   // a thread that slept is nowhere near busy on the processor
+    }
+
+    // --- 5b3. THE HOST'S OWN AUDIO CHAIN IS NOT NAMED FOR A PLUGIN (review of 70d16f00, finding 6) ---------------------------------------
+    // A seam stalls the thread right after the "host-audio" beat (the host's AGC, squelch, resampler, notch, noise reduction, equaliser), with
+    // no plugin loaded at all: the longest gap names "host-audio". Break-it: delete the beat and the word is "demod" (or "plugin-audio").
+    {
+        Pipeline p(appConfig());
+        auto owned = std::make_unique<BudgetSource>(2000000.0);
+        BudgetSource* src = owned.get();
+        p.setSource(std::move(owned));
+        Pipeline::setDspHostAudioDelayForTest(60);
+        p.start();
+        src->grant(1024u * 6u);
+        CHECK(waitFor([&] { return p.dspBlocks() >= 6u; }, 10000));
+        Pipeline::setDspHostAudioDelayForTest(0);
+        p.stop();
+        const char* phase = "";
+        const std::uint64_t gapMs = p.takeDspGapLongest(&phase) / 1000000u;
+        std::printf("60 ms in the host's audio chain: longest gap %llu ms in %s\n", static_cast<unsigned long long>(gapMs), phase);
+        CHECK(gapMs >= 50u);
+        CHECK(std::string(phase) == "host-audio");
+    }
+
     // --- 5c. THE SOURCE THREAD'S LONGEST GAP BETWEEN WRITES ------------------------------------------------------------------------------
     {
         Pipeline p(appConfig());
@@ -408,25 +521,40 @@ int main() {
         p.stop();
     }
 
-    // --- 6. THE MINUTE LINES AT THEIR WIDEST fit the log's line and survive the upload scrub with every number ---------------------------
+    // --- 6. THE LOG LINES AT THEIR WIDEST fit the log's line WITH ITS STAMP, and survive the upload scrub with every number -----------
+    // The log puts "HH:MM:SS.mmm info " (18 characters) before the text; a line that reaches kLineBytes - 1 as stored is read by the scrub as CUT
+    // and has its numbers masked as a frequency. So the budget for the text is kLineBytes - 1 - 18 - 1 = 172 characters (review of 70d16f00, finding 10).
     {
         const auto cap = [](unsigned long long v) { return v > 9999999999ULL ? 9999999999ULL : v; };
         char a[256];
-        std::snprintf(a, sizeof(a),
-                      "dsp minute: dropped=%llu pct=%s busy_ms=%llu cpu_ms=%s longest_gap_ms=%llu gap_phase=%s blocks=%llu ring_high_pct=%llu [radio 8]",
-                      cap(~0ULL), "100.00", cap(~0ULL), "9999999999", cap(~0ULL), "plugin-audio", cap(~0ULL), 100ULL);
+        std::snprintf(a, sizeof(a), "dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s [radio 8]", cap(~0ULL), "100.00", cap(~0ULL), 100ULL,
+                      "rate|switch|plugins|audio");
         char b[256];
-        std::snprintf(b, sizeof(b), "dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu events=%s [radio 8]",
-                      cap(~0ULL), cap(~0ULL), cap(~0ULL), cap(~0ULL), "rate|switch|plugins|audio");
-        std::printf("widest minute line A: %zu characters; B: %zu\n", std::strlen(a), std::strlen(b));
-        // (the log adds "HH:MM:SS.mmm info " before the text in the ring; the budget is for the text itself)
-        CHECK(std::strlen(a) < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
-        CHECK(std::strlen(b) < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
-        // The upload scrub leaves both as they are: no number of theirs is masked as a "tuning".
-        CHECK(scrubUploadLine(a) == std::string(a));
-        CHECK(scrubUploadLine(b) == std::string(b));
-        const std::string typical = "dsp minute: dropped=1048576 pct=66.67 busy_ms=3012 cpu_ms=41 longest_gap_ms=2982 gap_phase=audio-lock blocks=1536 ring_high_pct=100";
+        std::snprintf(b, sizeof(b), "dsp minute: busy_ms=%llu cpu_ms=%s blocks=%llu longest_gap_ms=%llu gap_phase=%s [radio 8]", cap(~0ULL), "9999999999",
+                      cap(~0ULL), cap(~0ULL), "plugin-audio");
+        char c[256];
+        std::snprintf(c, sizeof(c), "dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu [radio 8]", cap(~0ULL),
+                      cap(~0ULL), cap(~0ULL), cap(~0ULL));
+        char d[256];
+        std::snprintf(d, sizeof(d), "dsp: %llu samples discarded while the DSP thread was absent (began with: %s; excused for at most %d ms) [radio 8]",
+                      ~0ULL, "source-switch", Pipeline::kDspAbsentMaxMs);
+        char e[256];
+        std::snprintf(e, sizeof(e), "dsp: the DSP thread had not read the ring %.0f s after the receiver started; digest minutes start now [radio 8]", 10.0);
+        char f[256];
+        std::snprintf(f, sizeof(f), "dsp: first drain %llu ms after the program started; digest minutes start now [radio 8]", ~0ULL);
+        std::printf("widest lines (text only): A %zu, B %zu, C %zu, absent %zu, no-drain %zu, first-drain %zu characters\n", std::strlen(a),
+                    std::strlen(b), std::strlen(c), std::strlen(d), std::strlen(e), std::strlen(f));
+        for (const char* text : {a, b, c, d, e, f}) {
+            const std::string logged = std::string(kStamp) + text;   // as the log holds it
+            CHECK(logged.size() < static_cast<std::size_t>(DiagLog::kLineBytes - 1));
+            // The upload scrub leaves each as it is: no number of theirs is masked as a "tuning".
+            CHECK(scrubUploadLine(logged) == logged);
+        }
+        // (a realistic minute, the shape a field report carries)
+        const std::string typical = std::string(kStamp) + "dsp minute: dropped=1048576 pct=66.67 len_ms=60012 ring_high_pct=100 events=none";
         CHECK(scrubUploadLine(typical) == typical);
+        const std::string typicalB = std::string(kStamp) + "dsp minute: busy_ms=3012 cpu_ms=41 blocks=1536 longest_gap_ms=2982 gap_phase=audio-lock";
+        CHECK(scrubUploadLine(typicalB) == typicalB);
     }
 
     return testSummary("test_ringdrop_measure");

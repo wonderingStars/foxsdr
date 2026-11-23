@@ -1,26 +1,23 @@
-// minute_events.hpp - the DELIBERATE EVENTS of a digest minute, shared by the DSP minute and the audio minute (2026-11-23).
+// minute_events.hpp - the NAMES of the application's own events in a digest minute, for the DSP minute's log line (2026-11-23).
 //
-// WHY. The ringdrop and audiolead words are the two largest groups on the owner's crash page, and a minute that held something the
-// APPLICATION did on purpose - a source switch, a live sample-rate change (the DSP thread is joined and respawned while the source
-// keeps writing), a plugin reload or wake (a decoder's create() can hold the runner's lock for hundreds of milliseconds), a sound
-// output re-opened - loses samples or starves a callback by construction, on a machine that is keeping up perfectly. The audio digest
-// already skipped a minute that reloaded plugins and discounted stops and output opens; the DSP digest had no rule at all. One event
-// mask, set by the code that performs those events (Pipeline::setSource / setInputRateHz count their own; the engine counts plugin
-// reloads and wakes and reads the sink's own open count), read by BOTH digests through the helpers below, so the two cannot drift.
+// WHY. The ringdrop and audiolead words are the two largest groups on the owner's crash page. A minute that held something the
+// APPLICATION did - a source switch, a live sample-rate change (the DSP thread is joined and respawned while the source keeps writing), a
+// plugin reload or wake (a decoder's create() can hold the runner's lock for hundreds of milliseconds), a sound output re-opened - is
+// useful context for whoever reads the report: the DSP minute's line says `events=rate|switch|plugins|audio` beside the numbers.
 //
-// THE OVERRIDE. A machine that is really behind is not hidden by a busy spell: three CONSECUTIVE loss minutes are judged whatever
-// events they held.
+// THE EVENTS ARE CONTEXT, NEVER AN EXCUSE (review of 70d16f00, 2026-11-23). An earlier version of this header judged minutes through the
+// events (a loss minute that held one was "logged, not filed", unless it was the third in a row). That hid real loss: the owner's rule is
+// that every handled fault is reported, and a drop that shares a minute with a rate change is still a drop - the deliberate pause itself
+// is already removed from the count (Pipeline::ringDroppedAbsent, bounded to 2 s), and nothing else is deliberate. No event, and no
+// count of events, decides whether a minute is filed; there is no mask in any decision any more.
 //
-// A discounted minute is still LOGGED, with the event named; it is only not filed as a fault. No threshold lives here.
-//
-// Pure: no clock, no log, no engine - tests/test_minute_events.cpp drives every case.
+// Pure: no clock, no log, no engine - tests/test_ringdrop_measure.cpp section 1 drives every case.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 
 namespace cascade::core {
 
@@ -30,9 +27,6 @@ enum MinuteEvent : unsigned {
     kMinuteEventPlugins = 4u,   // a plugin rescan, wake or stop
     kMinuteEventAudio = 8u,     // a sound output opened (again)
 };
-
-// Three consecutive loss minutes are judged whatever events they held.
-constexpr int kMinuteEventOverrideRun = 3;
 
 // The monotonic count of each kind of event, as a digest sees it. A digest keeps a copy as its mark.
 struct MinuteEventCounts {
@@ -52,15 +46,6 @@ inline unsigned minuteEventsSince(const MinuteEventCounts& now, MinuteEventCount
     if (now.audio > mark.audio) { mask |= kMinuteEventAudio; }
     mark = now;
     return mask;
-}
-
-// The judgment of one minute. `lossMinute` is the digest's own test (a hearable share lost; starved callbacks at the raise threshold),
-// `mask` the minute's events (only the kinds this digest discounts for), `lossRun` the digest's count of consecutive loss minutes,
-// updated here. True = judge it (file the word, raise the lead); false = log it with its events and move on.
-inline bool minuteJudged(bool lossMinute, unsigned mask, int& lossRun) {
-    lossRun = lossMinute ? lossRun + 1 : 0;
-    if (!lossMinute) { return false; }
-    return mask == 0u || lossRun >= kMinuteEventOverrideRun;
 }
 
 // "rate|switch|plugins|audio" in that order, or "none". Fixed words only: nothing a user typed or a device is called.

@@ -14,9 +14,14 @@
 // Each is run with the DSP thread leaving the floating-point control register alone (the seam Pipeline::setDspFlushDenormalsForTest(false)),
 // and as the product runs it: flush-to-zero and denormals-are-zero set on the DSP thread itself, which the product does because of this
 // measurement (this machine: noise 1.0x, exact silence 1.1-1.2x, denormal-valued samples 5.4-5.9x slower without it). The numbers are printed.
-// THE CHECKS pin the outcome: with the register left alone a denormal block costs more than twice a noise block (so the measurement measures
-// something - a machine that ever fails this line proves nothing there), and as the product runs it neither silence nor denormals cost twice
-// a noise block.
+// WHAT IS ASSERTED AND WHAT IS ONLY PRINTED (review of 70d16f00, finding 2). The first version of this test required a denormal block to cost
+// more than twice a noise block with the register left alone - a property of the HARDWARE, which fails on ARM64 (the product sets nothing there,
+// so both runs are the same code) and on any x86 machine that is descheduled for a moment inside the 3.5 ms it measures. Now:
+//   ON x86  the DSP thread is asserted to run its blocks with flush-to-zero (bit 15) and denormals-are-zero (bit 6) SET in MXCSR, read on that
+//           thread through the test seam Pipeline::probeDspMxcsrForTest, while the CALLING thread's MXCSR is unchanged by running a pipeline; with
+//           the seam that leaves the register alone the DSP thread's bits are CLEAR (so the test cannot pass by reading a constant). The timing
+//           measurement above is still run and its numbers PRINTED, but nothing about it is asserted.
+//   OFF x86 (ARM64 and anything else) the test compiles, prints a note and passes: the product change is x86 only.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -118,7 +123,7 @@ struct Result {
 
 // Feeds `blocks` blocks in steps the ring can hold, waiting for the DSP thread to take each; returns the DSP thread's wall time per block over
 // the blocks counted from `skip` on (the first `skip` blocks of the phase are fed but not timed: a filter's state is still settling).
-double feed(Pipeline& p, ModeSource& src, int blocks, int skip, bool denormalOnly = false) {
+[[maybe_unused]] double feed(Pipeline& p, ModeSource& src, int blocks, int skip, bool denormalOnly = false) {
     constexpr int kStep = 100;
     std::uint64_t timedNs = 0;
     std::uint64_t timedBlocks = 0;
@@ -137,7 +142,7 @@ double feed(Pipeline& p, ModeSource& src, int blocks, int skip, bool denormalOnl
 }
 
 // flush: 0 = the seam says leave the register alone, -1 = the seam is not touched (the product as it ships).
-Result run(int flush) {
+[[maybe_unused]] Result run(int flush) {
     if (flush >= 0) { Pipeline::setDspFlushDenormalsForTest(flush != 0); }
     Pipeline::Config cfg;
     cfg.sampleRateHz = 2000000.0;
@@ -172,10 +177,59 @@ Result run(int flush) {
     return r;
 }
 
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+constexpr bool kX86 = true;
+constexpr std::uint32_t kFtzDaz = 0x8040u;   // FTZ (bit 15) and DAZ (bit 6)
+
+// Runs a real Pipeline for a few blocks with the MXCSR probe on and returns the control word the DSP thread saw while it ran them.
+std::uint32_t dspThreadMxcsr(int flush) {
+    if (flush >= 0) { Pipeline::setDspFlushDenormalsForTest(flush != 0); }
+    Pipeline::probeDspMxcsrForTest(true);
+    Pipeline::Config cfg;
+    cfg.sampleRateHz = 2000000.0;
+    cfg.fftSize = 1024;
+    cfg.averagingAlpha = 1.0f;
+    cfg.audioEnabled = false;
+    Pipeline p(cfg);
+    auto owned = std::make_unique<ModeSource>();
+    ModeSource* src = owned.get();
+    p.setSource(std::move(owned));
+    p.start();
+    src->grant(8u * 1024u);
+    CHECK(waitFor([&] { return p.dspBlocks() >= 8u; }));
+    p.stop();
+    const std::uint32_t seen = Pipeline::dspMxcsrSeenForTest();
+    Pipeline::probeDspMxcsrForTest(false);
+    Pipeline::setDspFlushDenormalsForTest(true);   // (the default again)
+    return seen;
+}
+#else
+constexpr bool kX86 = false;
+#endif
+
 }  // namespace
 
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    if (!kX86) {
+        std::printf("not an x86 build: the product leaves the floating-point control register alone here, so there is nothing to assert; passing\n");
+        return testSummary("test_dsp_denormal_cost");
+    }
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+    // --- THE ASSERTIONS: the bits are set on the DSP thread, and only there --------------------------------------------------------------
+    const std::uint32_t callerBefore = Pipeline::currentMxcsrForTest();
+    const std::uint32_t asShipped = dspThreadMxcsr(-1);          // the seam untouched: the product as it ships
+    const std::uint32_t callerAfter = Pipeline::currentMxcsrForTest();
+    const std::uint32_t leftAlone = dspThreadMxcsr(0);           // the seam leaves the register alone: the bits must be clear
+    std::printf("MXCSR: calling thread before 0x%04x, after 0x%04x; DSP thread as shipped 0x%04x, left alone 0x%04x\n", callerBefore, callerAfter, asShipped,
+                leftAlone);
+    CHECK(asShipped != 0u);                                      // the probe really read a control word
+    CHECK((asShipped & kFtzDaz) == kFtzDaz);                     // flush-to-zero AND denormals-are-zero, on the DSP thread
+    CHECK(callerAfter == callerBefore);                          // nothing else was touched
+    CHECK((callerBefore & kFtzDaz) == 0u);                       // (and the caller never had them)
+    CHECK(leftAlone != 0u && (leftAlone & kFtzDaz) == 0u);       // the seam is real: left alone, the thread has the default word
+
+    // --- THE MEASUREMENT: run and PRINTED, never asserted (a timing is a property of the machine) ------------------------------------------
     const Result on = run(-1);   // as shipped, FIRST: the seam has not been touched in this process
     const Result off = run(0);
     std::printf("per DSP block, wall time (us)         noise   zeros   decay(all)  decay(denormal part)\n");
@@ -186,14 +240,7 @@ int main() {
     const double zerosRatio = on.zerosNs > 0 ? off.zerosNs / on.zerosNs : 0;
     const double decayRatio = on.decayNs > 0 ? off.decayNs / on.decayNs : 0;
     const double noiseRatio = on.noiseNs > 0 ? off.noiseNs / on.noiseNs : 0;
-    std::printf("slowdown without FTZ/DAZ: noise %.2fx, zeros %.2fx, denormal decay %.2fx\n", noiseRatio, zerosRatio, decayRatio);
-    CHECK(off.noiseNs > 0 && on.noiseNs > 0);
-    CHECK(off.zerosNs > 0 && on.zerosNs > 0);
-    CHECK(off.decayNs > 0 && on.decayNs > 0);
-    // The measurement measures something: left alone, a block of denormal-valued samples is more than twice a noise block...
-    CHECK(off.decayNs > 2.0 * off.noiseNs);
-    // ...and as the product runs it, neither silence nor denormals cost twice a noise block.
-    CHECK(on.zerosNs < 2.0 * on.noiseNs);
-    CHECK(on.decayNs < 2.0 * on.noiseNs);
+    std::printf("slowdown without FTZ/DAZ (measurement only): noise %.2fx, zeros %.2fx, denormal decay %.2fx\n", noiseRatio, zerosRatio, decayRatio);
+#endif
     return testSummary("test_dsp_denormal_cost");
 }

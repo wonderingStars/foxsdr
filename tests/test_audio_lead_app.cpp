@@ -635,32 +635,23 @@ int main() {
                 CHECK(body.find("if (running) { ++rx().receiverStops_; }") != std::string::npos);
             }
 
-        // --- 9c2. THE OTHER DELIBERATE EVENTS ARE DISCOUNTED TOO, AND THREE LOSS MINUTES IN A ROW ARE NOT (2026-11-23) --------------------------------
-        // One mask serves both digests (core/minute_events.hpp): a source switch, a live rate change and a plugin wake or stop starve a callback
-        // by construction, as a reload does. A minute that held one is logged with the event named and judges nothing; the third consecutive
-        // loss minute is judged whatever it held, so a machine that is really behind is not hidden. A plugin WAKE is the event used here (the
-        // engine's own counter, as the rescan is bumped above).
+        // --- 9c2. NO NEW EXCUSES (review of 70d16f00, findings 3 and 8; deliberate decision of the review) ------------------------------------------
+        // The first version of this branch discounted three more events (a source switch, a live rate change, a plugin wake or stop) and skipped
+        // the minute that held one unless it was the third loss minute in a row. That hid real starvation, so it is gone: the audio digest judges
+        // exactly as it did at a5607a87 - a rescan minute is skipped, receiver stops and output opens are discounted one callback each, and
+        // nothing else. A plugin WAKE (the engine's own counter, as the rescan is bumped above) is therefore no excuse: five starved callbacks in
+        // a minute that held one raise the lead at once. Break-it: put the event discount back and the first CHECK below is RED.
         {
-            Access::closeMinute(app);                                 // a clean minute: the run of loss minutes starts at none
+            Access::closeMinute(app);                                 // a clean minute
             const int leadBefore = Access::leadNow(app);
             const int raisedBefore = logLinesWith("audio: buffer raised to");
-            const int noticesBefore = logLinesWith("deliberate events (plugins)");
             Access::noteWake(app);
             starve(out, 5);
             Access::closeMinute(app);
-            CHECK(Access::leadNow(app) == leadBefore);                // not a raise
-            CHECK(logLinesWith("audio: buffer raised to") == raisedBefore);
-            CHECK(logLinesWith("deliberate events (plugins)") == noticesBefore + 1);   // and the event is named
-            Access::noteWake(app);
-            starve(out, 5);
-            Access::closeMinute(app);
-            CHECK(Access::leadNow(app) == leadBefore);                // the second: still not
-            Access::noteWake(app);
-            starve(out, 5);
-            Access::closeMinute(app);
-            CHECK(Access::leadNow(app) > leadBefore);                 // the THIRD in a row is judged, whatever it held
+            CHECK(Access::leadNow(app) > leadBefore);                 // judged, whatever else the minute held
             CHECK(logLinesWith("audio: buffer raised to") == raisedBefore + 1);
-            Access::closeMinute(app);                                 // a clean minute ends the run again
+            CHECK(logLinesWith("deliberate events") == 0);            // and no sentence about an excused minute exists any more
+            Access::closeMinute(app);
         }
         }
     }

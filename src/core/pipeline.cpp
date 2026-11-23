@@ -51,6 +51,20 @@ std::atomic<bool> g_dspFlushDenormals{true};
 // See Pipeline::setDspStartDelayForTest and setDspBlockDelayForTest.
 std::atomic<int> g_dspStartDelayMs{0};
 std::atomic<int> g_dspBlockDelayMs{0};
+// See Pipeline::setDspBlockLoadForTest and probeDspMxcsrForTest. g_dspBlockSeam is non-zero while ANY per-block seam is armed, so the DSP
+// loop's cost when none is (always, in the application) is that one relaxed load per block.
+std::atomic<int> g_dspBurnMs{0};
+std::atomic<int> g_dspSleepInSpanMs{0};
+std::atomic<int> g_dspHostAudioDelayMs{0};
+std::atomic<bool> g_dspProbeMxcsr{false};
+std::atomic<std::uint32_t> g_dspMxcsrSeen{0};
+std::atomic<int> g_dspBlockSeam{0};
+void refreshBlockSeam() {
+    const bool on = g_dspBlockDelayMs.load(std::memory_order_relaxed) > 0 || g_dspBurnMs.load(std::memory_order_relaxed) > 0 ||
+                    g_dspSleepInSpanMs.load(std::memory_order_relaxed) > 0 || g_dspProbeMxcsr.load(std::memory_order_relaxed) ||
+                    g_dspHostAudioDelayMs.load(std::memory_order_relaxed) > 0;
+    g_dspBlockSeam.store(on ? 1 : 0, std::memory_order_relaxed);
+}
 
 // The program's age, from this translation unit's static initialisation (see Pipeline::processMsAtFirstDrain).
 const std::chrono::steady_clock::time_point g_processStart = std::chrono::steady_clock::now();
@@ -65,14 +79,16 @@ thread_local cascade::core::beats::Registration* t_dspBeat = nullptr;
 // THE BEAT WORDS, as an index (2026-11-23): the same words the heartbeat has always carried, now also the phases the minute's gap accounting
 // attributes time to. A phase is the span from one dspBeat call to the next.
 enum DspPhase : unsigned {
-    kPhRing, kPhSpectrum, kPhAudioLock, kPhTaps, kPhPluginIq, kPhPatch, kPhDemod, kPhPluginAudio, kPhPluginChain, kPhSink, kPhCount
+    kPhRing, kPhSpectrum, kPhAudioLock, kPhTaps, kPhPluginIq, kPhPatch, kPhDemod, kPhPluginAudio, kPhHostAudio, kPhPluginChain, kPhSink, kPhCount
 };
+// "plugin-audio" is ONLY the call into the plugins' audio taps; "host-audio" is the host's own audio chain after it (AGC, squelch, resampler,
+// notch, noise reduction, equaliser): the review of 70d16f00 found the one word covering both.
 constexpr const char* kDspPhaseNames[kPhCount] = {"ring",      "spectrum",     "audio-lock",   "taps",         "plugin-iq",
-                                                  "patch",     "demod",        "plugin-audio", "plugin-chain", "sink"};
+                                                  "patch",     "demod",        "plugin-audio", "host-audio",   "plugin-chain", "sink"};
 static_assert(kPhCount <= 16, "the gap mark packs the phase index in four bits");
 
 // THE LONGEST GAP BETWEEN TWO RING READS, and the phase the thread spent most of it in. DSP thread only (thread_local), written to the
-// pipeline's atomic through t_gapMark; one clock read per beat (about ten a block: negligible against a block's own work).
+// pipeline's atomic through t_gapMark; ONE clock read per beat, shared with the thread's heartbeat (Registration::beat(phase, now)).
 struct DspGapTrack {
     std::chrono::steady_clock::time_point lastRead{};     // the previous "ring" beat
     std::chrono::steady_clock::time_point phaseSince{};
@@ -85,8 +101,8 @@ thread_local std::atomic<std::uint64_t>* t_gapMark = nullptr;   // Pipeline::dsp
 
 inline void dspBeat(DspPhase p) {
     if (t_dspBeat == nullptr) { return; }
-    t_dspBeat->beat(kDspPhaseNames[p]);
     const auto now = std::chrono::steady_clock::now();
+    t_dspBeat->beat(kDspPhaseNames[p], now);   // (the same timestamp: the heartbeat used to read the clock again)
     DspGapTrack& g = t_gap;
     if (g.have) {
         g.ns[g.phase] += static_cast<std::uint64_t>(std::max<long long>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(now - g.phaseSince).count()));
@@ -792,7 +808,7 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         const std::size_t ringWant = ringCapacityForActiveSourceLocked();
         const bool newRing = ring_->capacity() != ringWant;
         if (newRing && dspThread_.joinable()) {
-            dspAbsent_.store(true, std::memory_order_relaxed);   // (cleared by the respawned DSP thread: see ringDroppedAbsent)
+            markDspAbsent(kAbsentSwitch);   // (cleared by the respawned DSP thread, or bounded by kDspAbsentMaxMs: see ringDroppedAbsent)
             dspRun_.store(false, std::memory_order_relaxed);
             dspThread_.join();
         }
@@ -816,8 +832,72 @@ std::size_t Pipeline::ringCapacity() {
 }
 
 void Pipeline::setDspStartDelayForTest(int ms) { g_dspStartDelayMs.store(ms, std::memory_order_relaxed); }
-void Pipeline::setDspBlockDelayForTest(int ms) { g_dspBlockDelayMs.store(ms, std::memory_order_relaxed); }
+void Pipeline::setDspBlockDelayForTest(int ms) {
+    g_dspBlockDelayMs.store(ms, std::memory_order_relaxed);
+    refreshBlockSeam();
+}
 void Pipeline::setDspFlushDenormalsForTest(bool on) { g_dspFlushDenormals.store(on, std::memory_order_relaxed); }
+void Pipeline::setDspBlockLoadForTest(int burnMs, int sleepMs) {
+    g_dspBurnMs.store(burnMs, std::memory_order_relaxed);
+    g_dspSleepInSpanMs.store(sleepMs, std::memory_order_relaxed);
+    refreshBlockSeam();
+}
+void Pipeline::setDspHostAudioDelayForTest(int ms) {
+    g_dspHostAudioDelayMs.store(ms, std::memory_order_relaxed);
+    refreshBlockSeam();
+}
+void Pipeline::probeDspMxcsrForTest(bool on) {
+    g_dspProbeMxcsr.store(on, std::memory_order_relaxed);
+    g_dspMxcsrSeen.store(0, std::memory_order_relaxed);
+    refreshBlockSeam();
+}
+std::uint32_t Pipeline::dspMxcsrSeenForTest() { return g_dspMxcsrSeen.load(std::memory_order_relaxed); }
+std::uint32_t Pipeline::currentMxcsrForTest() {
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+    return _mm_getcsr();
+#else
+    return 0;
+#endif
+}
+
+namespace {
+std::int64_t steadyNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+
+// THE ABSENCE BEGINS NOW (the controlling thread, BEFORE the deliberate join or spawn): the clock and the cause are stored first, then the
+// time that opens the window - the source thread reads the time first and the cause only for a line, so a cause is never behind its window.
+void Pipeline::markDspAbsent(AbsentCause why) {
+    dspAbsentCause_.store(static_cast<int>(why), std::memory_order_relaxed);
+    const std::int64_t now = steadyNowNs();
+    dspAbsentSinceNs_.store(now > 0 ? now : 1, std::memory_order_relaxed);
+}
+
+bool Pipeline::dspAbsentActive() const {
+    const std::int64_t since = dspAbsentSinceNs_.load(std::memory_order_relaxed);
+    return since != 0 && steadyNowNs() - since <= static_cast<std::int64_t>(kDspAbsentMaxMs) * 1000000;
+}
+
+const char* Pipeline::dspAbsentCauseWord() const {
+    switch (dspAbsentCause_.load(std::memory_order_relaxed)) {
+        case kAbsentStart: return "start";
+        case kAbsentRate: return "rate-change";
+        case kAbsentSwitch: return "source-switch";
+        default: return "none";
+    }
+}
+
+std::uint64_t Pipeline::msSinceStart() const {
+    const std::int64_t at = startedAtNs_.load(std::memory_order_relaxed);
+    if (at == 0) { return 0; }
+    const std::int64_t d = steadyNowNs() - at;
+    return d > 0 ? static_cast<std::uint64_t>(d / 1000000) : 1u;
+}
+
+void Pipeline::setStartedAgoForTest(int ms) {
+    startedAtNs_.store(steadyNowNs() - static_cast<std::int64_t>(ms) * 1000000, std::memory_order_relaxed);
+}
 
 std::uint64_t Pipeline::takeDspGapLongest(const char** phase) {
     const std::uint64_t packed = dspGapLongestPacked_.exchange(0, std::memory_order_relaxed);
@@ -861,8 +941,8 @@ std::uint64_t Pipeline::takeDspBlockLongestNs() {
 void Pipeline::noteRingWrite(std::size_t got, std::size_t put) {
     // THE LONGEST GAP BETWEEN TWO WRITES (2026-11-23): the source side of "who was late". Two relaxed atomics and a clock read per write
     // (one write per 10 ms chunk).
+    const std::int64_t nowNs = steadyNowNs();
     {
-        const std::int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         const std::int64_t prev = srcLastWriteNs_.exchange(nowNs, std::memory_order_relaxed);
         if (prev > 0 && nowNs > prev) {
             const std::uint64_t gap = static_cast<std::uint64_t>(nowNs - prev);
@@ -872,8 +952,11 @@ void Pipeline::noteRingWrite(std::size_t got, std::size_t put) {
         }
     }
     if (put < got) {
-        if (dspAbsent_.load(std::memory_order_relaxed)) {
-            // The DSP thread is deliberately not there (a respawn, a rate change's chain rebuild): not a ringdrop.
+        // THE ABSENT WINDOW IS BOUNDED (review of 70d16f00, finding 1): the DSP thread is excused for kDspAbsentMaxMs after the absence began
+        // (a respawn, a rate change's chain rebuild, a thread start) and not a millisecond longer - a thread that has still not read the
+        // ring after that is a consumer that is not keeping up, and what is cut from then on is an ordinary drop.
+        const std::int64_t since = dspAbsentSinceNs_.load(std::memory_order_relaxed);
+        if (since != 0 && nowNs - since <= static_cast<std::int64_t>(kDspAbsentMaxMs) * 1000000) {
             ringDroppedAbsent_.fetch_add(got - put, std::memory_order_relaxed);
         } else {
             ringDropped_.fetch_add(got - put, std::memory_order_relaxed);
@@ -1067,7 +1150,8 @@ void Pipeline::start() {
 
     // The source thread below writes before the DSP thread can have started: that window is the application's own start, not a
     // consumer falling behind (cleared by the DSP thread at its first ring read).
-    dspAbsent_.store(true, std::memory_order_relaxed);
+    markDspAbsent(kAbsentStart);
+    startedAtNs_.store(steadyNowNs(), std::memory_order_relaxed);
     run_.store(true, std::memory_order_relaxed);
     srcRun_.store(true, std::memory_order_relaxed);
     dspRun_.store(true, std::memory_order_relaxed);
@@ -2088,7 +2172,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
     if (dspThread_.joinable()) {
         // The source keeps writing while the consumer is gone: what the ring cannot hold meanwhile is counted as ABSENT, not as a
         // ringdrop (ringDroppedAbsent). Only on the live path, where the respawn below clears it again.
-        if (live) { dspAbsent_.store(true, std::memory_order_relaxed); }
+        if (live) { markDspAbsent(kAbsentRate); }
         dspRun_.store(false, std::memory_order_relaxed);
         dspThread_.join();
     }
@@ -2251,7 +2335,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
                 // respawned beside it: stop here as a fault, not a second thread
                 // in a vendor stack (the setSource policy).
                 noteThreadFault("source thread", "did not stop for the ring to follow the new sample rate");
-                dspAbsent_.store(false, std::memory_order_relaxed);   // (no respawn follows: a fault, not a pause)
+                dspAbsentSinceNs_.store(0, std::memory_order_relaxed);   // (no respawn follows: a fault, not a pause)
                 return true;
             }
             active_->start();
@@ -2688,7 +2772,7 @@ void Pipeline::dspThreadBody() {
     if (g_dspFlushDenormals.load(std::memory_order_relaxed)) { _mm_setcsr(_mm_getcsr() | 0x8040u); }   // FTZ (bit 15) and DAZ (bit 6)
 #endif
     // FROM HERE THE DSP THREAD READS THE RING: what the source cannot write from now on is a consumer that fell behind.
-    dspAbsent_.store(false, std::memory_order_relaxed);
+    dspAbsentSinceNs_.store(0, std::memory_order_relaxed);
     // THE FIRST DRAIN, once per pipeline: the engine's digest minutes start from here (never 0: 0 means "not yet").
     if (firstDrainProcessMs_.load(std::memory_order_relaxed) == 0) {
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_processStart).count();
@@ -2734,10 +2818,27 @@ void Pipeline::dspThreadBody() {
         // Duplicate the same drained block into the audio path (the spectrum
         // path above is untouched — both consume identical samples).
         processAudioBlock(acc.data(), n);
+        // (test seams only, behind ONE relaxed load a block: a known load inside the block's own span, the control word the thread sees, and a
+        // loss minute on demand after it.)
+        const bool seamArmed = g_dspBlockSeam.load(std::memory_order_relaxed) != 0;
+        if (seamArmed) {
+            if (const int burnMs = g_dspBurnMs.load(std::memory_order_relaxed); burnMs > 0) {
+                const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(burnMs);
+                volatile double sink = 1.0;
+                while (std::chrono::steady_clock::now() < until) { sink = sink * 1.0000001 + 1e-9; }
+            }
+            if (const int napMs = g_dspSleepInSpanMs.load(std::memory_order_relaxed); napMs > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(napMs));
+            }
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+            if (g_dspProbeMxcsr.load(std::memory_order_relaxed)) { g_dspMxcsrSeen.store(_mm_getcsr(), std::memory_order_relaxed); }
+#endif
+        }
         noteDspBlock(std::chrono::steady_clock::now() - blockBegan);
-        // (test seam only: a loss minute on demand. One relaxed load a block.)
-        if (const int blockDelayMs = g_dspBlockDelayMs.load(std::memory_order_relaxed); blockDelayMs > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(blockDelayMs));
+        if (seamArmed) {
+            if (const int blockDelayMs = g_dspBlockDelayMs.load(std::memory_order_relaxed); blockDelayMs > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(blockDelayMs));
+            }
         }
     }
     publishDspCpu();   // the thread's last CPU time, so a short run is not under-counted
@@ -3050,6 +3151,14 @@ void Pipeline::processAudioBlock(const std::complex<float>* in, std::size_t n) {
             resamplerD_.process(preAgcBuf_.data(), m, decoderFeed_.data(), dcap);
         dspBeat(kPhPluginAudio);
         if (dk > 0) { runner->processAudio(decoderFeed_.data(), dk); }
+    }
+    // FROM HERE THE HOST'S OWN AUDIO CHAIN (AGC, squelch, resampler, notch, noise reduction, equaliser): its own phase word, so a long gap in
+    // it is not named for a plugin (review of 70d16f00, finding 6).
+    dspBeat(kPhHostAudio);
+    if (g_dspBlockSeam.load(std::memory_order_relaxed) != 0) {   // (test seam only: one relaxed load a block)
+        if (const int hostMs = g_dspHostAudioDelayMs.load(std::memory_order_relaxed); hostMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(hostMs));
+        }
     }
 
     ilvBuf_.resize(2 * m);

@@ -266,6 +266,8 @@ struct AppWindowTestAccess {
         });
     }
     static bool armed(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).rx().dspMinuteArmed_; }); }
+    // An output opened (the sink's own count, as test_audio_lead_app bumps it): the "audio" event the DSP minute names.
+    static void noteAudioOpen(AppWindow& a) { th::engine(a).pipeline_.audio().noteOpenForTest(); }
 };
 
 }  // namespace cascade::gui
@@ -478,31 +480,37 @@ int main() {
         {
             std::string lineA;
             std::string lineB;
+            std::string lineC;
             for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) {
                 if (l.find("dsp minute: dropped=") != std::string::npos) { lineA = l; }
-                if (l.find("dsp minute: src_longest_gap_ms=") != std::string::npos) { lineB = l; }
+                if (l.find("dsp minute: busy_ms=") != std::string::npos) { lineB = l; }
+                if (l.find("dsp minute: src_longest_gap_ms=") != std::string::npos) { lineC = l; }
             }
-            std::printf("minute line A: %s\nminute line B: %s\n", lineA.c_str(), lineB.c_str());
-            CHECK(!lineA.empty() && !lineB.empty());
+            std::printf("minute line A: %s\nminute line B: %s\nminute line C: %s\n", lineA.c_str(), lineB.c_str(), lineC.c_str());
+            CHECK(!lineA.empty() && !lineB.empty() && !lineC.empty());
             CHECK(numberAfter(lineA, "dropped=") == static_cast<long long>(stalledDropped));
             CHECK(lineA.find(" pct=") != std::string::npos);
-            CHECK(numberAfter(lineA, " busy_ms=") >= 2500);
-            CHECK(numberAfter(lineA, " longest_gap_ms=") >= 2500);
-            CHECK(lineA.find(" gap_phase=audio-lock ") != std::string::npos);
-            CHECK(numberAfter(lineA, " blocks=") >= 1);
             CHECK(numberAfter(lineA, " ring_high_pct=") == 100);
-            CHECK(lineA.find(" cpu_ms=") != std::string::npos);
-            if (lineA.find(" cpu_ms=unknown") == std::string::npos) { CHECK(numberAfter(lineA, " cpu_ms=") < 1500); }   // not the 3 s it waited
-            CHECK(numberAfter(lineB, " absent_discards=") == 0);
-            CHECK(lineB.find(" events=none") != std::string::npos);
-            CHECK(lineB.find(" gen_resyncs=") != std::string::npos && lineB.find(" gen_skipped_ms=") != std::string::npos);
-            CHECK(lineA.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
-            CHECK(lineB.size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
-            CHECK(cascade::core::scrubUploadLine(lineA) == lineA);
-            CHECK(cascade::core::scrubUploadLine(lineB) == lineB);
+            CHECK(lineA.find(" events=none") != std::string::npos);
+            // THE MINUTE'S REAL LENGTH (review of 70d16f00, finding 6): len_ms is there, so busy_ms can be read against it.
+            CHECK(numberAfter(lineA, " len_ms=") >= 3000);
+            CHECK(numberAfter(lineB, " busy_ms=") >= 2500);
+            CHECK(numberAfter(lineB, " longest_gap_ms=") >= 2500);
+            CHECK(lineB.find(" gap_phase=audio-lock") != std::string::npos);
+            CHECK(numberAfter(lineB, " blocks=") >= 1);
+            CHECK(lineB.find(" cpu_ms=") != std::string::npos);
+            if (lineB.find(" cpu_ms=unknown") == std::string::npos) { CHECK(numberAfter(lineB, " cpu_ms=") < 1500); }   // not the 3 s it waited
+            CHECK(numberAfter(lineC, " absent_discards=") == 0);
+            CHECK(lineC.find(" gen_resyncs=") != std::string::npos && lineC.find(" gen_skipped_ms=") != std::string::npos);
+            // (the log's own line is held at 191 characters INCLUDING its 18-character stamp; the lines here are read back as the log holds them)
+            for (const std::string* l : {&lineA, &lineB, &lineC}) {
+                CHECK(l->size() < static_cast<std::size_t>(cascade::core::DiagLog::kLineBytes - 1));
+                CHECK(cascade::core::scrubUploadLine(*l) == *l);
+            }
             // ...and they are in the filed report: the row is written after them.
             const std::string filedNow = ringdropReportText();
             CHECK(filedNow.find("dsp minute: dropped=") != std::string::npos);
+            CHECK(filedNow.find("dsp minute: busy_ms=") != std::string::npos);
             CHECK(filedNow.find("dsp minute: src_longest_gap_ms=") != std::string::npos);
         }
         // THE FEED ROW (0.99.102): a minute that lost two rings of three is far over
@@ -539,11 +547,12 @@ int main() {
         CHECK(ringdropReports() == 1);                   // once a session, and no new row
     }
 
-    // --- 3b. A MINUTE WITH A DELIBERATE EVENT IS LOGGED, NOT FILED (2026-11-23) ---------------------------------------------------
-    // The audio digest has always skipped a minute that reloaded plugins; the DSP digest had no rule, so a rate change's own rebuild or a
-    // decoder's slow wake filed a `ringdrop` row on a machine that was keeping up. One event mask now serves both digests
-    // (core/minute_events.hpp); three consecutive LOSS minutes are filed whatever they held. A plugin rescan is the event used here: it
-    // is the engine's own counter, bumped as the audio test does.
+    // --- 3b. NO EVENT EXCUSES A LOSS MINUTE (review of 70d16f00, finding 3) --------------------------------------------------------------
+    // The first version of this branch judged minutes through a mask of the application's own events: a minute that held a plugin wake, a rate
+    // change, a source switch or an output open was "logged, not filed" (and filed only when it was the third loss minute in a row). That hid
+    // real loss - a genuine drop is a drop whatever else happened in the minute, and the deliberate pause is already out of the count. The
+    // events are NAMED in the minute's line (events=) and decide nothing: a loss minute is filed with or without them. (Deliberate decision of
+    // the review: the two cases this section used to assert - "logged, not filed" and "the third in a row is filed" - are gone.)
     {
         auto stallMinute = [&](bool close = true) {
             CHECK(drained(p));
@@ -565,43 +574,39 @@ int main() {
             }
             return n;
         };
-        cascade::core::issue::resetIssueReportsForTest();
-        const std::size_t base = ringdropReports();
         const std::size_t notFiledBefore = countLines("logged, not filed as a fault");
 
-        // (a) an event minute: the loss is logged with the event named, and no report is filed.
+        // (a) a minute that held a plugin event IS filed, and the event is named.
+        cascade::core::issue::resetIssueReportsForTest();
+        const std::size_t base = ringdropReports();
         Access::noteRescan(app);
         stallMinute();
-        CHECK(ringdropReports() == base);
-        CHECK(countLines("logged, not filed as a fault") == notFiledBefore + 1);
-        CHECK(countLines(" absent_discards=") >= 1);
-        CHECK(countLines("events=plugins") >= 1);
-        // (b) the same loss in a clean minute IS filed (the second loss minute in a row: the run is 2, the mask 0).
-        stallMinute();
         CHECK(ringdropReports() == base + 1);
-        // (c) THREE CONSECUTIVE LOSS MINUTES ARE FILED WHATEVER THEY HELD: a clean minute ends the run, two event minutes are
-        // discounted, the third is filed.
-        CHECK(drained(p));
-        Access::closeDspMinute(app);                       // nothing lost: the run restarts
+        CHECK(countLines("events=plugins") >= 1);
+        CHECK(countLines("logged, not filed as a fault") == notFiledBefore);   // the sentence is gone from the program
+        // (b) ...and so is one that held an output open (the other kind a test can make on its own).
+        cascade::core::issue::resetIssueReportsForTest();
+        const std::size_t base2 = ringdropReports();
+        Access::noteAudioOpen(app);
+        stallMinute();
+        CHECK(ringdropReports() == base2 + 1);
+        CHECK(countLines("events=audio") >= 1);
+        // (c) ...and a loss minute with every kind at once.
         cascade::core::issue::resetIssueReportsForTest();
         const std::size_t base3 = ringdropReports();
         Access::noteRescan(app);
+        Access::noteAudioOpen(app);
         stallMinute();
-        CHECK(ringdropReports() == base3);
-        Access::noteRescan(app);
-        stallMinute();
-        CHECK(ringdropReports() == base3);
-        Access::noteRescan(app);
-        stallMinute();
-        CHECK(ringdropReports() == base3 + 1);             // the third in a row
+        CHECK(ringdropReports() == base3 + 1);
+        CHECK(countLines("events=plugins|audio") >= 1);
         CHECK(drained(p));
         Access::closeDspMinute(app);
 
-        // --- 3c. THE FIRST MINUTE STARTS WITH THE STREAM, NOT WITH THE ENGINE (2026-11-23) --------------------------------------------
+        // --- 3c. THE DIGEST CLOCK ARMS AT THE FIRST DRAIN; THE FIRST JUDGED MINUTE IS A FULL ONE; NOTHING AFTER ARMING IS EXCUSED --------------
         // The engine's minute clock used to start at its construction, so the first minute held the plugin scan, the saved radio's open and the
-        // window's creation (117 of the field's ringdrop reports and 72 of its audiolead reports are a session's first minute). Now no minute
-        // closes before the DSP thread has read the ring AND ten seconds have passed, the marks are taken then, and the first minute is the
-        // sixty seconds after. The engine's clock is aged here instead of waited for.
+        // window's creation (117 of the field's ringdrop reports and 72 of its audiolead reports are a session's first minute). It now arms when the
+        // DSP thread has read the ring - and from then on the minute is judged like any other: there is NO grace that excuses loss (review of
+        // 70d16f00; the earlier ten-second grace is gone). The engine's clock is aged here instead of waited for.
         cascade::core::issue::resetIssueReportsForTest();
         Access::unarm(app);
         const std::size_t rep0 = ringdropReports();
@@ -609,30 +614,72 @@ int main() {
         const std::size_t drains0 = countLines("dsp: first drain ");
         const std::size_t machine0 = countLines("machine: power=");
         Access::ageSession(app, 100.0);                     // an old engine: the old rule would close the first minute at the next poll
-        Access::pollDspMinute(app);                         // the pass sees the stream: the time to first drain is said, once
+        stallMinute(false);                                 // start-up loss BEFORE the clock arms: nobody's minute
+        Access::pollDspMinute(app);                         // the pass sees the stream: arms, and says the time to first drain, once
+        CHECK(Access::armed(app));
         CHECK(countLines("dsp: first drain ") == drains0 + 1);
         CHECK(countLines("machine: power=") == machine0 + 1);   // ...with the machine's state, once, at the start
-        CHECK(!Access::armed(app));
-        stallMinute(false);                                 // the set-up window loses samples
-        Access::ageSession(app, 5.0);
-        Access::pollDspMinute(app);
-        CHECK(!Access::armed(app));                         // inside the grace: no minute, no marks
         CHECK(dropLines().size() == drops0);
-        Access::ageSession(app, 6.0);
+        stallMinute(false);                                 // loss right after arming: NOT excused
+        Access::ageSession(app, 30.0);
         Access::pollDspMinute(app);
-        CHECK(Access::armed(app));                          // the grace is over: the marks are taken HERE, after the loss
-        Access::ageSession(app, 61.0);
-        Access::pollDspMinute(app);                         // the first minute: clean
-        CHECK(dropLines().size() == drops0);                // what the set-up window lost is nobody's minute
-        CHECK(ringdropReports() == rep0);
+        CHECK(dropLines().size() == drops0);                // the first judged minute is a FULL minute: not closed at 30 s
+        Access::ageSession(app, 31.0);
+        Access::pollDspMinute(app);
+        CHECK(dropLines().size() == drops0 + 1);            // closed at 61 s
+        CHECK(ringdropReports() == rep0 + 1);               // and filed
         CHECK(countLines("dsp: first drain ") == drains0 + 1);   // said once
-        stallMinute(false);                                 // a loss INSIDE the first judged minute
-        Access::ageSession(app, 61.0);
-        Access::pollDspMinute(app);
-        CHECK(dropLines().size() == drops0 + 1);
-        CHECK(ringdropReports() == rep0 + 1);
         CHECK(drained(p));
         Access::closeDspMinute(app);
+
+        // --- 3d. THE CLOCK ALWAYS ARMS: ten seconds after the start, though the DSP thread never read the ring (finding 1) ------------------
+        {
+            cascade::core::Pipeline& pp = p;
+            Access::unarm(app);
+            pp.resetFirstDrainForTest();                    // a DSP thread that has not arrived
+            const std::size_t noDrain0 = countLines("had not read the ring");
+            pp.setStartedAgoForTest(1000);
+            Access::pollDspMinute(app);
+            CHECK(!Access::armed(app));                     // one second after the start: still waiting for it
+            pp.setStartedAgoForTest(10500);
+            Access::pollDspMinute(app);
+            CHECK(Access::armed(app));                      // ten seconds: armed anyway, and the log says why
+            CHECK(countLines("had not read the ring") == noDrain0 + 1);
+            CHECK(countLines("dsp: first drain ") == drains0 + 1);   // (not the drain line)
+            Access::closeDspMinute(app);
+        }
+
+        // --- 3e. A DSP THREAD THAT ARRIVES 5 s LATE: the first 2 s are absent, the rest are drops, and a ringdrop is filed (finding 1) ------
+        // The engine's own pipeline is restarted with the start delay seam. Samples the ring cannot hold in the first 2 s are the application's
+        // own start (said in the log, with the event that began it); after that the thread is simply not there and the loss is an ordinary
+        // drop - filed. Break-it: take the 2 s bound out of Pipeline::noteRingWrite and the drop count stays 0, so no report is filed.
+        {
+            p.stop();
+            cascade::core::Pipeline::setDspStartDelayForTest(5000);
+            cascade::core::issue::resetIssueReportsForTest();
+            Access::closeDspMinute(app);                    // a fresh mark
+            const std::uint64_t dropped0 = p.ringDroppedSamples();
+            const std::uint64_t absent0 = p.ringDroppedAbsent();
+            const std::size_t rep = ringdropReports();
+            const std::size_t absentLines0 = countLines("samples discarded while the DSP thread was absent");
+            p.start();
+            CHECK(p.running());
+            src->grant(3 * static_cast<std::uint64_t>(ring));
+            CHECK(waitFor([&] { return p.ringDroppedAbsent() > absent0 + ring; }));
+            CHECK(p.ringDroppedSamples() == dropped0);       // inside 2 s: absent, not a drop
+            CHECK(waitFor([&] { return !p.dspAbsentActive(); }, 6000));
+            src->grant(2 * static_cast<std::uint64_t>(ring));
+            CHECK(waitFor([&] { return p.ringDroppedSamples() > dropped0 + ring / 2; }));   // after 2 s: ordinary drops
+            Access::pollDspMinute(app);                      // the pass says the episode (before the DSP thread ever arrived)
+            CHECK(countLines("samples discarded while the DSP thread was absent") == absentLines0 + 1);
+            CHECK(countLines("began with: start") >= 1);
+            Access::closeDspMinute(app);
+            CHECK(ringdropReports() == rep + 1);             // a ringdrop IS filed
+            cascade::core::Pipeline::setDspStartDelayForTest(0);
+            CHECK(waitFor([&] { return p.dspHasDrained(); }, 12000));
+            CHECK(drained(p));
+            Access::closeDspMinute(app);
+        }
     }
 
     // --- 4. THE BUNDLE carries the running total and what was read ----------------------
@@ -705,14 +752,16 @@ int main() {
         CHECK(closeFn != std::string::npos && closeEnd != std::string::npos);
         if (closeFn != std::string::npos && closeEnd != std::string::npos) {
             const std::string body = srcText.substr(closeFn, closeEnd - closeFn);
-            // (the floor is the loss minute's test since the event discounts of 2026-11-23: the filing is behind `if (judged)`, and
-            // `judged` is the loss minute - the floor - passed through the shared event mask)
+            // (the filing is behind `if (lossMinute)` and NOTHING ELSE: `lossMinute` is the floor test and no event, run of minutes or start-up
+            // grace is in the decision - review of 70d16f00, finding 3)
             const std::size_t floor = body.find("ringDropWorthAReport(dropped, read)");
             const std::size_t file = body.find("fileIssueReport(cascade::core::health::Recovered::RingDrop)");
-            const std::size_t gate = body.find("if (judged)");
-            CHECK(gate != std::string::npos && gate < file);
-            CHECK(body.find("minuteJudged(lossMinute, events") != std::string::npos);
-            CHECK(floor != std::string::npos && file != std::string::npos && floor < file);
+            const std::size_t gate = body.find("if (lossMinute)");
+            CHECK(gate != std::string::npos && file != std::string::npos && gate < file);
+            CHECK(body.find("minuteJudged") == std::string::npos);
+            CHECK(body.find("judged") == std::string::npos);
+            CHECK(body.find("LossRun") == std::string::npos);
+            CHECK(floor != std::string::npos && floor < file);
             // ...and AFTER the line that describes the minute (the order is also proved by section 2's read of the filed report).
             const std::size_t described = body.find("dsp: ring high water");
             CHECK(described != std::string::npos && described < file);
