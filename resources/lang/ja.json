@@ -124,7 +124,7 @@
   "%s image": "%s 画像",
   "%s is already in the frequency list (%zu frequencies).": "%sは既にブックマークにあります（%zu周波数）。",
   "%s is available": "%s が利用可能です",
-  "%s is in use by another FoxSDR window on this PC. Move it here? The other window will stop using it and show a notice.": "%s はこの PC 上の別の FoxSDR ウィンドウで使用中です。ここに移動しますか？ 別のウィンドウは使用を停止し、通知を表示します。",
+  "%s is in use by another FoxSDR window on this PC. Move it here? The other window will stop using it and show a notice.": "%sはこの PC 上の別の FoxSDR ウィンドウで使用中です。ここに移動しますか？別のウィンドウは使用を停止し、通知を表示します。",
   "%s is in use by another program. Close that program, then pick the radio again.": "%s は別のプログラムで使用中です。そのプログラムを閉じてから、もう一度 SDR を選択してください。",
   "%s is no longer being plotted - it has gone quiet or left the selected range.": "%s は描画されなくなりました。受信が途絶えたか、選択範囲外に出ました。",
   "%s is not an AOR receiver: it answered VR with \"%s\".": "%s は AOR 受信機ではありません。VR に「%s」と応答しました。",
