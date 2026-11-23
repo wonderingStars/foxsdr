@@ -69,6 +69,37 @@ WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, cons
 struct StartFit { std::uint32_t w = 0, h = 0; int x = 0, y = 0; bool maximise = false; float minW = 0.0f, minH = 0.0f; };
 StartFit fitStartWindow(float wantW, float wantH, float minW, float minH, float scale, const WorkRect& work, int curX, int curY);
 
+// THE HOLD AFTER THE START FIT (user bug C review, C1 + C2). A size or place set before the system has mapped the window is not always kept (it maps the window at its own default size and place a
+// moment after the first ask), so the fit is asked again on the first ticks - but the hold must end the moment the USER has the window. The host ends it at once on the user's own calls (a title drag,
+// an edge drag, the maximise and minimise keys, the maximise shortcut: windowUserTouched in main.cpp); this class judges what only the window itself can tell. On each look it is given the window as it
+// is NOW. Until the system has TAKEN the fit (the fit's size and place seen on two looks in a row) a different size or place is the system settling: asked again. After that, ANY other size or place
+// is the user's (a Win+Arrow snap, a drag by the system): `User`, and the window is never touched again. A window the user maximised (the fit did not), or minimised, is the user's at any time. A window
+// that starts minimised or maximised (a shortcut set to "Run: Minimized" / "Maximized") is left exactly as it is (`User` on the first look). The hold also ends (`Finished`) after `kMaxTicks` looks or
+// `kMaxMs` milliseconds, whichever comes first, and once a window the fit maximised has stayed maximised. Where the fit maximises, the size and place are applied FIRST (the work area) and the
+// maximise after, so that a later Restore gives a window that fits the screen, not the oversized one the system opened.
+struct HoldLook { std::uint32_t w = 0, h = 0; int x = 0, y = 0; bool maximised = false, minimised = false; };
+struct HoldAction {
+    enum class Kind { Reassert, Finished, User };
+    Kind kind = Kind::Reassert;
+    bool setSize = false, setPlace = false, setMaximised = false;   // for Reassert: what to ask the window for (size and place before the maximise)
+};
+class StartHold {
+public:
+    static constexpr int kMaxTicks = 20;
+    static constexpr std::int64_t kMaxMs = 1500;
+    void begin(const HoldLook& before, const StartFit& fit);
+    // `nowMs`: a monotonic clock in milliseconds. After User or Finished every later call answers the same.
+    HoldAction look(const HoldLook& now, std::int64_t nowMs);
+    bool over() const { return over_; }
+private:
+    HoldLook before_;
+    StartFit fit_;
+    std::int64_t startMs_ = -1;
+    int looks_ = 0, stable_ = 0;
+    bool over_ = false, matched_ = false;
+    HoldAction::Kind last_ = HoldAction::Kind::Finished;
+};
+
 // THE DRAG OF A WINDOW EDGE (the frameless window's three resize edges, ui/main.slint). Until drive fixes 7 an edge reported how far the pointer was from where it was pressed, measured
 // from the EDGE ITSELF, and the host asked for "the size the window has now plus that distance". That is right only if the window has already taken the last size asked for when the
 // next pointer move arrives. It has not: the size is applied a frame or more later, so every move that arrived in between added the same distance again, the window overshot, the

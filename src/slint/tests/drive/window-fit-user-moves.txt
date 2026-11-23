@@ -1,0 +1,10 @@
+#! frames=140 FOXSDR_SLINT_WORK_AREA=1366x728 FOXSDR_SLINT_USER_ACT=3:move
+# window-fit-user-moves (user bug C, review C2): the fit is held for the first ticks while the system settles, but the moment the USER has the window it lets go: a title drag on tick 3 (the seam does what the
+# title bar does) is NOT undone on the next tick, nor later. The fit put the window at 0,0 at 1366 x 728; the drag moved it by 60 x 40 logical pixels (scale 1.00) and it stays there.
+10 state running == 1
+state look.x == 60
+state look.y == 40
+state look.physw == 1366
+state look.physh == 728
++60 state look.x == 60
+state look.y == 40

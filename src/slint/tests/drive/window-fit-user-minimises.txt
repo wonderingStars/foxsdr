@@ -1,0 +1,5 @@
+#! frames=140 FOXSDR_SLINT_WORK_AREA=1366x728 FOXSDR_SLINT_USER_ACT=3:minimise
+# window-fit-user-minimises (user bug C, review C2): a minimise on tick 3 leaves the fit's hold at once: the window is still minimised long after the hold would have run out and was never asked for a size or place again.
+10 state running == 1
+state look.minimised == 1
++60 state look.minimised == 1

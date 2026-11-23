@@ -1,11 +1,25 @@
-#! frames=160 FOXSDR_SLINT_WORK_AREA=1024x560
-# window-fit-start-tiny (user bug C): a work area under the smallest window (a 1024 x 600 screen: 560 high, under the 640 minimum): the window is maximised (here: sized to the seam's work area, as the seam's work area
-# is not the real monitor) and the minimum for the session is lowered to what the screen has, 1024 x 560. The drag edges then allow no smaller window than that.
+#! frames=260 FOXSDR_SLINT_WORK_AREA=1024x560
+# window-fit-start-tiny (user bug C): a work area under the smallest window (a 1024 x 600 screen: 560 high, under the 640 minimum): the window is MAXIMISED FOR REAL (the seam replaces only what the code believes the
+# work area is; the system's maximise then fills the real monitor of this desktop) and the minimum for the session is lowered to what the screen has, 1024 x 560. The drag edges then allow no smaller window than that.
+# REVIEW C1: the size and the place are applied BEFORE the maximise, so a Restore (F11 here, the same shortcut the title bar's maximise key and a double click on the title make) gives the fitted window - inside the
+# seam's work area - and not the 1600 x 900 one the system opened, which was larger than the screen.
 10 state running == 1
+state look.startmax == 1
+state look.minw == 1024
+state look.minh == 560
++20 state look.maximised == 1
++1 key f11
++20 state look.maximised == 0
 state look.physw == 1024
 state look.physh == 560
 state look.x == 0
 state look.y == 0
-state look.startmax == 1
-state look.minw == 1024
-state look.minh == 560
+# maximise and restore again: the same window comes back
++1 key f11
++20 state look.maximised == 1
++1 key f11
++20 state look.maximised == 0
+state look.physw == 1024
+state look.physh == 560
+state look.x == 0
+state look.y == 0

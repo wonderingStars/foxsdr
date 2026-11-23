@@ -362,6 +362,86 @@ void windowSizeAtEverySize(int screenW, int screenH) {   // the work area of the
             }
         }
     }
+    // THE HOLD AFTER THE FIT (review C1 + C2): the fit is held while the system settles, and let go of the moment the USER has the window
+    {
+        const StartFit fit = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{0, 0, 1366, 728}, 104, 104);   // 1366 x 728 at 0,0
+        const HoldLook before{1600, 900, 104, 104, false, false};
+        const auto fresh = [&](const StartFit& f, const HoldLook& b) { StartHold h; h.begin(b, f); return h; };
+        {   // a normal start: asked; the system maps the window at ITS size and place after the first ask (not the user's: asked again); then it takes the fit; the hold runs out
+            StartHold h = fresh(fit, before);
+            HoldAction a = h.look(before, 0);
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace && !a.setMaximised);
+            a = h.look(HoldLook{1600, 900, 156, 156, false, false}, 33);   // mapped at the system's default place: not the user's
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace);
+            a = h.look(HoldLook{1366, 728, 156, 156, false, false}, 66);   // the size was taken, the place not yet
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && a.setPlace);
+            a = h.look(HoldLook{1366, 728, 0, 0, false, false}, 99);       // both taken: nothing more to ask
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && !a.setPlace);
+            bool ended = false;
+            for (int i = 0; i < 40 && !ended; ++i) { ended = h.look(HoldLook{1366, 728, 0, 0, false, false}, 130 + i * 33).kind == HoldAction::Kind::Finished; }
+            CHECK(ended && h.over());   // 20 looks, then it lets go
+        }
+        {   // the user moves the window once the fit has been taken (two looks in a row): never undone, and the hold stays over
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 33);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 66);
+            HoldAction a = h.look(HoldLook{1366, 728, 60, 40, false, false}, 99);
+            CHECK(a.kind == HoldAction::Kind::User && h.over());
+            a = h.look(before, 132);
+            CHECK(a.kind == HoldAction::Kind::User && !a.setSize && !a.setPlace && !a.setMaximised);   // later looks are answered "user", nothing is asked
+        }
+        {   // the user (a Win+Arrow snap, a system drag) sizes it after the fit was taken: a size that is neither the fit's nor the old one
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 33);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 66);
+            const HoldAction a = h.look(HoldLook{1246, 648, 0, 0, false, false}, 99);
+            CHECK(a.kind == HoldAction::Kind::User);
+        }
+        {   // the user maximises it (not what the fit asked for)
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            const HoldAction a = h.look(HoldLook{1366, 728, 0, 0, true, false}, 33);
+            CHECK(a.kind == HoldAction::Kind::User);
+        }
+        {   // the user minimises it
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            const HoldAction a = h.look(HoldLook{1600, 900, -32000, -32000, false, true}, 33);
+            CHECK(a.kind == HoldAction::Kind::User);
+        }
+        {   // a window that starts minimised or maximised is left exactly as it is
+            StartHold h = fresh(fit, HoldLook{1600, 900, -32000, -32000, false, true});
+            CHECK(h.look(HoldLook{1600, 900, -32000, -32000, false, true}, 0).kind == HoldAction::Kind::User);
+            StartHold m = fresh(fit, HoldLook{1920, 1040, 0, 0, true, false});
+            CHECK(m.look(HoldLook{1920, 1040, 0, 0, true, false}, 0).kind == HoldAction::Kind::User);
+        }
+        {   // the time bound: a slow start (a look every 200 ms) is held for 1.5 s at most, not for 20 looks
+            StartHold h = fresh(fit, before);
+            HoldAction a;
+            int looks = 0;
+            for (; looks < 20; ++looks) { a = h.look(before, looks * 200); if (a.kind != HoldAction::Kind::Reassert) { break; } }
+            CHECK(a.kind == HoldAction::Kind::Finished && looks < 10);
+        }
+        {   // the fit maximises (a work area under the smallest window): the size and the place go FIRST, the maximise in the same ask, so Restore gives the fitted window
+            const StartFit tiny = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{0, 0, 1024, 560}, 104, 104);
+            CHECK(tiny.maximise && tiny.w == 1024 && tiny.h == 560 && tiny.x == 0 && tiny.y == 0);
+            StartHold h = fresh(tiny, before);
+            HoldAction a = h.look(before, 0);
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace && !a.setMaximised);   // NOT maximised yet: the restore rectangle must be the fitted one
+            a = h.look(HoldLook{1600, 900, 156, 156, false, false}, 33);   // the system mapped the window at its own size and place: asked again, still no maximise
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace && !a.setMaximised);
+            a = h.look(HoldLook{1024, 560, 0, 0, false, false}, 66);       // taken (first look)
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && !a.setPlace && !a.setMaximised);
+            a = h.look(HoldLook{1024, 560, 0, 0, false, false}, 99);       // taken (second look in a row): NOW the maximise, after the size and the place
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && !a.setPlace && a.setMaximised);
+            a = h.look(HoldLook{5120, 1392, -8, -8, true, false}, 132);    // maximised: done, never touched again
+            CHECK(a.kind == HoldAction::Kind::Finished);
+            a = h.look(HoldLook{1024, 560, 0, 0, false, false}, 165);      // (a Restore by the user afterwards is not undone)
+            CHECK(a.kind == HoldAction::Kind::Finished && !a.setMaximised);
+        }
+    }
 }
 
 // MAP FOCUS: the torn-off page windows follow the main window's rule (look_logic.hpp tornResizeAt / tornMoveAt): the size and the place are a function of the press and of the pointer's

@@ -1215,6 +1215,7 @@ int main(int argc, char** argv) {
     // USER BUG C: the smallest window THIS SESSION. kMinWindowW / kMinWindowH, lowered at start to the work area where the screen is smaller than that (the window is then maximised).
     float winMinW = kMinWindowW, winMinH = kMinWindowH;
     bool startMaximised = false;   // the start-time fit maximised the window (the work area is under the smallest window)
+    bool windowUserTouched = false;   // the user has laid hands on the window (a title drag, an edge drag, a maximise / minimise key or shortcut): the start-time fit lets go of it for good (review C2)
     // The work area the window is fitted to: the monitor's (gaps_win.hpp windowWorkRect). FOXSDR_SLINT_WORK_AREA=<w>x<h> or <w>x<h>+<x>+<y> (physical pixels) stands in for it in a bounded run ONLY (the test seam).
     const auto workRectNow = [&](foxsdr::slintlook::WorkRect& r) -> bool {
         if (bounded.bounded()) {
@@ -2649,7 +2650,7 @@ int main(int argc, char** argv) {
         else if (id == "zoomIn") { zoomView(kZoomPerNotch, 0.5); } else if (id == "zoomOut") { zoomView(1.0 / kZoomPerNotch, 0.5); } else if (id == "zoomReset") { selected().resetView(); }
         else if (id == "record") { FoxCommand c = op(FOXAPI_OP_RECORD_AUDIO); c.ival[0] = (state.flags & FOXAPI_RX_RECORDING_AUDIO) ? 0 : 1; submit(c); }
         else if (id == "screenshot") { screenshot(); }
-        else if (id == "fullscreen") { ui->window().set_maximized(!ui->window().is_maximized()); }
+        else if (id == "fullscreen") { windowUserTouched = true; ui->window().set_maximized(!ui->window().is_maximized()); }
         else if (id == "bankSignal") { bankIndex = 0; ui->set_bank_index(0); } else if (id == "bankDecode") { bankIndex = 1; ui->set_bank_index(1); }
         else if (id == "bankView") { bankIndex = 2; ui->set_bank_index(2); } else if (id == "bankExtend") { bankIndex = 3; ui->set_bank_index(3); }
         else if (id == "bankSystem") { bankIndex = 4; ui->set_bank_index(4); }
@@ -2683,10 +2684,11 @@ int main(int argc, char** argv) {
     // ---- the frameless window's chrome ----
     const auto scale = [&] { return ui->window().scale_factor(); };
     ui->on_title_drag([&](float dx, float dy) {
+        windowUserTouched = true;
         const auto pos = ui->window().position();
         ui->window().set_position(slint::PhysicalPosition({pos.x + static_cast<int>(std::lround(dx * scale())), pos.y + static_cast<int>(std::lround(dy * scale()))}));
     });
-    ui->on_title_double_clicked([&] { ui->window().set_maximized(!ui->window().is_maximized()); });
+    ui->on_title_double_clicked([&] { windowUserTouched = true; ui->window().set_maximized(!ui->window().is_maximized()); });
     // THE TITLE RAIL'S SYSTEM MENU (ledger row 14; sysmenu_win.hpp): the window's own, at the pointer. A bounded run raises no menu: it counts the asks (`state sysmenu.asks`) and reads the
     // entries the window's system menu holds (`state sysmenu.items`), which proves the handle is reachable without showing anything.
     auto sysMenu = std::shared_ptr<foxsdr::slintsysmenu::SystemMenu>(foxsdr::slintsysmenu::makeWindowsSystemMenu());
@@ -2703,13 +2705,14 @@ int main(int argc, char** argv) {
         return std::string("sysmenu.asks|items, not ") + what;
     };
     ui->on_brand_clicked([&] { openMenu(MenuKind::App, 12.f, 36.f); });
-    ui->on_minimise_clicked([&] { ui->window().set_minimized(true); });
-    ui->on_maximise_clicked([&] { ui->window().set_maximized(!ui->window().is_maximized()); });
+    ui->on_minimise_clicked([&] { windowUserTouched = true; ui->window().set_minimized(true); });
+    ui->on_maximise_clicked([&] { windowUserTouched = true; ui->window().set_maximized(!ui->window().is_maximized()); });
     ui->on_close_clicked([&] { slint::quit_event_loop(); });
     // DRIVE FIXES 7. An edge that is dragged quickly is soon BEHIND the pointer, the pointer is then outside the window, and the edge's own press is taken away there (it hears no more
     // moves): the drag stopped short. So where the system can be asked (Windows) the drag follows the system's pointer and button from the press on: on every move the edge still hears
     // and on every tick, until the button is let go. A bounded run (the tests: their pointer is not the system's) and a system that cannot be asked keep to the edge's own moves.
     const auto askEdgeSize = [&](float px, float py) {   // (px, py): the pointer, in logical pixels of whichever frame this drag began in
+        windowUserTouched = true;
         const auto sz = ui->window().size();
         const std::uint32_t limit = static_cast<std::uint32_t>(foxsdr::slintguard::kMaxWindowExtent);
         const foxsdr::slintlook::WindowFit fit = edgeDrag.at(px, py, scale(), winMinW, winMinH, limit, limit);
@@ -4010,6 +4013,7 @@ int main(int argc, char** argv) {
             if (what == "physw") { out = std::to_string(ui->window().size().width); return std::string(); }   // the window's real size in physical pixels (drive fixes 1)
             if (what == "physh") { out = std::to_string(ui->window().size().height); return std::string(); }
             if (what == "maximised") { out = ui->window().is_maximized() ? "1" : "0"; return std::string(); }
+            if (what == "minimised") { out = ui->window().is_minimized() ? "1" : "0"; return std::string(); }
             if (what == "gainhint") { out = std::string(ui->get_gain_hint()); return std::string(); }   // user bug A: the words beside the gain slider
             if (what == "gainenabled") { out = ui->get_gain_enabled() ? "1" : "0"; return std::string(); }
             if (what == "x") { out = std::to_string(ui->window().position().x); return std::string(); }   // user bug C: where the window is, and what the start-time fit did
@@ -4020,7 +4024,7 @@ int main(int argc, char** argv) {
             if (what == "bg") { out = hex(ui->global<Theme>().get_bg()); return std::string(); }
             if (what == "accent") { out = hex(ui->global<Theme>().get_accent()); return std::string(); }
             if (what == "face") { out = face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain"; return std::string(); }
-            return "look.scale|width|height|physw|physh|maximised|x|y|startmax|minw|minh|gainhint|gainenabled|bg|accent|face, not " + name;
+            return "look.scale|width|height|physw|physh|maximised|minimised|x|y|startmax|minw|minh|gainhint|gainenabled|bg|accent|face, not " + name;
         }
         if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
         if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }
@@ -4389,20 +4393,46 @@ int main(int argc, char** argv) {
     // maximises the window and lowers the minimum for the session (look_logic.hpp fitStartWindow). It waits (a few ticks) for the system window, which names the monitor and the scale; a bounded
     // run that asks for an explicit size (FOXSDR_SLINT_SIZE) keeps it. FOXSDR_SLINT_WORK_AREA is the bounded run's seam for the monitor's work area.
     bool startFitDone = false;
-    int startFitReasserts = 0;                 // ticks the fit has been held for (a size or place set before the system maps the window is not always kept)
+    bool startFitOver = false;                 // the hold is over: the fit never touches the window again in this session (the user has it, or the hold ran out)
     float startFitScale = 0.0f;                // the scale the fit was made at: a scale that moves after it (a pinned interface size) is applyLook's, not ours to undo
     foxsdr::slintlook::StartFit startFit;
+    foxsdr::slintlook::StartHold startHold;    // C1 + C2 (review 2026-11-23): what the window was before the fit, and what the user does to it while the fit is held
+    // TEST SEAM (bounded run only): FOXSDR_SLINT_USER_ACT=<tick>:<move|resize|minimise> does at that tick what the user does with the window (a title drag, an edge drag, the minimise key), through the same calls.
+    long userActTick = -1;
+    std::string userActKind;
+    if (const char* ua = std::getenv("FOXSDR_SLINT_USER_ACT"); ua != nullptr && bounded.bounded()) {
+        char kind[16] = {0};
+        long t = -1;
+        if (std::sscanf(ua, "%ld:%15s", &t, kind) == 2 && t >= 1) { userActTick = t; userActKind = kind; }
+    }
+    const auto holdLook = [&]() {
+        foxsdr::slintlook::HoldLook l;
+        const auto sz = ui->window().size();
+        const auto at = ui->window().position();
+        l.w = sz.width; l.h = sz.height; l.x = at.x; l.y = at.y;
+        l.maximised = ui->window().is_maximized();
+        l.minimised = ui->window().is_minimized();
+        return l;
+    };
     const auto fitAtStart = [&](bool force) {
-        const bool seam = bounded.bounded() && std::getenv("FOXSDR_SLINT_WORK_AREA") != nullptr;
+        if (startFitOver) { return; }
         if (!startFitDone) {
-            if (wantedSize.has_value()) { startFitDone = true; startFitReasserts = 1000; return; }
+            if (wantedSize.has_value()) { startFitDone = true; startFitOver = true; return; }
             if (!force && foxsdr::slintgaps::findMainWindow() == nullptr) { return; }
             startFitDone = true;
             foxsdr::slintlook::WorkRect work;
-            if (!workRectNow(work)) { std::fprintf(stderr, "foxsdr-slint: window fit: the monitor's work area is not known - the window stays as the system placed it\n"); startFitReasserts = 1000; return; }
+            if (!workRectNow(work)) { std::fprintf(stderr, "foxsdr-slint: window fit: the monitor's work area is not known - the window stays as the system placed it\n"); startFitOver = true; return; }
             const auto pos = ui->window().position();
             startFitScale = ui->window().scale_factor();
             startFit = foxsdr::slintlook::fitStartWindow(ui->get_win_w(), ui->get_win_h(), kMinWindowW, kMinWindowH, startFitScale, work, pos.x, pos.y);
+            startHold.begin(holdLook(), startFit);
+            // a window that starts minimised or maximised (a shortcut set to "Run: Minimized" / "Maximized") is left exactly as it is: no fit, no lowered minimum
+            if (startHold.look(holdLook(), nowMs()).kind == foxsdr::slintlook::HoldAction::Kind::User) {
+                std::fprintf(stderr, "foxsdr-slint: window fit: the window starts %s - it is left as it is\n", ui->window().is_minimized() ? "minimised" : "maximised");
+                startFitOver = true;
+                return;
+            }
+            startHold.begin(holdLook(), startFit);   // (the look above only asked; the hold's own count starts here)
             winMinW = startFit.minW;
             winMinH = startFit.minH;
             startMaximised = startFit.maximise;
@@ -4410,20 +4440,32 @@ int main(int argc, char** argv) {
                          static_cast<double>(startFitScale), startFit.w, startFit.h, startFit.x, startFit.y, startFit.maximise ? " (maximised: the screen is smaller than the smallest window)" : "",
                          static_cast<double>(startFit.minW), static_cast<double>(startFit.minH));
         }
-        if (startFitReasserts >= 20 || ui->window().scale_factor() != startFitScale) { return; }
-        ++startFitReasserts;
-        if (startFit.maximise && !seam) {   // the work area is under the smallest window: the system's maximise fills it (the seam's work area is not the real monitor: there the window is only sized to it)
-            if (!ui->window().is_maximized()) { ui->window().set_maximized(true); }
+        if (ui->window().scale_factor() != startFitScale) { startFitOver = true; return; }   // the interface size's own change (applyLook) is not ours to undo
+        if (windowUserTouched) {   // the user's own call (title drag, edge drag, maximise / minimise): the window is theirs
+            startFitOver = true;
+            std::fprintf(stderr, "foxsdr-slint: window fit: the window was moved, sized, maximised or minimised by the user - the fit lets go of it\n");
             return;
         }
-        const auto sz = ui->window().size();
-        if (sz.width != startFit.w || sz.height != startFit.h) { ui->window().set_size(slint::PhysicalSize({startFit.w, startFit.h})); sizeMirror.asked(startFit.w, startFit.h); }
-        const auto at = ui->window().position();
-        if (at.x != startFit.x || at.y != startFit.y) { ui->window().set_position(slint::PhysicalPosition({startFit.x, startFit.y})); }
+        const foxsdr::slintlook::HoldAction act = startHold.look(holdLook(), nowMs());
+        if (act.kind != foxsdr::slintlook::HoldAction::Kind::Reassert) {
+            startFitOver = true;
+            if (act.kind == foxsdr::slintlook::HoldAction::Kind::User) { std::fprintf(stderr, "foxsdr-slint: window fit: the window was moved, sized, maximised or minimised by the user - the fit lets go of it\n"); }
+            return;
+        }
+        // size and place FIRST, the maximise after: a later Restore then gives the window that fits the screen, not the oversized one the system opened (review C1)
+        if (act.setSize) { ui->window().set_size(slint::PhysicalSize({startFit.w, startFit.h})); sizeMirror.asked(startFit.w, startFit.h); }
+        if (act.setPlace) { ui->window().set_position(slint::PhysicalPosition({startFit.x, startFit.y})); }
+        if (act.setMaximised && !ui->window().is_maximized()) { ui->window().set_maximized(true); }
     };
     slint::Timer tick;
     tick.start(slint::TimerMode::Repeated, std::chrono::milliseconds(33), [&] {
         const auto meterBegan = frameMeter ? frameMeter->tickStart() : foxsdr::slinthost::FrameMeter::Clock::time_point{};
+        if (userActTick > 0 && bounded.ticks() + 1 == userActTick) {   // the test seam above: what the user does with the window, through the calls the title bar and the edges make
+            if (userActKind == "move") { ui->invoke_title_drag(60.0f, 40.0f); }
+            else if (userActKind == "resize") { windowUserTouched = true; const auto sz = ui->window().size(); const std::uint32_t nw = sz.width > 300 ? sz.width - 120 : sz.width, nh = sz.height > 300 ? sz.height - 80 : sz.height; ui->window().set_size(slint::PhysicalSize({nw, nh})); sizeMirror.asked(nw, nh); }
+            else if (userActKind == "minimise") { ui->invoke_minimise_clicked(); }
+            std::fprintf(stderr, "foxsdr-slint: bounded run: the user's %s at tick %ld\n", userActKind.c_str(), userActTick);
+        }
         fitAtStart(bounded.ticks() >= 30);
         if (wantedSize.has_value() && bounded.ticks() < 3) {
             ui->window().set_size(*wantedSize);

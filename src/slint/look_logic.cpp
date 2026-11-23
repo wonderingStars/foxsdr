@@ -132,6 +132,50 @@ StartFit fitStartWindow(float wantW, float wantH, float minW, float minH, float 
     return f;
 }
 
+void StartHold::begin(const HoldLook& before, const StartFit& fit) {
+    before_ = before;
+    fit_ = fit;
+    startMs_ = -1;
+    looks_ = 0;
+    stable_ = 0;
+    over_ = false;
+    matched_ = false;
+    last_ = HoldAction::Kind::Finished;
+}
+
+HoldAction StartHold::look(const HoldLook& now, std::int64_t nowMs) {
+    HoldAction a;
+    if (over_) { a.kind = last_; return a; }
+    const auto end = [&](HoldAction::Kind k) { over_ = true; last_ = k; a.kind = k; return a; };
+    if (startMs_ < 0) { startMs_ = nowMs; }
+    // the user's, or the system's by the user's shortcut: a window that is minimised, or (on the first look) already maximised, is left exactly as it is
+    if (now.minimised) { return end(HoldAction::Kind::User); }
+    if (looks_ == 0 && now.maximised) { return end(HoldAction::Kind::User); }
+    if (++looks_ > kMaxTicks || nowMs - startMs_ > kMaxMs) { return end(HoldAction::Kind::Finished); }
+    const bool sizeOurs = now.w == fit_.w && now.h == fit_.h;
+    const bool placeOurs = now.x == fit_.x && now.y == fit_.y;
+    if (fit_.maximise) {
+        if (now.maximised) { return end(HoldAction::Kind::Finished); }   // maximised: the fit's work is done (a Restore later is the user's: the restore rectangle is the fitted one)
+        // the size and place are made the fit's FIRST and seen as such on two looks in a row (the system maps the window at its own size and place after the first ask, and the maximise keeps
+        // whatever the window is at that moment as the rectangle a Restore returns to): only then the maximise is asked, and again each look until the window is maximised
+        if (!(sizeOurs && placeOurs)) { stable_ = 0; a.setSize = !sizeOurs; a.setPlace = !placeOurs; return a; }
+        if (++stable_ >= 2) { a.setMaximised = true; }
+        return a;
+    }
+    if (now.maximised) { return end(HoldAction::Kind::User); }   // maximised since the fit looked: that is not the fit's doing
+    if (sizeOurs && placeOurs) {
+        if (++stable_ >= 2) { matched_ = true; }
+        return a;
+    }
+    // Until the system has TAKEN the fit (the window's size and place seen as the fit's on two looks in a row) a size or place that is not the fit's is the system settling (it maps the window at
+    // its own default place and size after the first ask): asked again. After that, any other size or place is the user's (a Win+Arrow snap, a drag): the hold ends.
+    if (matched_) { return end(HoldAction::Kind::User); }
+    stable_ = 0;
+    a.setSize = !sizeOurs;
+    a.setPlace = !placeOurs;
+    return a;
+}
+
 void EdgeDrag::begin(int edge, float px, float py, std::uint32_t w, std::uint32_t h) {
     active_ = true; edge_ = edge; px_ = px; py_ = py; w_ = w; h_ = h;
 }
