@@ -30,6 +30,7 @@
 #include "dsp/dsp_substep.hpp"
 #include "dsp/fir.hpp"
 #include "dsp/nco.hpp"
+#include "dsp/nco_fast.hpp"
 #include "dsp/spectrum.hpp"
 #include "dsp_signals.hpp"
 #include "ref_dsp.hpp"
@@ -220,7 +221,7 @@ void kernelRows(double seconds) {
             5);
         const double newNs = timeBest(
             [&] {
-                cascade::dsp::Nco nco;
+                cascade::dsp::FastNco nco;
                 nco.setFrequency(0.15);
                 for (std::size_t p = 0; p < n; p += kBlock) { nco.mix(in.data() + p, out.data() + p, kBlock); }
             },

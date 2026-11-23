@@ -11,6 +11,9 @@
 //        frames pulled at random block counts against a reference estimator fed the same samples; two consumers of one frame; the block path's frames.
 //   E4   the stereo decoder's 38 kHz carrier skipped while the gate is shut (P4): no pilot, a pilot, a pilot switched on and off every 300 ms, and
 //        forced mono, each against the reference with the carrier always computed; the audio must match in every bit.
+//   E2   the receive oscillator (P2, FastNco: the maths library every 32 samples): the oscillator against RefNco over 60 s at nine frequencies, retunes,
+//        block splits, phase() and 10 minutes of drift; the chain's IF, multiplex and audio feeds against the same chain on the library path; Nco itself
+//        and the transmit modulator unchanged.
 //   E1c  the whole receive chain (tests/demod_chain.hpp, the pipeline's classes in the pipeline's order) for each of the eight modes over 10 s:
 //        the four feeds the pipeline produces (the audio, the audio decoder plugins' tap, the IF recorder's, the multiplex recorder's) are
 //        hashed, printed and compared bit for bit with the same chain run with the optimised kernels switched back to their reference paths
@@ -38,6 +41,9 @@
 #include "dsp/demod.hpp"
 #include "dsp/dsp_reference.hpp"
 #include "dsp/fir.hpp"
+#include "dsp/modulator.hpp"
+#include "dsp/nco.hpp"
+#include "dsp/nco_fast.hpp"
 #include "dsp/spectrum.hpp"
 #include "dsp/spectrum_block.hpp"
 #include "source/iq_source.hpp"
@@ -55,6 +61,32 @@ using refdsp::RefFirDecimator;
 namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
+
+// Running difference statistics over many chunks (the 60 s and 10 minute runs are never held in memory).
+struct Acc {
+    // differing: components whose BITS differ. over1e9: components that differ by more than 1e-9 (visible: a float unit in the last place at any magnitude above
+    // 0.016; a flip of the float rounding). The bits differ in millions of components near a zero crossing, where the values are 1e-16 and the float's own resolution
+    // is finer than the double noise of 1e-15: those are not visible differences and are not what a bound should count.
+    std::size_t components = 0, differing = 0, over1e12 = 0, over1e9 = 0;
+    double maxAbs = 0.0, sig = 0.0, dif = 0.0;
+    void add(const std::complex<float>* ref, const std::complex<float>* got, std::size_t n) {
+        const float* r = reinterpret_cast<const float*>(ref);
+        const float* g = reinterpret_cast<const float*>(got);
+        for (std::size_t i = 0; i < 2 * n; ++i) {
+            const double e = static_cast<double>(r[i]) - static_cast<double>(g[i]);
+            if (std::memcmp(&r[i], &g[i], sizeof(float)) != 0) { ++differing; }
+            maxAbs = std::max(maxAbs, std::fabs(e));
+            if (std::fabs(e) > 1e-12) { ++over1e12; }
+            if (std::fabs(e) > 1e-9) { ++over1e9; }
+            sig += static_cast<double>(r[i]) * static_cast<double>(r[i]);
+            dif += e * e;
+        }
+        components += 2 * n;
+    }
+    double sdrDb() const { return dif <= 0.0 ? 400.0 : 10.0 * std::log10(sig / dif); }
+    double fraction() const { return components ? static_cast<double>(differing) / static_cast<double>(components) : 0.0; }
+    double visibleFraction() const { return components ? static_cast<double>(over1e9) / static_cast<double>(components) : 0.0; }
+};
 
 // ---- E1k: the FIR kernel ------------------------------------------------------------------------------------------------------------------
 
@@ -348,6 +380,179 @@ int main() {
                 CHECK(now.feeds.audioL != now.feeds.audioR);        // the gate opened: the stereo image is there
             }
         }
+    }
+
+    // --- E2. THE RECEIVE OSCILLATOR (P2) ------------------------------------------------------------------------------------------------------
+    {
+        constexpr double kRate = 2.0e6;
+        constexpr std::size_t kChunk = 1u << 20;
+        // (a) the oscillator alone, 60 s of signal (120 M samples) at nine normalised frequencies from zero through small to just under Nyquist, both
+        // signs: FastNco against RefNco, one component at a time. Bounds: at most one float unit in the last place at 1.0 (6e-8, taken as 1.3e-7 for
+        // 2 ulp), fewer than one component in a million different, signal-to-difference ratio above 130 dB.
+        const double freqs[] = {0.0, 1.0e-6, 1.0e-3, 0.0123456789, 0.15, 1.0 / 3.0, 0.4999, -0.25, -0.49999};
+        std::vector<std::complex<float>> a(kChunk), b(kChunk);
+        for (const double f : freqs) {
+            cascade::dsp::FastNco fast;
+            refdsp::RefNco ref;
+            fast.setFrequency(f);
+            ref.setFrequency(f);
+            Acc acc;
+            const std::size_t total = static_cast<std::size_t>(60.0 * kRate);
+            for (std::size_t done = 0; done < total; done += kChunk) {
+                fast.generate(a.data(), kChunk);
+                ref.generate(b.data(), kChunk);
+                acc.add(b.data(), a.data(), kChunk);
+            }
+            std::printf("E2a-detail: components differing by more than 1e-12: %zu, by more than 1e-9 (a visible float rounding flip): %zu (%.2g)\n", acc.over1e12, acc.over1e9, acc.visibleFraction());
+            std::printf("E2a: f =%+.7f cycles/sample (%+.1f kHz at 2 MS/s): 60 s, max |diff| %.3g, %zu of %zu components differ (%.2g), signal-to-difference %.1f dB, phase() %s\n",
+                        f, f * kRate / 1000.0, acc.maxAbs, acc.differing, acc.components, acc.fraction(), acc.sdrDb(),
+                        fast.phase() == ref.phase() ? "identical" : "DIFFERENT");
+            CHECK(acc.maxAbs <= 1.3e-7);
+            CHECK(acc.visibleFraction() < 1.0e-6);   // fewer than one component in a million visibly different
+            CHECK(acc.sdrDb() > 130.0);
+            CHECK(fast.phase() == ref.phase());   // the accumulator is Nco's, bit for bit, after 120 M steps
+            if (f == 0.0) { CHECK(acc.differing == 0u); }
+        }
+
+        // (b) PHASE CONTINUITY across retunes and block boundaries: a script of retunes at awkward positions (none a multiple of 32), run in one call per
+        // segment, in blocks of 1, 7, 31, 32, 33 and 1000, against RefNco. The new class against ITSELF must be bit-identical whatever the cut (the anchor
+        // grid belongs to the stream, not to a call); phase() must equal RefNco's exactly after every segment; and the first sample after a retune is an
+        // anchor, so it equals RefNco's bit for bit.
+        {
+            struct Seg { double f; std::size_t n; };
+            const Seg script[] = {{0.1, 100003}, {-0.2, 77}, {0.3333333, 5000}, {0.0, 31}, {0.45, 12345}, {-0.001, 40000}, {0.123, 1}, {0.4, 99}};
+            std::vector<std::complex<float>> whole;
+            std::vector<std::vector<std::complex<float>>> cut(5);
+            const std::size_t cuts[] = {1, 7, 31, 32, 33};
+            refdsp::RefNco ref;
+            cascade::dsp::FastNco oneShot;
+            std::vector<cascade::dsp::FastNco> splitters(5);
+            Acc acc;
+            bool phaseSame = true, anchorExact = true;
+            for (const Seg& s : script) {
+                oneShot.setFrequency(s.f);
+                ref.setFrequency(s.f);
+                for (auto& sp : splitters) { sp.setFrequency(s.f); }
+                std::vector<std::complex<float>> x(s.n), y(s.n);
+                oneShot.generate(x.data(), s.n);
+                ref.generate(y.data(), s.n);
+                acc.add(y.data(), x.data(), s.n);
+                if (std::memcmp(&x[0], &y[0], sizeof(std::complex<float>)) != 0) { anchorExact = false; }
+                phaseSame = phaseSame && oneShot.phase() == ref.phase();
+                whole.insert(whole.end(), x.begin(), x.end());
+                for (std::size_t q = 0; q < 5; ++q) {
+                    std::vector<std::complex<float>> z(s.n);
+                    for (std::size_t pos = 0; pos < s.n; pos += cuts[q]) { splitters[q].generate(z.data() + pos, std::min(cuts[q], s.n - pos)); }
+                    cut[q].insert(cut[q].end(), z.begin(), z.end());
+                    phaseSame = phaseSame && splitters[q].phase() == ref.phase();
+                }
+            }
+            bool splitsSame = true;
+            for (std::size_t q = 0; q < 5; ++q) { splitsSame = splitsSame && cut[q].size() == whole.size() && std::memcmp(cut[q].data(), whole.data(), whole.size() * sizeof(std::complex<float>)) == 0; }
+            std::printf("E2b: %zu retunes, 5 block cuts: cuts identical to one call %s, phase() identical to RefNco after every segment %s, first sample after each retune bit-identical to RefNco %s; max |diff| %.3g\n",
+                        sizeof(script) / sizeof(script[0]), splitsSame ? "yes" : "NO", phaseSame ? "yes" : "NO", anchorExact ? "yes" : "NO", acc.maxAbs);
+            CHECK(splitsSame);
+            CHECK(phaseSame);
+            CHECK(anchorExact);
+            CHECK(acc.maxAbs <= 1.3e-7);
+            // in-place mix equals out-of-place mix
+            cascade::dsp::FastNco m1, m2;
+            m1.setFrequency(0.17);
+            m2.setFrequency(0.17);
+            std::vector<std::complex<float>> in = randomIq(5000, 8), o1(5000), o2 = in;
+            m1.mix(in.data(), o1.data(), 5000);
+            m2.mix(o2.data(), o2.data(), 5000);
+            CHECK(std::memcmp(o1.data(), o2.data(), 5000 * sizeof(std::complex<float>)) == 0);
+            // an oscillator never given a frequency (the Vfo's default: no offset) is Nco's constant 1 + 0j, in generate and in mix, and again after reset()
+            // (this was caught first by test_channel_bandwidth: a table that was zero past entry 0 silenced 31 samples in 32)
+            cascade::dsp::FastNco idle;
+            refdsp::RefNco idleRef;
+            std::vector<std::complex<float>> g1(300), g2(300);
+            idle.generate(g1.data(), 300);
+            idleRef.generate(g2.data(), 300);
+            CHECK(std::memcmp(g1.data(), g2.data(), 300 * sizeof(std::complex<float>)) == 0);
+            std::vector<std::complex<float>> mx1(300), mx2(300), x300 = randomIq(300, 3);
+            idle.reset();
+            idleRef.reset();
+            idle.mix(x300.data(), mx1.data(), 300);
+            idleRef.mix(x300.data(), mx2.data(), 300);
+            CHECK(std::memcmp(mx1.data(), mx2.data(), 300 * sizeof(std::complex<float>)) == 0);
+        }
+
+        // (c) DRIFT: ten minutes of samples (1.2 G) at one frequency, reported per minute against RefNco. The error must not grow: there is no
+        // recurrence, every sample is one multiply from a library value at the accumulator's own phase, so the last minute reads like the first.
+        {
+            cascade::dsp::FastNco fast;
+            refdsp::RefNco ref;
+            fast.setFrequency(0.3);
+            ref.setFrequency(0.3);
+            double first = 0.0, last = 0.0, worstMax = 0.0, worstFrac = 0.0;
+            for (int minute = 0; minute < 10; ++minute) {
+                Acc acc;
+                const std::size_t total = static_cast<std::size_t>(60.0 * kRate);
+                for (std::size_t done = 0; done < total; done += kChunk) {
+                    fast.generate(a.data(), kChunk);
+                    ref.generate(b.data(), kChunk);
+                    acc.add(b.data(), a.data(), kChunk);
+                }
+                if (minute == 0) { first = acc.sdrDb(); }
+                last = acc.sdrDb();
+                worstMax = std::max(worstMax, acc.maxAbs);
+                worstFrac = std::max(worstFrac, acc.visibleFraction());
+                std::printf("E2c: minute %2d of 10: max |diff| %.3g, visible flips (>1e-9) %zu of %zu (%.2g), bits differ in %.2g, signal-to-difference %.1f dB\n", minute + 1, acc.maxAbs, acc.over1e9, acc.components, acc.visibleFraction(), acc.fraction(), acc.sdrDb());
+            }
+            CHECK(worstMax <= 1.3e-7);
+            CHECK(worstFrac < 1.0e-6);
+            CHECK(last > 130.0 && first > 130.0);   // (the ratio itself moves with whether a rounding flip happened to land in a minute; the bounds above hold in EVERY minute)
+            CHECK(fast.phase() == ref.phase());
+        }
+
+        // (d) THE CHAIN: the VFO's output (what the IF recorder gets), the multiplex feed, the decoder tap and the audio, with the receive oscillator on its library
+        // path against FastNco, ten seconds of each signal: signal-to-difference above 130 dB on every feed.
+        for (const Signal::Kind kind : {Signal::kGenerator, Signal::kStereoFm}) {
+            const ChainRun ref = runChain(DemodMode::WFM, kind, 10.0, cascade::dsp::kRefNco);
+            const ChainRun now = runChain(DemodMode::WFM, kind, 10.0, 0u);
+            const refdsp::Diff di = refdsp::compareComplex(ref.feeds.ifIq, now.feeds.ifIq);
+            const refdsp::Diff dm = refdsp::compareFloats(ref.feeds.mpx192, now.feeds.mpx192);
+            const refdsp::Diff dd = refdsp::compareFloats(ref.feeds.decoder48, now.feeds.decoder48);
+            const refdsp::Diff dl = refdsp::compareFloats(ref.feeds.audioL, now.feeds.audioL);
+            std::printf("E2d: WFM %-10s: IF feed max |diff| %.3g, %.1f dB; multiplex %.3g, %.1f dB; decoder tap %.3g, %.1f dB; audio %.3g, %.1f dB\n",
+                        kind == Signal::kGenerator ? "generator" : "stereo+RDS", di.maxAbs, di.sdrDb(), dm.maxAbs, dm.sdrDb(), dd.maxAbs, dd.sdrDb(), dl.maxAbs, dl.sdrDb());
+            CHECK(di.sdrDb() > 130.0 && dd.sdrDb() > 130.0 && dl.sdrDb() > 130.0);
+            if (kind == Signal::kStereoFm) { CHECK(dm.sdrDb() > 130.0); }
+        }
+    }
+
+    // --- E5. NCO ITSELF AND THE TRANSMIT MODULATOR ARE UNTOUCHED ------------------------------------------------------------------------------
+    // Nco is not edited by the pass and its transmit-side neighbour, the modulator, does not use FastNco. Proved two ways: Nco against the verbatim reference, bit for
+    // bit; and a hash of the modulator's output for every mode over a fixed input - pure in-memory arithmetic, nothing is keyed or transmitted - printed as a log line,
+    // which reads the same before and after the commit that added FastNco.
+    {
+        for (const double f : {0.0, 0.05, 0.3, -0.45}) {
+            cascade::dsp::Nco real;
+            refdsp::RefNco ref;
+            real.setFrequency(f);
+            ref.setFrequency(f);
+            std::vector<std::complex<float>> x(1u << 20), y(1u << 20);
+            real.generate(x.data(), x.size());
+            ref.generate(y.data(), y.size());
+            CHECK(std::memcmp(x.data(), y.data(), x.size() * sizeof(std::complex<float>)) == 0);
+            CHECK(real.phase() == ref.phase());
+        }
+        std::uint64_t h = 1469598103934665603ull;
+        for (int m = 0; m < cascade::dsp::kTxModeCount; ++m) {
+            cascade::dsp::Modulator mod;
+            mod.setSampleRateHz(48000.0);
+            mod.setMode(static_cast<cascade::dsp::TxMode>(m));
+            mod.setKeyed(true);   // (the modulator's own envelope state: arithmetic on a buffer, nothing is connected to a radio)
+            Rng rng(77 + static_cast<std::uint64_t>(m));
+            std::vector<float> audio(48000);
+            for (std::size_t i = 0; i < audio.size(); ++i) { audio[i] = 0.4f * std::sin(0.13f * static_cast<float>(i)) + 0.1f * rng.uni(); }
+            std::vector<std::complex<float>> out(audio.size());
+            for (std::size_t pos = 0; pos < audio.size(); pos += 4800) { mod.process(audio.data() + pos, 4800, out.data() + pos); }
+            h = demodchain::hashBits(out.data(), out.size(), h);
+        }
+        std::printf("E5: transmit modulator, all five modes, 1 s each: output hash %016llx\n", static_cast<unsigned long long>(h));
     }
 
     // --- E1c. THE WHOLE CHAIN, every mode, 10 s: the four feeds, optimised against reference, bit for bit ----------------------------------------

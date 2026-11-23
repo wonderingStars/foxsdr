@@ -9,6 +9,7 @@
 
 #include "dsp/fir.hpp"
 #include "dsp/nco.hpp"
+#include "dsp/nco_fast.hpp"
 #include "dsp/noise_blanker.hpp"
 
 namespace cascade::dsp {
@@ -136,7 +137,7 @@ private:
     unsigned decimFactor_;
     double bandwidth_;  // after clamping
     double offset_ = 0.0;
-    Nco nco_;
+    FastNco nco_;   // (the receive oscillator: dsp/nco_fast.hpp; Nco itself is the transmit side's and is unchanged)
     // The channel filter, first stage first. One entry is the classic single
     // windowed sinc at the input rate; several are a cascade whose decimations
     // multiply to decimFactor_ and whose LAST stage is the channel filter

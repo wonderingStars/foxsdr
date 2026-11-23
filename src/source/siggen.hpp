@@ -14,6 +14,7 @@
 #include <mutex>
 
 #include "dsp/nco.hpp"
+#include "dsp/nco_fast.hpp"
 
 namespace cascade::source {
 
@@ -58,7 +59,7 @@ private:
     float gaussian() noexcept;
 
     struct Tone {
-        cascade::dsp::Nco nco;  // owns the phase; survives retune/clear so
+        cascade::dsp::FastNco nco;  // owns the phase; survives retune/clear so
                                 // re-enabling a slot stays continuous
         float amp = 0.0f;       // linear amplitude, 10^(dB/20)
         bool active = false;
