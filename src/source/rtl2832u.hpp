@@ -49,6 +49,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -225,7 +227,33 @@ public:
     // True once a transfer has failed. The owner turns this into faulted().
     bool failed() const { return failed_; }
 
+    // THE KEEP-GOING TOKEN (the re-open, rtlsdr_source.cpp). When set and it reads false, every transfer this object would make returns failure at
+    // once without calling the transport, so a bring-up in progress when stop() is called ends within the one transfer already in flight. Null
+    // (the default) means no token: nothing changes for any other user of this class.
+    void setKeepGoing(const std::atomic<bool>* token) { keepGoing_ = token; }
+    // AN OVERALL BOUND for the same bring-up: from this moment every transfer returns failure at once once `until` has passed, and deadlineExpired() says
+    // it was the clock and not a stop() that ended it. A default (zero) time point means no bound, which is what every user of this class but the re-open has.
+    void setDeadline(std::chrono::steady_clock::time_point until) { deadline_ = until; }
+    bool deadlineExpired() const { return deadlineHit_.load(std::memory_order_relaxed); }
+    // A LIVENESS BEAT: the steady-clock nanoseconds are stored here before every transfer, so a watchdog that reads the beat does not take a long bring-up for a
+    // wedged thread. Null (the default) stores nothing.
+    void setBeat(std::atomic<std::int64_t>* beat) { beat_ = beat; }
+
 private:
+    bool stopped() const {
+        if (keepGoing_ != nullptr && !keepGoing_->load(std::memory_order_relaxed)) { return true; }
+        if (deadline_ != std::chrono::steady_clock::time_point{} && std::chrono::steady_clock::now() >= deadline_) {
+            deadlineHit_.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    }
+    std::chrono::steady_clock::time_point deadline_{};
+    mutable std::atomic<bool> deadlineHit_{false};
+    std::atomic<std::int64_t>* beat_ = nullptr;
+    int ctlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, const std::uint8_t* data, std::size_t len);
+    int ctlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, std::uint8_t* data, std::size_t len);
+    const std::atomic<bool>* keepGoing_ = nullptr;
     void note(const char* what);
     // One tuner transfer with the bounded retry described above.
     bool i2cTransfer(bool out, std::uint8_t slave, std::uint8_t* data, std::uint8_t len);

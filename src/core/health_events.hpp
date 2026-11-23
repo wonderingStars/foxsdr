@@ -115,7 +115,7 @@ enum class Recovered : std::uint8_t {
     ReaderLeak,    // a native radio's reader (or Pluto's writer) thread did not stop and was let go
     CloseLeak,     // a sound device's close did not return in time and was left to finish alone
     LinkStranded,  // the SDRplay callback was still running after Uninit; its link was stranded
-    StreamRestart, // a radio's halted or silent stream (Airspy, HackRF, RTL-SDR, UHD) was re-armed or restarted and streaming continued
+    StreamRestart, // a radio's stream stopped and a restart was started (SoapySDR still raises it at the start; the three native drivers raise the OUTCOME words at the end of this list instead)
     TunerRetry,    // the RTL-SDR tuner refused an I2C transfer and accepted it on a retry
     LateCall,      // a SoapySDR or SDRplay control call answered seconds late; changes were held
     ScanLimit,     // the device search ran out of time: drivers skipped, or walked in-process
@@ -148,8 +148,14 @@ enum class Recovered : std::uint8_t {
     CompanionStall,
     CompanionBreak,
     CompanionGaveUp,
+    // THE OUTCOME WORDS OF A NATIVE RADIO'S RECOVERY (diagnosis 2026-11-23, signature 80913FA5): filed when the recovery has ENDED, not when it starts, so a
+    // report says whether it worked. Appended at the end so every earlier word keeps its place. The Worker's accepted-word lists must learn all four before release.
+    StreamBack,     // a radio's sample stream stopped, FoxSDR restarted it, and samples flowed again
+    StreamFail,     // restarting a radio's stream did not bring samples back; the radio was closed
+    UsbReopen,      // a radio stopped answering on USB, FoxSDR closed and reopened it, and samples flowed again
+    UsbReopenFail,  // reopening a radio that stopped answering on USB did not bring it back; the radio was closed
 };
-inline constexpr std::size_t kRecoveredCount = 44;
+inline constexpr std::size_t kRecoveredCount = 48;
 
 // HOW FAR A SESSION GOT (field-early-warning): the stages between "the program started" and
 // "the radio is doing its job", one fixed word each. They are the working-session metric and
@@ -505,6 +511,9 @@ void noteSlowFrame(int frameScope, int tier);
 void noteRecovered(Recovered r);
 void raiseRecovered(Recovered r);
 void drainRecovered();
+// Tests only: the words raised and not yet drained, one bit per word (bit i = word i of Recovered), and the reset of that set.
+std::uint64_t raisedRecoveredForTest();
+void clearRaisedRecoveredForTest();
 
 // A MILESTONE REACHED. Callable from any thread that may take the ledger's lock (the GUI thread,
 // a web worker): never from the DSP, source or audio threads. The process remembers which it has

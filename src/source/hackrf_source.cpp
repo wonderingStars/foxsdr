@@ -753,6 +753,13 @@ void HackRfSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
     int rearms = 0;
     auto lastSamplesAt = std::chrono::steady_clock::now();
     auto lastRearmAt = lastSamplesAt;
+    // THE OUTCOME OF A RESTART is what is reported, not its start (diagnosis 2026-11-23): `pending` is set when a restart was made and cleared by the first
+    // samples after it. A stop while it is pending raises nothing. The one place the two words are raised (held by tests/test_health_paths.cpp).
+    bool pending = false;
+    auto pendingSince = lastSamplesAt;
+    auto outcome = [](bool ok) {
+        core::health::raiseRecovered(ok ? core::health::Recovered::StreamBack : core::health::Recovered::StreamFail);
+    };
 
     while (link->run.load(std::memory_order_relaxed)) {
         link->readerBeatNs.store(steadyNowNs(), std::memory_order_relaxed);
@@ -760,6 +767,12 @@ void HackRfSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
         if (!link->run.load(std::memory_order_relaxed)) { break; }
         const auto nowT = std::chrono::steady_clock::now();
         if (got > 0) {
+            if (pending) {
+                pending = false;
+                core::diagLogf("hackrf: the stream is back after a restart (%lld ms without samples)",
+                               static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(nowT - pendingSince).count()));
+                outcome(true);
+            }
             lastSamplesAt = nowT;
             if (rearms > 0 && nowT - lastRearmAt >= std::chrono::milliseconds(kRearmForgiveAfterMs)) { rearms = 0; }
         }
@@ -783,10 +796,14 @@ void HackRfSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
                                      got < 0 ? (detail.empty() ? std::string() : detail + ", ") + tail
                                              : "the radio delivered nothing for " +
                                                    std::to_string(link->silenceRearmAfterMs.load(std::memory_order_relaxed)) + " ms at a time, " + tail);
+                outcome(false);   // restarts were made and did not hold
                 break;
             }
             ++rearms;
-            core::health::raiseRecovered(core::health::Recovered::StreamRestart);
+            if (!pending) {
+                pending = true;
+                pendingSince = lastSamplesAt;   // the silence began when the last samples arrived
+            }
             core::diagWarnf("hackrf: %s%s%s; restarting the stream (attempt %d of %d)", got < 0 ? "read failed" : "delivered nothing", detail.empty() ? "" : ": ",
                             detail.c_str(), rearms, kMaxStreamRearms);
             std::string why;
@@ -796,6 +813,7 @@ void HackRfSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             if (!link->run.load(std::memory_order_relaxed)) { break; }
             if (!back) {
                 noteTransportFaultOn(*link, "reading samples", "the stream would not restart: " + why);
+                outcome(false);
                 break;
             }
             continue;

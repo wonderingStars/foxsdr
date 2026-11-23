@@ -79,7 +79,7 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     "the SDRplay driver was still delivering samples after it was told to stop, and its link was "
     "left behind rather than torn down under it",
     // StreamRestart
-    "a radio's sample stream halted or went silent and was restarted by itself",
+    "a radio's sample stream stopped and a restart was started",
     // TunerRetry
     "the RTL-SDR's tuner refused a command and accepted it on a retry",
     // LateCall
@@ -138,6 +138,14 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     "the link between a plugin and a program it runs beside FoxSDR broke, and the plugin carried on without it",
     // CompanionGaveUp
     "a plugin stopped restarting a program it runs beside FoxSDR, after it kept failing",
+    // StreamBack (the outcome words of a native radio's recovery, diagnosis 2026-11-23)
+    "a radio's sample stream stopped, FoxSDR restarted it, and samples flowed again",
+    // StreamFail
+    "a radio's sample stream stopped and restarting it did not bring it back; the radio was closed",
+    // UsbReopen
+    "a radio stopped answering on USB, FoxSDR closed and reopened it, and samples flowed again",
+    // UsbReopenFail
+    "a radio stopped answering on USB and reopening it did not bring it back; the radio was closed",
 };
 static_assert(sizeof(kSentences) / sizeof(kSentences[0]) == health::kRecoveredCount,
               "every recovered-from word has an issue sentence");

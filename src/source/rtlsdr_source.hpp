@@ -56,6 +56,7 @@
 #include <chrono>
 #include <complex>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -83,6 +84,42 @@ const std::vector<usb::UsbId>& rtlSdrUsbIds();
 // knows - the bus-reported description and the serial - so a dongle that is
 // already streaming in this process appears in the list unharmed.
 std::vector<NativeDeviceInfo> enumerateRtlSdr();
+
+// THE SENTENCES OF A RE-OPEN THAT ENDS IN A FAULT, one place so the driver, the tests and the reports agree on the words.
+//   kReopenStoppedSentence  - a stop() landed while the radio was being reconnected: the radio is closed and latched faulted (never "unplugged").
+//   kReopenWhichSentence    - the radio left the bus and what came back could not be proven to be the same radio (see locateRadio and the identity check).
+//   kReopenBusySentence     - the driver lost the race for the device lock three times in a row.
+inline constexpr const char* kReopenStoppedSentence = "the radio was being reconnected when it was stopped; pick the radio again";
+inline constexpr const char* kReopenWhichSentence = "the radio dropped off USB and FoxSDR could not tell which of the connected radios it was; pick it again";
+inline constexpr const char* kReopenBusySentence = "the radio stopped answering and reopening it did not help (the driver was busy)";
+// What the re-open's finder answers (as the error text, with `present` true) when more than one listed radio could be this one and none is provably it.
+inline constexpr const char* kRadioAmbiguousError = "more than one connected radio could be this one";
+// HOW LONG ONE ATTEMPT OF THE RE-OPEN MAY TAKE to bring the chip up, put the settings back and restart the stream (decision S1 of the second review): a refused tuner
+// transfer costs about 200 ms and a bench run measured a 5.0 s bring-up, so a bound below that turns a recoverable drop into a fault. Generous on purpose: the liveness
+// beat keeps the stuck-reader check quiet whatever the length, and a stop() still ends the bring-up within the one transfer in flight.
+inline constexpr int kReopenBringUpMs = 10000;
+
+// WHICH PHYSICAL RADIO A SOURCE OPENED, remembered so a re-open never guesses (decision F4 of the review). `path` is the WinUSB interface path, `location` the
+// hub-and-port of its USB node, `serial` the serial the device reported (empty when it reported none), `serialUnique` whether it was the only listed radio
+// with that serial when it was opened (two dongles that both say "00000001" make the serial no identity at all).
+struct RadioIdentity {
+    std::string path;
+    std::string location;
+    std::string serial;
+    bool serialUnique = false;
+};
+enum class RadioLocate { Found, Absent, Ambiguous };
+// Finds the radio `id` among `found` (a bus enumeration), in this order and never by guessing: the exact interface path; else the same location; else the same
+// serial when that serial was unique at open and is unique now. A listed device whose serial differs from a non-empty remembered one is never taken for it.
+// Ambiguous when the serial points at one or more devices but is no proof (it was shared at open, or two share it now) and neither path nor location matched;
+// nothing is opened and `foundPath` is set only for Found.
+RadioLocate locateRadio(const std::vector<usb::UsbDeviceInfo>& found, const RadioIdentity& id, std::string& foundPath);
+// The two lambdas open() arms a source with, over an enumeration and an opener that the caller supplies (the shipped ones are the bus walk and openWinUsb;
+// the tests pass fakes).
+using RadioListFn = std::function<std::vector<usb::UsbDeviceInfo>()>;
+using RadioOpenFn = std::function<std::unique_ptr<usb::UsbDevice>(const std::string& path, std::string& error)>;
+std::function<std::unique_ptr<usb::UsbDevice>(std::string& error, bool& present)> makeRadioReopenFn(RadioIdentity id, RadioListFn list, RadioOpenFn open);
+std::function<int()> makeRadioListedFn(RadioIdentity id, RadioListFn list);
 
 class RtlSdrSource final : public DeviceSource {
 public:
@@ -163,7 +200,9 @@ public:
     // biasT() is the READBACK: it moves only when the dongle accepted the
     // GPIO writes, so a refused switch leaves it where it was.
     bool setBiasT(bool on);
-    bool biasT() const { return biasTee_.load(std::memory_order_relaxed); }
+    // WHILE THE RADIO IS BEING REOPENED the answer is what the re-open will put on the wire (the user's latest wish, or off when the repeat rule withheld it),
+    // not the old readback: the box on screen must show what the radio will do, and never an "off" over a tee that is about to come on.
+    bool biasT() const;
 
     // WHAT THE EEPROM SAID AT OPEN, which the panel needs to decide whether a
     // remembered "on" may be put back (core/bias_tee.hpp).
@@ -224,6 +263,35 @@ public:
     // Tests only: how long of silence re-arms the stream, and how long a reader stuck inside a USB call is tolerated by read() (the product's 3 s and 20 s).
     void setStallBoundsForTest(int silenceRearmAfterMs, int readerStuckAfterMs);
 
+    // THE RE-OPEN (diagnosis 2026-11-23, signature 80913FA5). A radio whose handle has gone bad (the device re-enumerated, a port reset, the chip lost its
+    // registers) cannot be repaired by a pipe restart: the reader thread closes the handle, waits for the same radio to come back on the bus, opens it again,
+    // runs the whole chip bring-up, puts back the rate, frequency, gains, correction, direct sampling and bias tee, and restarts the stream into the same ring.
+    // open() arms it; openWithTransport() (the tests' door) leaves it empty, so a source opened that way behaves exactly as it did before unless a test arms it
+    // with setReopenForTest.
+    //   fn(error, present): looks for the SAME radio (same serial, else same interface path) and opens it; `present` says whether it is listed on the bus.
+    //   listed(): 1 listed, 0 not listed, -1 cannot tell; only for the one diagnostic line, so it may be empty.
+    using ReopenFn = std::function<std::unique_ptr<usb::UsbDevice>(std::string& error, bool& present)>;
+    void setReopenForTest(ReopenFn fn, std::function<int()> listed = {});
+    // Tests only: how long the re-open waits for the radio to come back, and how often it looks (the product's 5000 ms and 250 ms).
+    // `forgiveMs` (the product's 60000) is how long samples must flow after a re-open before the window's count of them is forgiven.
+    // `bringUpMs` (the product's kReopenBringUpMs) is the overall bound of the bring-up that follows (the transfers of the whole of it, settings included).
+    void setReopenBoundsForTest(int waitMs, int pollMs, int forgiveMs = 60000, int bringUpMs = kReopenBringUpMs);
+    // The bound as it stands now (the product's value unless a test changed it).
+    int reopenBringUpMsForTest() const { return link_->reopenBringUpMs.load(std::memory_order_relaxed); }
+    // Tests only: called by a setter that found the radio being reopened, just before it hands its change over (decision S7's test holds a setter there until the
+    // re-open has ended, which is the instant between its two looks). Empty in the product.
+    void setBeforeDeferForTest(std::function<void()> fn);
+    // Tests only: called on every try of retakeAfterReopen's wait for the device lock, with the number of control calls then announced in controlWaiters (decision S7's
+    // test asserts the wait announces itself, so the reader stands aside). Empty in the product.
+    void setRetakeProbeForTest(std::function<void(int)> fn);
+    // Tests and the bench tool only: makes the transport's handle fail the way one does after a re-enumeration (every later call answers "invalid handle"),
+    // without freeing anything a thread is inside. False when the transport cannot.
+    bool invalidateTransportForTest();
+    // Tests only: true while a re-open is taking settings (the radio is closed or being brought up and the setters hand their changes to it).
+    bool reopeningForTest() const { return link_->reopening.load(std::memory_order_acquire); }
+    // How many re-opens this open has done (tests, the bench tool).
+    int reopenCount() const { return link_->reopensThisOpen.load(std::memory_order_relaxed); }
+
     // THE LINK. See the file header for why this is a separate object.
     // Public only because the reader thread's body is a free function in the
     // .cpp; nothing outside this class has any business touching one.
@@ -255,6 +323,57 @@ public:
         // How long of nothing re-arms the stream, and how long a stuck reader is tolerated: the product's numbers, settable so a test need not wait them out.
         std::atomic<int> silenceRearmAfterMs{3000};
         std::atomic<int> readerStuckAfterMs{20000};
+
+        // THE RE-OPEN's state (see setReopenForTest). `reopening` is true from the moment the reader closes the handle until the bring-up has finished or
+        // failed: while it is set every control call answers at once without touching the device (controlLock) and every setter stores its value in `wanted`.
+        std::function<std::unique_ptr<usb::UsbDevice>(std::string& error, bool& present)> reopen;
+        std::function<int()> listed;
+        std::atomic<bool> reopening{false};
+        std::atomic<int> reopensThisOpen{0};
+        std::atomic<int> reopenWaitMs{5000};
+        std::atomic<int> reopenPollMs{250};
+        std::atomic<int> reopenForgiveAfterMs{60000};
+        std::atomic<int> reopenBringUpMs{kReopenBringUpMs};
+        std::function<void()> beforeDeferForTest;   // (see setBeforeDeferForTest; set before the reader runs, read by setters)
+        std::function<void(int)> retakeProbeForTest;   // (see setRetakeProbeForTest)
+        std::atomic<int> unlockedTunes{0};   // (moved here from the source: the re-open's retune counts into it too)
+        std::atomic<bool> biasTee{false};    // (likewise: the re-open may leave the bias tee off, and the readout must say so)
+        // What the user last asked of the radio, kept so a re-open can put it back. Written by each setter when it succeeds (or, while a re-open runs,
+        // when it is asked), under `wantedMutex`.
+        struct Wanted {
+            double rateHz = 0.0;        // 0: never set, the open's default stands
+            double freqHz = 0.0;
+            int ifBandwidthHz = 0;
+            int directChoice = 0;
+            int ppm = 0;
+            // "WAS SET" flags (decision S6): a value changed BACK to zero (no correction, automatic bandwidth, automatic direct sampling) is a change the re-open must put on,
+            // which a test for non-zero cannot see. Set by the setters, never by the open.
+            bool ppmSet = false;
+            bool ifBandwidthSet = false;
+            bool directChoiceSet = false;
+            bool biasTee = false;
+            bool autoGain = false;
+            bool autoGainSet = false;   // the automatic-gain mode was asked for since the open
+            bool gainSet = false;       // some manual gain was asked for since the open
+            bool gainByStage = false;   // the last gain asked for was a single stage, not the aggregate
+            int aggregateTenthDb = 0;
+            int stageTenthDb[3] = {0, 0, 0};
+            bool stageSet[3] = {false, false, false};
+        };
+        std::mutex wantedMutex;
+        Wanted wanted;
+        std::atomic<unsigned> wantedGen{0};   // bumped with every change of `wanted`, so a re-open can tell a setting arrived while it ran
+        std::string tunerNameCached;          // (under wantedMutex) for the readouts that must answer while the tuner object is gone
+        bool blogV4Cached = false;
+        // WHICH RADIO THIS IS, as the open found it (under wantedMutex): where it sits, and what the bring-up read from it. A re-open compares what it finds
+        // with this and refuses a radio that is not provably the same one.
+        struct Identity {
+            RadioIdentity radio;
+            std::string tuner;
+            std::string manufacturer;
+            std::string product;
+        };
+        Identity identity;
 
         // Written and read ONLY under `mutex` - except by a reader thread
         // that has been abandoned, which is exactly the point after which
@@ -337,7 +456,6 @@ private:
     std::atomic<int> ifBandwidthHz_{0};  // G1-14: 0 automatic (the sample rate), else the user's analogue IF bandwidth in Hz
     int ifBandwidthFor(double rateHz) const;
     std::atomic<int> directChoice_{0};   // R11: 0 automatic / 1 never / 2 I branch / 3 Q branch
-    std::atomic<bool> biasTee_{false};
     std::atomic<bool> eepromValid_{false};
     std::atomic<bool> biasTForced_{false};
     std::atomic<int> ppm_{0};
@@ -348,7 +466,7 @@ private:
     // that found this carried one line per frequency and nothing that said
     // how many). So: the first one in an open says everything worth saying,
     // the rest only increment, and close() states the total.
-    std::atomic<int> unlockedTunes_{0};
+    // (unlockedTunes now lives in Link: the re-open's retune counts into it too.)
 
     std::thread reader_;
     // Satisfied by the reader thread as its last act, so stop() has a BOUNDED

@@ -304,6 +304,13 @@ inline void biasTeeTicked(BiasTeePanel& p, cascade::source::DeviceSource* dev,
     });
 }
 
+// THE BOX FOLLOWS THE RADIO'S OWN READBACK between ticks, for an RTL-SDR: its re-open may withhold a tee that was on (a repeat in one window), and a tick made
+// in the gap is what the radio will do - `shown` was refreshed only at an open and at a tick, so the box stayed ticked over a tee the driver had switched off
+// (decision F3c of the re-open review). Called by the engine as it publishes the key's lamp; the other drivers have no such moment and are left alone.
+inline void biasTeeFollowRadio(BiasTeePanel& p, cascade::source::DeviceSource* dev) {
+    if (auto* rtl = dynamic_cast<cascade::source::RtlSdrSource*>(dev)) { p.shown = rtl->biasT(); }
+}
+
 // WILL AN "ON" SWITCHED NOW COME BACK AT THIS RADIO'S NEXT OPEN? What the
 // deck's confirmation dialog may promise (review round 2, L2), and nothing
 // more: the radio is identified (biasTeeRadioIdentified), the memory has room

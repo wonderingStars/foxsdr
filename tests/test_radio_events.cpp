@@ -331,6 +331,26 @@ int main() {
         noteServiceFault("rtlsdr", "servicestate", "the service is not running", false);
         CHECK(ofKind(t.flush(), "session_fault").empty());
     }
+    // ---- the RTL-SDR's re-open that worked and then gave up inside ten seconds: BOTH are told (fix/rtlsdr-reopen, decision F7) ----------------------------------
+    {
+        Rig t("usbreopen-phases");
+        t.start();
+        registerSource(&g_source1, kRtl);
+        noteVendorCallFault(&g_source1, "rtlsdr", "usbreopen", "the radio stopped answering and was reopened; samples flowed again after 800 ms", /*absorbed=*/true);
+        noteVendorCallFault(&g_source1, "rtlsdr", "usbreopen", "the radio keeps dropping off USB: it was reopened 2 times and stopped answering again", /*absorbed=*/false);
+        // the same phase repeated inside ten seconds is still folded
+        noteVendorCallFault(&g_source1, "rtlsdr", "usbreopen", "the radio keeps dropping off USB: it was reopened 2 times and stopped answering again", /*absorbed=*/false);
+        const std::vector<json> msgs = ofKind(t.flush(), "radio_recovery");
+        CHECK(msgs.size() == 2);
+        if (msgs.size() == 2) {
+            CHECK(msgs[0]["body"]["phase"] == "ok");
+            CHECK(msgs[0]["body"]["what"] == "usbreopen");
+            CHECK(msgs[1]["body"]["phase"] == "gave-up");
+            CHECK(msgs[1]["body"]["what"] == "usbreopen");
+        }
+        for (const json& m : msgs) { everything.push_back(m); }
+        forgetRadio(kRtl.key);
+    }
     // ---- the RTL-SDR's PLL that did not lock: degraded, said as the tuner's, and not urgent -----------------------------------------------------------------
     {
         Rig t("pll");

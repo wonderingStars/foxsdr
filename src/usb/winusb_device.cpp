@@ -192,6 +192,50 @@ DEVINST usbDeviceNodeOf(DEVINST inst) {
     return inst;
 }
 
+// WHERE A USB DEVICE NODE SITS, named down to the PORT (decision S11): its first SetupAPI location path (hub and port, from the root controller down); else its
+// location information (SPDRP_LOCATION_INFORMATION, "Port_#0003.Hub_#0002"); else the instance id of its parent together with its own address (SPDRP_ADDRESS, the
+// port number on that hub). All read-only queries on the configuration manager; nothing is opened and nothing needs elevation. The composition itself is
+// composeUsbLocation (usb_device.hpp), which the tests feed fake values. Empty when nothing can be read.
+std::string usbLocationOf(DEVINST devNode) {
+    std::string path;
+    DEVPROPTYPE type = 0;
+    ULONG size = 0;
+    if (::CM_Get_DevNode_PropertyW(devNode, &DEVPKEY_Device_LocationPaths, &type, nullptr, &size, 0) == CR_BUFFER_SMALL && size > 0) {
+        std::vector<BYTE> buf(size + sizeof(wchar_t), 0);
+        if (::CM_Get_DevNode_PropertyW(devNode, &DEVPKEY_Device_LocationPaths, &type, buf.data(), &size, 0) == CR_SUCCESS && type == DEVPROP_TYPE_STRING_LIST) {
+            const auto* p = reinterpret_cast<const wchar_t*>(buf.data());
+            if (*p != L'\0') { path = narrow(p); }
+        }
+    }
+    if (!path.empty()) { return composeUsbLocation(path, std::string(), std::string(), -1); }
+    std::string info;
+    {
+        ULONG len = 0;
+        ULONG regType = 0;
+        if (::CM_Get_DevNode_Registry_PropertyW(devNode, CM_DRP_LOCATION_INFORMATION, &regType, nullptr, &len, 0) == CR_BUFFER_SMALL && len > 0) {
+            std::vector<BYTE> buf(len + sizeof(wchar_t), 0);
+            if (::CM_Get_DevNode_Registry_PropertyW(devNode, CM_DRP_LOCATION_INFORMATION, &regType, buf.data(), &len, 0) == CR_SUCCESS && regType == REG_SZ) {
+                info = narrow(reinterpret_cast<const wchar_t*>(buf.data()));
+            }
+        }
+    }
+    if (!info.empty()) { return composeUsbLocation(std::string(), info, std::string(), -1); }
+    long long address = -1;
+    {
+        DWORD value = 0;
+        ULONG len = sizeof(value);
+        ULONG regType = 0;
+        if (::CM_Get_DevNode_Registry_PropertyW(devNode, CM_DRP_ADDRESS, &regType, &value, &len, 0) == CR_SUCCESS && regType == REG_DWORD) { address = static_cast<long long>(value); }
+    }
+    std::string parentId;
+    DEVINST parent = 0;
+    if (::CM_Get_Parent(&parent, devNode, 0) == CR_SUCCESS) {
+        const std::wstring id = instanceIdOf(parent);
+        if (!id.empty()) { parentId = narrow(id.c_str()); }
+    }
+    return composeUsbLocation(std::string(), std::string(), parentId, address);
+}
+
 // The interface GUIDs this devnode's driver declared for itself, read from
 // Device Parameters\DeviceInterfaceGUIDs (REG_MULTI_SZ). This is where
 // libwdi/Zadig puts the GUID it generated for the device, and on this bench's
@@ -421,15 +465,29 @@ public:
         // endpoint deliberately halted (SET_FEATURE(ENDPOINT_HALT) on 0x81),
         // the first read returns Windows error 31 and the SECOND one
         // delivers 16384 bytes. Off, the stall is permanent.
+        // THE RESULTS OF THE CALLS BELOW ARE KEPT (diagnosis 2026-11-23, defect D3): none of them is fatal, but a pipe that would not reset is the
+        // one fact that tells a halted endpoint from a chip that is hung, and nothing recorded it. streamAccount() hands the line to the driver.
+        streamAccount_.clear();
+        auto account = [this](const char* what, BOOL ok, DWORD err) {
+            if (!streamAccount_.empty()) { streamAccount_ += "; "; }
+            streamAccount_ += what;
+            streamAccount_ += ok != FALSE ? ": ok" : ": refused, Windows error " + std::to_string(static_cast<unsigned long>(err));
+        };
         UCHAR on = TRUE;
-        api_->setPipePolicy(streamHandle_, endpoint, AUTO_CLEAR_STALL, sizeof(on), &on);
+        {
+            const BOOL ok = api_->setPipePolicy(streamHandle_, endpoint, AUTO_CLEAR_STALL, sizeof(on), &on);
+            account("auto-clear-stall", ok, ok == FALSE ? ::GetLastError() : 0);
+        }
 
         // NO SELECTIVE SUSPEND WHILE A RADIO IS STREAMING. Whether WinUSB
         // idles this device at all comes from its INF, which on a
         // Zadig-installed dongle is not ours to predict; a receiver that is
         // asleep delivers nothing and reports no error.
         UCHAR off = FALSE;
-        api_->setPowerPolicy(winusb_, AUTO_SUSPEND, sizeof(off), &off);
+        {
+            const BOOL ok = api_->setPowerPolicy(winusb_, AUTO_SUSPEND, sizeof(off), &off);
+            account("auto-suspend off", ok, ok == FALSE ? ::GetLastError() : 0);
+        }
 
         // THE PIPE IS RESET BEFORE THE FIRST READ, and this is not
         // defensive tidiness - it is the difference between a dongle that
@@ -449,7 +507,10 @@ public:
         // driver was first run against, in which every read on a correctly
         // configured dongle timed out with no error at all until an
         // unrelated libusb program had claimed and released the interface.
-        api_->resetPipe(streamHandle_, endpoint);
+        {
+            const BOOL ok = api_->resetPipe(streamHandle_, endpoint);
+            account("pipe reset", ok, ok == FALSE ? ::GetLastError() : 0);
+        }
 
         endpoint_ = endpoint;
         ring_.clear();
@@ -554,6 +615,19 @@ public:
         return true;
     }
 
+    // The one-line account of the last stream end and start: "abort: ok; auto-clear-stall: ok; auto-suspend off: ok; pipe reset: refused, Windows
+    // error 6". No serial, no path. Empty before the first start.
+    std::string streamAccount() override {
+        return abortAccount_.empty() ? streamAccount_ : (streamAccount_.empty() ? abortAccount_ : abortAccount_ + "; " + streamAccount_);
+    }
+
+    // THE BENCH SEAM: the handle "goes bad" the way a re-enumerated device's does, but nothing is freed under a thread that is inside it - the real handles
+    // stay valid and are closed by the destructor as always. Every control transfer, bulk read and pipe reset from now on answers Windows error 6.
+    bool invalidateForTest() override {
+        poisoned_.store(true, std::memory_order_relaxed);
+        return true;
+    }
+
     std::string takeStreamNote() override {
         std::string out;
         out.swap(streamNote_);
@@ -563,6 +637,10 @@ public:
     int readBulk(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs) override {
         if (!streaming_) {
             setError("readBulk() with no stream");
+            return -1;
+        }
+        if (poisoned_.load(std::memory_order_relaxed)) {
+            setError(lastErrorText("a bulk read", ERROR_INVALID_HANDLE));
             return -1;
         }
         Request& req = *ring_[head_];
@@ -601,7 +679,8 @@ public:
             // Both, in this order: AbortPipe tells the function driver to
             // fail everything queued on the pipe, CancelIoEx covers requests
             // the I/O manager has not handed down yet.
-            api_->abortPipe(streamHandle_, endpoint_);
+            const BOOL ok = api_->abortPipe(streamHandle_, endpoint_);
+            abortAccount_ = ok != FALSE ? "abort: ok" : "abort: refused, Windows error " + std::to_string(static_cast<unsigned long>(::GetLastError()));
         }
         for (auto& slot : ring_) {
             if (slot && slot->pending && file_ != INVALID_HANDLE_VALUE) {
@@ -651,6 +730,10 @@ public:
 
     bool resetPipe(std::uint8_t endpoint) override {
         if (winusb_ == nullptr) { return false; }
+        if (poisoned_.load(std::memory_order_relaxed)) {
+            setError(lastErrorText("WinUsb_ResetPipe", ERROR_INVALID_HANDLE));
+            return false;
+        }
         // A pipe the stream was routed to another interface for (recoverStreamPipe)
         // is reset through THAT interface's handle.
         const WINUSB_INTERFACE_HANDLE h =
@@ -1316,6 +1399,10 @@ private:
             setError("control transfer on a closed device");
             return -1;
         }
+        if (poisoned_.load(std::memory_order_relaxed)) {
+            setError(lastErrorText("a control transfer", ERROR_INVALID_HANDLE));
+            return -1;
+        }
         if (len > 0xFFFF) {
             setError("control transfer longer than a USB setup packet can describe");
             return -1;
@@ -1417,6 +1504,9 @@ private:
     std::uint8_t routedEndpoint_ = 0;
     bool rawIo_ = true;
     std::string streamNote_;
+    std::string streamAccount_;
+    std::string abortAccount_;
+    std::atomic<bool> poisoned_{false};
     std::vector<WINUSB_INTERFACE_HANDLE> assoc_;
     bool assocProbed_ = false;
 
@@ -1597,6 +1687,7 @@ std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
         // Interface".
         const DEVINST devNode = usbDeviceNodeOf(info.DevInst);
         entry.serial = lastInstanceSegment(instanceIdOf(devNode));
+        entry.location = usbLocationOf(devNode);
         if (devNode == info.DevInst) {
             entry.description =
                 narrow(deviceStringProperty(set, info, DEVPKEY_Device_BusReportedDeviceDesc)

@@ -882,7 +882,9 @@ The sites that are counted:
 | `readerleak` | the stop paths that abandon a reader thread: the eight native sources' `g_readersAbandoned` sites (airspy, airspyhf, aor, hackrf, mirisdr, rx888, pluto, rtl_tcp), `RtlSdrSource`'s bound, `PlutoTx`'s writer and `PatchRadio::stop` (0.99.100, the survey of 2026-10-28) | raised; drained by the poll |
 | `closeleak` | `SoundCardSource`'s abandoned close tickets and `pa_init.cpp`'s stream-list wait (0.99.100) | raised; drained by the poll |
 | `linkstranded` | `SdrPlaySource`, the callback still running after Uninit (`strandLink`) (0.99.100) | raised; drained by the poll |
-| `streamrestart` | `AirspySource`, the halted bulk stream re-armed (0.99.100) | raised; drained by the poll |
+| `streamrestart` | `SoapySource`'s stall restart, raised at the start (0.99.100 for the Airspy; the three native drivers, Airspy, HackRF and RTL-SDR, raise the four outcome words below instead since the RTL-SDR re-open change) | raised; drained by the poll |
+| `streamback`, `streamfail` | `RtlSdrSource`, `AirspySource`, `HackRfSource`: raised when a stream restart has ENDED, not when it began: `streamback` when samples flowed again after it, `streamfail` when the restarts did not bring them back and the radio was closed. A stop while a restart is pending raises neither | raised; drained by the poll |
+| `usbreopen`, `usbreopenfail` | `RtlSdrSource` only: the radio was closed and reopened by its reader thread after it stopped answering (the device re-enumerated, its handle died, or the chip lost its registers). `usbreopen` once samples flowed again, `usbreopenfail` when the radio was closed for good | raised; drained by the poll |
 | `tunerretry` | `rtl2832u.cpp`, the I2C transfer accepted on a retry (0.99.100) | raised; drained by the poll |
 | `latecall` | `SoapySource`'s late call answered, and `SdrPlaySource`'s (0.99.100) | raised; drained by the poll |
 | `scanlimit` | `soapy_enum_proc.cpp`: the scan's budget spent before a driver, a driver stopped for not answering, no helper to start, the whole scan timed out (0.99.100) | the scan's worker |

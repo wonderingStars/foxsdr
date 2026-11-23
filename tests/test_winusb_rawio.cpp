@@ -60,6 +60,10 @@ struct Fake {
     bool readsAlways87 = false;  // refuse every read of the stream pipe
     bool rawIoAcceptsAnyPipe = false;  // MODEL OF MICROSOFT'S "has no effect": RAW_IO answers TRUE for any pipe the current setting carries, isochronous included
     bool canLook = true;         // false: the new query entries are null
+    DWORD resetErr = 0;          // nonzero: WinUsb_ResetPipe fails with it
+    DWORD abortErr = 0;          // nonzero: WinUsb_AbortPipe fails with it
+    DWORD powerErr = 0;          // nonzero: WinUsb_SetPowerPolicy fails with it
+    DWORD clearStallErr = 0;     // nonzero: the AUTO_CLEAR_STALL pipe policy fails with it
     int rawIoCalls = 0;
     int queryCalls = 0;
     int frees = 0;
@@ -131,13 +135,27 @@ BOOL __stdcall fGetResult(WINUSB_INTERFACE_HANDLE, LPOVERLAPPED ov, LPDWORD move
     return TRUE;
 }
 
-BOOL __stdcall fAbort(WINUSB_INTERFACE_HANDLE, UCHAR) { return TRUE; }
+BOOL __stdcall fAbort(WINUSB_INTERFACE_HANDLE, UCHAR) {
+    if (g.abortErr != 0) {
+        ::SetLastError(g.abortErr);
+        return FALSE;
+    }
+    return TRUE;
+}
 BOOL __stdcall fReset(WINUSB_INTERFACE_HANDLE h, UCHAR pipe) {
     g.resetOn.emplace_back(h, pipe);
+    if (g.resetErr != 0) {
+        ::SetLastError(g.resetErr);
+        return FALSE;
+    }
     return TRUE;
 }
 
 BOOL __stdcall fPolicy(WINUSB_INTERFACE_HANDLE h, UCHAR pipe, ULONG policy, ULONG len, PVOID) {
+    if (policy == AUTO_CLEAR_STALL && g.clearStallErr != 0) {
+        ::SetLastError(g.clearStallErr);
+        return FALSE;
+    }
     if (policy != RAW_IO) { return TRUE; }
     ++g.rawIoCalls;
     if (len != 1) {  // Microsoft: a wrong ValueLength is ERROR_INVALID_PARAMETER
@@ -150,7 +168,13 @@ BOOL __stdcall fPolicy(WINUSB_INTERFACE_HANDLE h, UCHAR pipe, ULONG policy, ULON
     if (!ok) { ::SetLastError(ERROR_INVALID_PARAMETER); }
     return ok ? TRUE : FALSE;
 }
-BOOL __stdcall fPower(WINUSB_INTERFACE_HANDLE, ULONG, ULONG, PVOID) { return TRUE; }
+BOOL __stdcall fPower(WINUSB_INTERFACE_HANDLE, ULONG, ULONG, PVOID) {
+    if (g.powerErr != 0) {
+        ::SetLastError(g.powerErr);
+        return FALSE;
+    }
+    return TRUE;
+}
 BOOL __stdcall fFree(WINUSB_INTERFACE_HANDLE) {
     ++g.frees;
     return TRUE;
@@ -650,6 +674,52 @@ int main() {
         const std::string old = cascade::source::transportFaultSentence(
             "reading samples", "a bulk read failed (Windows error 31)");
         CHECK(has(old, "unplug it and plug it back in"));
+    }
+
+    // 20. THE RESULTS OF THE PIPE-LEVEL CALLS ARE KEPT (diagnosis 2026-11-23, defect D3): a pipe reset, the AUTO_CLEAR_STALL and AUTO_SUSPEND policy calls and the abort
+    //     are not fatal, but their refusals used to vanish, and "the pipe would not reset" is what tells a halted endpoint from a chip that is hung.
+    {
+        reset();
+        g.pipes = {{0, 0, 0x81, UsbdPipeTypeBulk, 512}};
+        g.resetErr = ERROR_INVALID_HANDLE;
+        g.clearStallErr = ERROR_INVALID_PARAMETER;
+        g.powerErr = ERROR_ACCESS_DENIED;
+        Rig r;
+        CHECK(r.dev->streamAccount().empty());   // nothing before a start
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));    // none of them is fatal: the stream starts
+        const std::string a = r.dev->streamAccount();
+        std::printf("     stream account: %s\n", a.c_str());
+        CHECK(has(a, "pipe reset: refused, Windows error 6"));
+        CHECK(has(a, "auto-clear-stall: refused, Windows error 87"));
+        CHECK(has(a, "auto-suspend off: refused, Windows error 5"));
+        g.abortErr = ERROR_INVALID_HANDLE;
+        r.dev->endBulkStream();
+        CHECK(has(r.dev->streamAccount(), "abort: refused, Windows error 6"));
+        // a clean start says so
+        reset();
+        g.pipes = {{0, 0, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig r2;
+        CHECK(r2.dev->beginBulkStream(0x81, 16384, 4));
+        CHECK(has(r2.dev->streamAccount(), "pipe reset: ok"));
+        CHECK(!has(r2.dev->streamAccount(), "refused"));
+        r2.dev->endBulkStream();
+    }
+
+    // 21. THE BENCH SEAM: a poisoned handle answers every call with Windows error 6 and frees nothing under anyone.
+    {
+        reset();
+        g.pipes = {{0, 0, 0x81, UsbdPipeTypeBulk, 512}};
+        Rig r;
+        CHECK(r.dev->beginBulkStream(0x81, 16384, 4));
+        std::uint8_t buf[16384];
+        CHECK(r.dev->readBulk(buf, sizeof(buf), 1000) == 16384);
+        CHECK(r.dev->invalidateForTest());
+        CHECK(r.dev->readBulk(buf, sizeof(buf), 1000) < 0);
+        CHECK(has(r.dev->lastError(), "Windows error 6"));
+        CHECK(r.dev->controlOut(0x40, 0, 0, 0, nullptr, 0, 100) < 0);
+        CHECK(has(r.dev->lastError(), "Windows error 6"));
+        CHECK(!r.dev->resetPipe(0x81));
+        r.dev->endBulkStream();
     }
 
     return testSummary("test_winusb_rawio");

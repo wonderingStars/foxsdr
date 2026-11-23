@@ -687,7 +687,7 @@ by itself, so a count of 1 means "this session had it".
 | `readerleak` | a radio driver's reader did not stop when asked and was let go; the radio is left to the operating system until FoxSDR is restarted. Once a session. |
 | `closeleak` | a sound device did not close in time and the close was left to finish on its own. Once a session. |
 | `linkstranded` | the SDRplay driver was still delivering samples after it was told to stop, and its link was left behind rather than torn down under it. Once a session. |
-| `streamrestart` | the Airspy's sample stream halted and was restarted by itself. Once a session. |
+| `streamrestart` | a radio's sample stream stopped and a restart was started. Once a session. (SoapySDR radios only since the outcome words below; older versions sent it for every restart.) |
 | `tunerretry` | the RTL-SDR's tuner refused a command and accepted it on a retry. Once a session. |
 | `latecall` | a radio driver took seconds to answer a request, and other changes were held until it did. Once a session. |
 | `scanlimit` | the search for radios ran out of time: some drivers were skipped, or the bus was walked inside the application instead of in its helper. Once a session. |
@@ -713,6 +713,10 @@ by itself, so a count of 1 means "this session had it".
 | `companionstall` | a program that one of your plugins runs beside FoxSDR stopped answering and the plugin stopped it. Counted the same way, and held back the same way. |
 | `companionbreak` | the link between one of your plugins and a program it runs beside FoxSDR broke. Counted the same way, and held back the same way. |
 | `companiongaveup` | one of your plugins stopped restarting a program it runs beside FoxSDR after it kept failing. Counted the same way, and held back the same way. |
+| `streamback` | a radio's sample stream stopped, FoxSDR restarted it, and samples flowed again. Once a session. Counted when the restart has finished, not when it starts. |
+| `streamfail` | a radio's sample stream stopped and restarting it did not bring it back; the radio was closed. Once a session. |
+| `usbreopen` | a radio stopped answering on USB, FoxSDR closed and reopened it, and samples flowed again. Once a session. |
+| `usbreopenfail` | a radio stopped answering on USB and reopening it did not bring it back; the radio was closed. Once a session. |
 
 **Stages reached.** One word each, in the order a session reaches them. `launched` is
 counted by every session that measures the stages, so a record's `reached.launched` is

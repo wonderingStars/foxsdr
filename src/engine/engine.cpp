@@ -2586,8 +2586,10 @@ void Engine::selectSource(int idx, std::optional<double> carryAirHz) {
     // A SOUND CARD that has stopped is the same promise, on its own row (it
     // is never device_): the row picked again opens the card again.
     const bool installedCardDead = installedSoundCardDead();
+    // A source that has LATCHED A FAULT counts as dead whether or not the pipeline was running to notice it (a stop that landed inside a re-open leaves a
+    // radio faulted with nothing polling it): picking its row again opens it afresh, for every family.
     const bool installedDead =
-        (rx().device_ != nullptr && (rx().pipeline_.faulted() || rx().device_->deviceDead())) || installedCardDead;
+        (rx().device_ != nullptr && (rx().pipeline_.faulted() || rx().device_->deviceDead() || rx().device_->faulted())) || installedCardDead;
     if (!cascade::gui::pickOpensRow(idx, sourceSel_, installedDead)) { return; }
 
     // BUSY CHECK ON EVERY ROW, not just the device rows (adjudicated fix #4
@@ -5214,6 +5216,9 @@ void Engine::fillPublishedState(cascade::core::PublishedState& ps, const std::st
     // while the test stand-in is in front of the key (it is only ever active
     // where no real radio with a bias tee is reachable), else the radio's own
     // readback. The window draws the lamp from this flag and knows no stand-in.
+    // The box shows what the radio will do, not what it did at the last tick: an RTL-SDR whose re-open withheld the tee (or took a tick in its gap) answers
+    // from its readback, so the stored "shown" follows it (it was refreshed only at an open and at a tick).
+    if (fs.biasTeePresent && !biasStandInActive()) { cascade::gui::biasTeeFollowRadio(biasTeePanel_, rx().device_); }
     fs.biasTeeOn = biasStandInActive() ? biasStandInOn_ : (fs.biasTeePresent && biasTeePanel_.shown);
     fs.patchRunning = patchRunning_;
     // A radio is being opened (8.3): the converter rows are greyed meanwhile.

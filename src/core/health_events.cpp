@@ -83,6 +83,10 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"companionstall", false},
     {"companionbreak", false},
     {"companiongaveup", false},
+    {"streamback", true},      // a pipe that halts halts again; "this session had one" is the fact
+    {"streamfail", true},      // the radio is closed; one is the story
+    {"usbreopen", true},       // a bus that drops a radio drops it again
+    {"usbreopenfail", true},
 };
 
 // The frame timer's own names for the scopes, but for `user-wait`.
@@ -1243,6 +1247,9 @@ void raiseRecovered(Recovered r) {
     const std::size_t i = static_cast<std::size_t>(r);
     if (i < kRecoveredCount) { g_raisedRecovered.fetch_or(1ull << i, std::memory_order_relaxed); }
 }
+
+std::uint64_t raisedRecoveredForTest() { return g_raisedRecovered.load(std::memory_order_relaxed); }
+void clearRaisedRecoveredForTest() { g_raisedRecovered.store(0ull, std::memory_order_relaxed); }
 
 void drainRecovered() {
     const std::uint64_t bits = g_raisedRecovered.exchange(0ull, std::memory_order_relaxed);
