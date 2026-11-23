@@ -2650,9 +2650,33 @@ and translation were wrong. Neither ships in this release. The design that was r
 correct, are described in the review (`D:/foxsdr-build/prep/REVIEW-ringdrop-shed-2026-11-23.md`, sections 1, 2, 3 and 8) for
 a later release. The spectrum path is as it was before the measurement was added; only the accounting touches it.
 
+**The demod performance pass (2026-11-23): what changed in the DSP and what did not.** The receive chain's per-block cost fell by
+making four things cheaper; three of them give the same bits as before and one does not.
+
+- *The filter kernel* (`FirDecimator`, `src/dsp/fir.cpp`) computes several outputs at once with SSE2 (the compiler's default
+  instruction set; no flag changed). It does the same IEEE operations in the same order as the loop it replaced (floats widened to
+  double, multiplied in double, added tap by tap, rounded to float at the end), so its output is **bit-identical** to before for
+  every tap set, block length and decimation phase. `tests/test_dsp_equivalence.cpp` (E1k) compares it with a verbatim copy of the
+  old loop.
+- *The spectrum's decibel conversion* is taken where a frame is pulled (`Pipeline::getLatestFrame`), after the frame lock is
+  released, instead of for every block on the DSP thread. The same logarithm with the same floor is taken on the same floats, so
+  every frame a consumer receives is **bit-identical** to before, on the default path and on the spectrum-block path (E3a, E3b, E3c).
+- *The stereo decoder's 38 kHz carrier* is not generated while its gate is shut (no pilot, or forced mono). What it skipped only
+  multiplied a zero, so left, right and the decoder tap are **bit-identical** to before (E4).
+- *The receive oscillator* (`FastNco`, `src/dsp/nco_fast.hpp`, used by the VFO's mixer and the signal generator's tones) calls the
+  maths library once every 32 samples and builds the samples between by one complex multiply in double. **It is the one change that
+  alters received sample values**: against the previous oscillator a sample differs by at most one float unit in the last place
+  of full scale, in about one component in 20 million (the author counted at most 11 in 241 million); taken over the channel
+  filter and the demodulator the difference is more than 200 dB below the signal (signal-to-difference better than 200 dB), far
+  under the float's own rounding and under any receiver noise.
+
+**No transmit path changed.** The transmit modulator, resampler, transmitter and their sources are byte-identical to the previous
+release; the modulator keeps its own phase accumulator and uses neither `Nco` nor `FastNco`, and nothing on a transmit path includes
+`nco_fast.hpp` or uses `FirDecimator`. A benchmark, `bench_demod_chain` (built by name, not shipped), measures each step.
+
 **The machine line gains the clock and the memory.** `clock=NOW/MAX` is, in MHz, the MAXIMUM clock multiplied by the operating
 system's CURRENT THROTTLE LIMIT, each taken as the highest over all logical processors (`CallNtPowerInformation(ProcessorInformation)`
-from powrprof.dll, loaded by full path from the Windows system folder only - `LOAD_LIBRARY_SEARCH_SYSTEM32` - so a DLL planted beside
+from powrprof.dll, loaded once and kept, from the Windows system folder only - `LOAD_LIBRARY_SEARCH_SYSTEM32` - so a DLL planted beside
 the program is never loaded; read-only; `unknown` where it fails). IT IS NOT A MEASURED CLOCK: Microsoft defines `CurrentMhz` as the
 maximum clock times the current throttle, a nominal figure from the operating system's own state. A core slowed by firmware or by the
 processor itself (thermal, power limit) still reads NOW equal to MAX, so `clock=3200/3200` does NOT rule out throttling, and taking the
