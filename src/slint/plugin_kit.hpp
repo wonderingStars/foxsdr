@@ -53,8 +53,14 @@ public:
     // CASCADE_TILE_READY with `rgb` filled (tileSize * tileSize * 3), PENDING (asking started the fetch), MISSING.
     std::int32_t rawTile(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t>& rgb);
     std::vector<std::string> drainText();
+    // USER BUG B: the category of the last failed fetch the plugin reported (kind None before any, and again once a tile has arrived); never the address.
+    const BasemapFailure& lastFailure() const { return lastFailure_; }
+    // One text line of the plugin, seen at `nowMs` (a monotonic clock): a failure line is kept as the last failure and written to the diagnostics log (the category only) at most once a minute.
+    void noteLine(const std::string& line, std::int64_t nowMs);
 
 private:
+    BasemapFailure lastFailure_;
+    LogGate failureLog_{60000};
     const CascadeBasemapApi* api_ = nullptr;
     void* handle_ = nullptr;
     cascade::core::fault::Slot* slot_ = nullptr;

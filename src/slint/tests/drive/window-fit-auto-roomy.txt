@@ -1,0 +1,9 @@
+#! frames=200 bank=4 sections=4:0 config=window-fit-auto-small.json FOXSDR_SLINT_WORK_AREA=1920x1040 FOXSDR_SLINT_OS_SCALE=1.5
+# window-fit-auto-roomy (user bug C3): a 1920 x 1080 screen at 150 % (work area 1920 x 1040: 1280 x 693 logical) holds the layout, so Auto is NOT lowered: scale 1.50, and the control keeps its old words.
+10 state running == 1
+state volume == 0
++60 state look.scale == 1.50
+state look.minw == 1024
+state look.minh == 640
+expect "Interface size" value equals "Auto (follows Windows, 150% here)"
+state look.startmax == 0

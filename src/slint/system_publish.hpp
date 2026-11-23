@@ -87,6 +87,8 @@ public:
     void setInterfaceSize(int index);
     // The operating system's own scale (the window's look knows it apart from the one it dispatched): the Auto row's "% here" quotes this, not the window's.
     void setOsScale(float scale) { osScale_ = scale; }
+    // The scale Auto was LOWERED to so that the layout fits the screen (look_logic autoScaleToFit; 0 = Auto is not lowered): the Auto row then says "Auto (100% to fit this screen)".
+    void setAutoFitScale(float scale) { autoFitScale_ = scale; }
 
     // A bounded run's self-captures. Never set in a release.
     //   languageChangeForCapture: as if the Language dropdown had picked `code` (the whole path: save, setLanguage, select_bundled_translation, re-publish).
@@ -158,6 +160,7 @@ private:
     ReadOptions opts_;
     SystemModels last_;
     bool haveModels_ = false;
+    float autoFitScale_ = 0.0f;
     float osScale_ = 0.0f;   // 0 = not told yet: the window's own scale stands in
     FoxReceiverState state_{};
     std::size_t sent_ = 0;

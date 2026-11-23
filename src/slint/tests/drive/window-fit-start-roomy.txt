@@ -1,0 +1,8 @@
+#! frames=120 FOXSDR_SLINT_WORK_AREA=5120x1392
+# window-fit-start-roomy (user bug C): a screen with room (the 5120 x 1440 desk, work area 5120 x 1392) keeps the wanted 1600 x 900 logical window, and it is inside the work area.
+10 state running == 1
+state look.scale == 1.00
+state look.physw == 1600
+state look.physh == 900
+state look.startmax == 0
+state look.maximised == 0

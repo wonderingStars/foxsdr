@@ -78,6 +78,7 @@ public:
     std::size_t pageCount() const { return pages_.size(); }
     std::size_t openMapPages() const;
     std::string pagesLine() const;   // "pages: output, APT image(torn)" for the bounded run
+    std::string tilesNoteLine() const;   // user bug B: the note a map page shows while its tiles are missing ("" none), for the bounded run's `state kit.tilesNote`
     // A bounded run's self-capture (FOXSDR_SLINT_OPEN="output,fitted,panel:<name>,instrument:<name>|<title>,image:<name>,map:<name>,module:<file>"):
     // the pages named are opened on the first publish that knows the plugins, the last one named is shown. Never set in a release.
     void openFromEnv(const std::string& spec);
@@ -171,6 +172,8 @@ private:
         std::vector<std::string> listIds;           // the i-th list row's id
         bool sourceSet = false;
         std::string sourceAttribution;
+        std::string tilesNote;                      // user bug B: what the page last showed over the map while its tiles were missing
+        TilesNoteWatch tilesWatch;                  // user bug B: when the note shows (3 s after the last view change or painted tile)
         foxsdr::slintmapj::MapJSurface j;           // screen lane J: the layers, the replay, the filter, the units
     };
 

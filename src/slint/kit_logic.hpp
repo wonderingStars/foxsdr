@@ -228,6 +228,54 @@ bool mapDrawsTiles(bool basemapActive, bool satellitePage);
 // A map imagery plugin is running but this page does not use it (a satellites page): the page says so instead of leaving the user to wonder.
 bool mapImageryUnused(bool basemapActive, bool satellitePage);
 
+// ---- the map when its pictures cannot be fetched (user bug B) ----
+// The basemap plugin says why a fetch failed in its text stream ("<reason> fetching <url>", "a tile did not decode as a 256px image", ...). What the host keeps and shows is the CATEGORY only: never
+// the address, the host name or a path (a line on the map, or in the diagnostics log that is uploaded, must carry none of them), and never the text AFTER " fetching " (the address) when it decides.
+// NotAPicture: the server answered, but not with a map picture (a captive portal's or a proxy's page, an empty body, a body that does not decode, one over the size limit).
+enum class BasemapFault { None, Unreachable, TimedOut, Refused, NotAPicture, Other };
+struct BasemapFailure {
+    BasemapFault kind = BasemapFault::None;
+    int httpCode = 0;          // Refused: the server's answer
+    std::int64_t atMs = 0;     // when the line was seen (the steady clock, milliseconds): a category older than the last painted tile is forgotten (TilesNoteWatch)
+    bool operator==(const BasemapFailure& o) const { return kind == o.kind && httpCode == o.httpCode; }
+};
+// What a text line of the basemap plugin says about a failed fetch; kind None for a line that is not a failure (its "showing", "serving tiles from ..." and "map sources" lines, or any line that is not the plugin's).
+// EVERY failure line of the plugin lands in a category: the ones it can emit are each matched by name (HTTP codes, "timed out", "transfer took longer than the budget", "request failed", "connect failed",
+// "read failed", "WinHttpOpen failed", "response ended early", "response larger than the limit", "empty response", "did not decode", "is not a ...px image", and the three URL errors), and a line of the
+// plugin ("basemap: ...") that matches none of them is Other, never ignored.
+BasemapFailure classifyBasemapLine(const std::string& line);
+// The category in plain words for the diagnostics log: "no connection", "timed out", "HTTP 403", "not a picture", "no reason given".
+std::string basemapFailureLogWords(const BasemapFailure& f);
+// The sentence over the map for one category: "Map pictures could not be loaded: <reason>. The built-in coastline is shown instead." Kind None is worded as Other.
+std::string mapTilesNoteText(const BasemapFailure& why);
+// WHEN THE NOTE SHOWS (user bug B, review B1 + B2). For the CURRENT view: when no tile has painted for kDelayMs and at least one tile is pending or missing, the note shows, with the most recent failure
+// category seen since the last painted tile (the plugin reports only three failures per instance, so a later outage has no fresh line: then the generic category); it goes the moment a tile paints.
+// The delay starts again after every view change (a zoom step or a pan: `viewKey`), so a view whose tiles arrive normally never shows the note; a category older than the last painted tile is forgotten.
+class TilesNoteWatch {
+public:
+    static constexpr std::int64_t kDelayMs = 3000;
+    // `drawn`, `missing`, `pending`: the compositor's tile report for this view; `seen`: the plugin's last failure (atMs on the same clock as `nowMs`); "" for no note.
+    std::string update(bool tilesOn, std::uint64_t viewKey, int drawn, int missing, int pending, const BasemapFailure& seen, std::int64_t nowMs);
+    void reset();
+private:
+    bool haveView_ = false;
+    std::uint64_t viewKey_ = 0;
+    std::int64_t quietSinceMs_ = 0;      // the last view change or painted tile
+    std::int64_t lastPaintMs_ = INT64_MIN;
+};
+// The view's identity for TilesNoteWatch: the zoom (to an eighth of a doubling) and the centre's cell (an eighth of the span), with the picture's size; a followed aircraft's creep stays inside a cell.
+std::uint64_t mapViewKey(double centreLat, double centreLon, double spanDeg, int w, int h);
+// At most one log line per `minGapMs`: allow(now) is true the first time and then again once the gap has passed.
+class LogGate {
+public:
+    explicit LogGate(std::int64_t minGapMs) : gap_(minGapMs) {}
+    bool allow(std::int64_t nowMs) { if (seen_ && nowMs - last_ < gap_) { return false; } seen_ = true; last_ = nowMs; return true; }
+private:
+    std::int64_t gap_;
+    std::int64_t last_ = 0;
+    bool seen_ = false;
+};
+
 // ---- the page titles and the rows' tooltips ----
 std::string imageTitle(const std::string& plugin);          // "<plugin> image"
 std::string mapTitle(const std::string& plugin);            // "<plugin> map"

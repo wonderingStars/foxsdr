@@ -1,0 +1,11 @@
+#! frames=200 config=window-fit-scale150.json FOXSDR_SLINT_WORK_AREA=1920x1040
+# window-fit-scale150 (user bug C): Interface size 150 % on a 1920 x 1080 screen (work area 1920 x 1040): 1600 x 900 logical would be 2400 x 1350. The window is the work area, at its corner, and the smallest window at 150 % (1536 x 960) fits,
+# so it is not maximised and the minimum stays 1024 x 640.
+60 state look.scale == 1.50
+state look.physw == 1920
+state look.physh == 1040
+state look.x == 0
+state look.y == 0
+state look.startmax == 0
+state look.minw == 1024
+state look.minh == 640

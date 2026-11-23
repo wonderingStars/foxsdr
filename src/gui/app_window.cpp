@@ -1064,14 +1064,15 @@ int AppWindow::run(int frames) {
     // Scaled to 1280*S x 720*S and clamped to the WORK AREA of the monitor the
     // still-hidden window actually landed on, so a saved 200% from a 4K desk
     // does not ask a 1366x768 laptop for a window bigger than its own screen.
-    // S=1: exactly 1280x720, unchanged - the clamp is a no-op on any monitor
-    // with at least that much work area, which is every supported monitor.
+    // S=1: exactly 1280x720 on a monitor with at least that much work area. The
+    // clamp runs at S=1 too (it was skipped there, so a 1366x768 or 1280x720
+    // screen, whose work area is under 720 high, got a window taller than it).
     //
     // THE WORK AREA WINS EVEN OVER THE SCALED MINIMUM: firstLaunchWindowGeometry
     // (gui/ui_scale.hpp) re-clamps to the work area AFTER the floor and keeps the
     // window's whole rectangle on screen (200% on a 1366x768 laptop wants a
     // 1248x800 minimum against a work area of roughly 1366x728).
-    if (cascade::gui::uiscale::factor() != 1.0f) {
+    {
         int areaX = 0, areaY = 0, areaW = 0, areaH = 0;
         cascade::gui::monitorWorkareaForWindow(window, areaX, areaY, areaW, areaH);
         const double s = static_cast<double>(cascade::gui::uiscale::factor());
@@ -8417,6 +8418,11 @@ void AppWindow::drawSourceSection() {
             ImGui::PopID();
         }
         ImGui::EndDisabled();
+        if (agc && !airspyPanel && !c.gains.empty()) {   // USER BUG A: the sliders above are off because automatic gain is on - say so, instead of a dead control
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", tr("Automatic gain is on. Switch it off to set the gain by hand."));
+            ImGui::PopStyleColor();
+        }
 
         // THE BIAS TEE, BELOW THE GAINS AND OUTSIDE THE AGC DISABLE. It is
         // not a gain and it is not affected by automatic gain control: it is

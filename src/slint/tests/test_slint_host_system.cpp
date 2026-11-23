@@ -336,6 +336,7 @@ void displayReads() {
     CHECK(scaleIndexOf("auto") == 0 && scaleIndexOf("100") == 1 && scaleIndexOf("250") == 6 && scaleIndexOf("") == 0 && scaleIndexOf("99") == 0);
     CHECK(scaleChoiceOf(0) == "auto" && scaleChoiceOf(1) == "100" && scaleChoiceOf(6) == "250" && scaleChoiceOf(7).empty() && scaleChoiceOf(-1).empty());
     CHECK(scaleLabel(0, 150) == "Auto (follows Windows, 150% here)" && scaleLabel(3, 150) == "150%");
+    CHECK(scaleLabel(0, 150, 100) == "Auto (100% to fit this screen)" && scaleLabel(0, 150, 0) == "Auto (follows Windows, 150% here)" && scaleLabel(3, 150, 100) == "150%");   // user bug C3: Auto lowered to fit the screen says so
     CHECK(themeIndexOf("today") == 0 && themeIndexOf("field") == 5 && themeIndexOf("Night") == 0 && themeIndexOf("") == 0);
     CHECK(std::string(themePreset(1).key) == "classic-xl" && themePreset(1).counterScale == 2.0f && !themePreset(1).switches && themePreset(1).readings == 1.4f);
     CHECK(std::string(themePreset(3).face) == "plain" && std::string(themePreset(2).face) == "neon" && std::string(themePreset(0).face) == "nixie");

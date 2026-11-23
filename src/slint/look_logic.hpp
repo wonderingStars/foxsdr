@@ -62,6 +62,44 @@ struct WorkRect { int left = 0, top = 0, right = 0, bottom = 0; };   // physical
 struct WindowPlace { int x = 0, y = 0; };
 WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, const WorkRect& r);
 
+// THE WINDOW AT START (user bug C, 2026-11-23). The window opens at the wanted LOGICAL size (`wantW` x `wantH`, 1600 x 900) times `scale`, but never larger than the work area `work` of the
+// monitor it opens on (physical pixels, taskbar already excluded), and sits fully inside that work area (`curX`, `curY` is where the system put it; moved the least that fits). Where the work
+// area is smaller than the smallest window (`minW` x `minH` logical, at `scale`) the window is MAXIMISED (it fills the work area) and `minW` / `minH` come back lowered to the work area's logical
+// size, the minimum for this session. No work area known (an empty `work`): the wanted size, the place left alone, nothing maximised, the minimum unchanged.
+struct StartFit { std::uint32_t w = 0, h = 0; int x = 0, y = 0; bool maximise = false; float minW = 0.0f, minH = 0.0f; };
+StartFit fitStartWindow(float wantW, float wantH, float minW, float minH, float scale, const WorkRect& work, int curX, int curY);
+
+// THE HOLD AFTER THE START FIT (user bug C review, C1 + C2). A size or place set before the system has mapped the window is not always kept (it maps the window at its own default size and place a
+// moment after the first ask), so the fit is asked again on the first ticks - but the hold must end the moment the USER has the window. The host ends it at once on the user's own calls (a title drag,
+// an edge drag, the maximise and minimise keys, the maximise shortcut: windowUserTouched in main.cpp); this class judges what only the window itself can tell. On each look it is given the window as it
+// is NOW. Until the system has TAKEN the fit (the fit's size and place seen on two looks in a row) a different size or place is the system settling: asked again. After that, ANY other size or place
+// is the user's (a Win+Arrow snap, a drag by the system): `User`, and the window is never touched again. A window the user maximised (the fit did not), or minimised, is the user's at any time. A window
+// that starts minimised or maximised (a shortcut set to "Run: Minimized" / "Maximized") is left exactly as it is (`User` on the first look). The hold also ends (`Finished`) after `kMaxTicks` looks or
+// `kMaxMs` milliseconds, whichever comes first, and once a window the fit maximised has stayed maximised. Where the fit maximises, the size and place are applied FIRST (the work area) and the
+// maximise after, so that a later Restore gives a window that fits the screen, not the oversized one the system opened.
+struct HoldLook { std::uint32_t w = 0, h = 0; int x = 0, y = 0; bool maximised = false, minimised = false; };
+struct HoldAction {
+    enum class Kind { Reassert, Finished, User };
+    Kind kind = Kind::Reassert;
+    bool setSize = false, setPlace = false, setMaximised = false;   // for Reassert: what to ask the window for (size and place before the maximise)
+};
+class StartHold {
+public:
+    static constexpr int kMaxTicks = 20;
+    static constexpr std::int64_t kMaxMs = 1500;
+    void begin(const HoldLook& before, const StartFit& fit);
+    // `nowMs`: a monotonic clock in milliseconds. After User or Finished every later call answers the same.
+    HoldAction look(const HoldLook& now, std::int64_t nowMs);
+    bool over() const { return over_; }
+private:
+    HoldLook before_;
+    StartFit fit_;
+    std::int64_t startMs_ = -1;
+    int looks_ = 0, stable_ = 0;
+    bool over_ = false, matched_ = false;
+    HoldAction::Kind last_ = HoldAction::Kind::Finished;
+};
+
 // THE DRAG OF A WINDOW EDGE (the frameless window's three resize edges, ui/main.slint). Until drive fixes 7 an edge reported how far the pointer was from where it was pressed, measured
 // from the EDGE ITSELF, and the host asked for "the size the window has now plus that distance". That is right only if the window has already taken the last size asked for when the
 // next pointer move arrives. It has not: the size is applied a frame or more later, so every move that arrived in between added the same distance again, the window overshot, the
@@ -123,16 +161,31 @@ private:
     float lastW_ = 0.0f, lastH_ = 0.0f;
 };
 
+// THE AUTO SCALE THAT FITS THE SCREEN (user bug C3, 2026-11-23). The layout needs `minW` x `minH` logical pixels (host_logic.hpp kMinWindowW / kMinWindowH, 1024 x 640). On a 1280 x 720 screen at
+// Windows 150 % the work area is 853 x 453 logical: 42 of 173 controls (the window's own Minimise / Maximise / Close keys among them) are outside the window and nothing scrolls. So when the Interface
+// size is "Auto" (`choice` is not one of the steps: the user has chosen no size) and the work area (`workW` x `workH`, physical pixels, task bar out; 0 = not known) at the scale Auto would use (`osScale`)
+// is smaller than the layout's, the scale is the LARGEST step of the Interface size setting (100 .. 250 %, gui/ui_scale.hpp) below the system's at which the work area holds the layout - never below
+// 100 %. Where even 100 % does not hold it (a 1024 x 600 screen) nothing is lowered: the start-time fit maximises the window and lowers the minimum (fitStartWindow). A chosen size is never overridden.
+struct AutoFit {
+    float scale = 1.0f;       // the scale to draw at
+    bool lowered = false;     // true when it is lower than the system's, to fit the screen
+    bool holds = true;        // true when the work area holds the layout at `scale` (false: the screen is too small even at 100 %, or its size is not known and nothing was checked)
+};
+AutoFit autoScaleToFit(int workW, int workH, float osScale, const std::string& choice, float minW, float minH);
+
 struct ScalePlan {
     float want = 1.0f;     // the scale the window should have
     bool change = false;   // true when it does not have it yet
     float os = 1.0f;       // the operating system's scale as far as this follower knows
+    bool lowered = false;  // `want` is lower than the system's because Auto would not fit the screen (autoScaleToFit)
 };
 
 class ScaleFollower {
 public:
-    // `choice`: the saved interface size; `current`: Window::scale_factor() now.
-    ScalePlan plan(const std::string& choice, float current);
+    // `choice`: the saved interface size; `current`: Window::scale_factor() now. `workW` x `workH`: the work area of the window's monitor in physical pixels (0 = not known: no lowering), `minW` x `minH`
+    // the layout's smallest logical size; `osHint`: the monitor's own Windows scale where it can be asked (0 = cannot: the follower infers it from what the window reports, as it always did). With the
+    // hint a scale this code dispatched (a lowered one) cannot hide a move to another monitor whose Windows scale happens to equal it.
+    ScalePlan plan(const std::string& choice, float current, int workW = 0, int workH = 0, float minW = 0.0f, float minH = 0.0f, float osHint = 0.0f);
     // The number the caller just dispatched to the window.
     void applied(float scale) { applied_ = scale; }
     float os() const { return os_; }

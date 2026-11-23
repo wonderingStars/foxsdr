@@ -737,6 +737,7 @@ struct TileCompositor::Impl {
     std::unordered_map<std::uint64_t, std::uint64_t> missing;       // key -> the frame the MISSING was recorded on
     std::unordered_set<std::uint64_t> asked;                        // keys asked in the compose in progress
     std::vector<std::uint8_t> fetched;                              // the plugin writes into this
+    TileReport report;                                              // what the last compose that asked for tiles found: drawn, believed missing, still pending
 
     Scratch scratch;
     ScanFill fill;
@@ -893,7 +894,11 @@ struct TileCompositor::Impl {
                 long tx = txRaw % nl;
                 if (tx < 0) { tx += nl; }
                 const std::uint8_t* rgb = fetch(static_cast<std::uint32_t>(z), static_cast<std::uint64_t>(tx), static_cast<std::uint64_t>(ty), pending);
-                if (rgb == nullptr) { continue; }
+                if (rgb == nullptr) {
+                    if (missing.count(tileKey(static_cast<std::uint32_t>(z), static_cast<std::uint64_t>(tx), static_cast<std::uint64_t>(ty))) != 0u) { ++report.missing; } else { ++report.pending; }
+                    continue;
+                }
+                ++report.drawn;
                 blit(f, rgb, xW, xE, yN, yS, baseX + (txRaw - tx0) * static_cast<long>(tileSize), baseY + (ty - ty0) * static_cast<long>(tileSize));
                 any = true;
             }
@@ -1433,9 +1438,10 @@ bool TileCompositor::compose(std::uint8_t* rgba, int width, int height) {
     bool pending = false;
     bool tiled = false;
     // (the retry clock belongs to the tile path: a view that no longer asks for tiles stops it, or every clean call after it would compose)
-    if (!tilePath) { m.nextRetry = std::numeric_limits<std::uint64_t>::max(); }
+    if (!tilePath) { m.nextRetry = std::numeric_limits<std::uint64_t>::max(); m.report = TileReport{}; }
     if (tilePath) {
         m.asked.clear();
+        m.report = TileReport{};
         for (auto it = m.missing.begin(); it != m.missing.end();) {
             if (m.frame - it->second >= TileCompositor::kMissingRetryComposes) { it = m.missing.erase(it); } else { ++it; }
         }
@@ -1456,6 +1462,8 @@ bool TileCompositor::compose(std::uint8_t* rgba, int width, int height) {
     m.dirty = pending;                      // a PENDING tile is asked again by the next compose
     return true;
 }
+
+TileReport TileCompositor::tileReport() const { return impl_->report; }
 
 bool TileCompositor::project(double latDeg, double lonDeg, double& fx, double& fy) const {
     const Impl& m = *impl_;

@@ -690,6 +690,48 @@ int main() {
             if (dw.page == 0 && dw.addr == 0x19 && dw.value == 0x05) { demodAgcOff = true; }
         }
         CHECK(demodAgcOff);
+
+        // USER BUG A (2026-11-23): A GAIN WRITTEN BY HAND LEAVES AUTOMATIC GAIN, through every setter. A named stage used to write its index with both loops still on the part, so
+        // under automatic gain the write did nothing and the driver kept saying "automatic".
+        live->clear();
+        CHECK(src.setAutoGain(true));
+        CHECK(src.autoGain());
+        live->clear();
+        CHECK(src.setGainDb("LNA", 0.0));
+        w = live->writes();
+        CHECK(!src.autoGain());   // the driver's flag
+        expectTunerSequence("LNA by hand under automatic gain", tunerWrites(w, 0x34),
+                            {
+                                {0x05, 0x10, 0x10},  // the tuner's own AGC off: LNA off its loop
+                                {0x07, 0x00, 0x10},  // mixer off its loop
+                                {0x0c, 0x08, 0x9f},  // the VGA back at its manual index
+                                {0x05, 0x0f, 0x0f},  // the manual indices put back
+                                {0x07, 0x0e, 0x0f},
+                                {0x05, 0x00, 0x0f},  // then the LNA index asked for
+                            });
+        bool stageDemodAgcOff = false;
+        for (const DemodWrite& dw : demodWrites(w)) {
+            if (dw.page == 0 && dw.addr == 0x19 && dw.value == 0x05) { stageDemodAgcOff = true; }   // the demodulator's AGC bit
+        }
+        CHECK(stageDemodAgcOff);
+        CHECK_NEAR(src.gainDb("LNA"), 0.0, 0.001);
+        // already manual: the next stage write is that write and nothing else (no AGC bit, no loop release)
+        live->clear();
+        CHECK(src.setGainDb("MIXER", 0.0));
+        expectTunerSequence("MIXER by hand, already manual", tunerWrites(live->writes(), 0x34), {{0x07, 0x00, 0x0f}});
+        for (const DemodWrite& dw : demodWrites(live->writes())) { CHECK(!(dw.page == 0 && dw.addr == 0x19)); }   // (the repeater's own switching is a demodulator write too: it is the AGC bit that must stay untouched)
+        // the overall gain does the same: automatic gain on, a TUNER write, the driver and the demodulator both manual
+        live->clear();
+        CHECK(src.setAutoGain(true));
+        live->clear();
+        CHECK(src.setGainDb("TUNER", 24.0));
+        w = live->writes();
+        CHECK(!src.autoGain());
+        bool aggDemodAgcOff = false;
+        for (const DemodWrite& dw : demodWrites(w)) {
+            if (dw.page == 0 && dw.addr == 0x19 && dw.value == 0x05) { aggDemodAgcOff = true; }
+        }
+        CHECK(aggDemodAgcOff);
     }
 
     // =======================================================================

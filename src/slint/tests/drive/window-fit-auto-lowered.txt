@@ -1,0 +1,20 @@
+#! frames=200 config=window-fit-auto-small.json FOXSDR_SLINT_WORK_AREA=1280x680 FOXSDR_SLINT_OS_SCALE=1.5
+# window-fit-auto-lowered (user bug C3, 2026-11-23): a 1280 x 720 screen (work area 1280 x 680) at Windows 150 % with Interface size "Auto". At 150 % the work area is 853 x 453 logical, under the layout's 1024 x 640: 42 of 173 controls
+# (the window's own Minimise / Maximise / Close keys among them) were outside the window and nothing scrolls. Auto is now LOWERED to the largest step at which the work area holds the layout: 100 %. The window is then the work area
+# (1280 x 680 physical = 1280 x 680 logical), not maximised, the minimum stays 1024 x 640 - and not one control is outside the window.
+# FOXSDR_SLINT_OS_SCALE is the bounded run's seam for Windows' own scale of the monitor (the hidden desktop is at 100 %): the follower believes the system is at 150 % and decides as it would there.
+10 state running == 1
+state volume == 0
++60 state look.scale == 1.00
+state look.physw == 1280
+state look.physh == 680
+state look.startmax == 0
+state look.minw == 1024
+state look.minh == 640
+state cfg.interfaceScale == auto
+state look.controls > 120
+state look.outside == 0
+expect "Minimise" right <= "1280"
+expect "Close" right <= "1280"
++30 state look.outside == 0
+state look.scale == 1.00

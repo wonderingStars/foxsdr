@@ -1,0 +1,12 @@
+#! frames=200 config=window-fit-chosen-small.json FOXSDR_SLINT_WORK_AREA=1280x680 FOXSDR_SLINT_OS_SCALE=1.5
+# window-fit-chosen-small (user bug C3): the user CHOSE an Interface size (125 %): nothing is overridden on a small screen. At 125 % the work area 1280 x 680 is 1024 x 544 logical, under the layout's 640 high, so (as before this
+# change) the window is the work area, the screen is "too small" and the minimum for the session is lowered to 1024 x 544; the scale stays 1.25, never lowered to 100 %.
+10 state running == 1
+state volume == 0
++60 state look.scale == 1.25
+state look.physw == 1280
+state look.physh == 680
+state look.startmax == 1
+state look.minw == 1024
+state look.minh == 544
+state cfg.interfaceScale == 125

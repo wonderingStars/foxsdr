@@ -191,6 +191,9 @@ int main() {
         CHECK(gainText(true, true, 32, "dB") == "AUTO");
         CHECK(gainText(true, false, 32, "dB") == "32 dB");
         CHECK(gainText(true, false, 7, "step") == "7 step");
+        // USER BUG A: under automatic gain the slider is off and the words beside it say why; with it off they name the stage and the radio, as they always did
+        CHECK(gainHintText(true, "TUNER", "RTL-SDR") == "Automatic gain is on. Switch it off to set the gain by hand.");
+        CHECK(gainHintText(false, "TUNER", "RTL-SDR") == "TUNER stage \xC2\xB7 RTL-SDR");
     }
 
     // ---- the spectrum's axes ----

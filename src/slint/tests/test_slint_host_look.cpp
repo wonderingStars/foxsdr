@@ -328,6 +328,120 @@ void windowSizeAtEverySize(int screenW, int screenH) {   // the work area of the
         f = fitWindowToScreen(1300, 780, 1.0f, 1024.0f, 640.0f, 1920, 1040);
         CHECK(f.w == 1300 && f.h == 780);    // a window already inside both is left alone
     }
+    // USER BUG C: the window at start, fitted to the work area of the monitor it opens on (taskbar already out of the work area; physical pixels)
+    {
+        const auto fit = [](float scale, int w, int h, int cx, int cy) { return fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, scale, WorkRect{0, 0, w, h}, cx, cy); };
+        StartFit s = fit(1.0f, 1366, 728, 500, 400);   // 1366 x 768 laptop, 100 %
+        CHECK(s.w == 1366 && s.h == 728 && s.x == 0 && s.y == 0 && !s.maximise && s.minW == 1024.0f && s.minH == 640.0f);
+        s = fit(1.0f, 1280, 680, 300, 300);            // 1280 x 720 screen, 100 %
+        CHECK(s.w == 1280 && s.h == 680 && s.x == 0 && s.y == 0 && !s.maximise);
+        s = fit(1.25f, 1920, 1040, 400, 100);          // 1920 x 1080 at 125 % (1536 x 864 logical): 2000 x 1125 was asked of a 1920 x 1040 area
+        CHECK(s.w == 1920 && s.h == 1040 && s.x == 0 && s.y == 0 && !s.maximise);
+        s = fit(1.5f, 1920, 1040, 10, 10);             // 1920 x 1080 at 150 % (1280 x 720 logical): the smallest window, 1536 x 960, still fits
+        CHECK(s.w == 1920 && s.h == 1040 && !s.maximise && s.minW == 1024.0f && s.minH == 640.0f);
+        s = fit(1.0f, 1024, 560, 0, 0);                // 1024 x 600 screen: 560 high is under the 640 minimum - maximised, the minimum lowered to what the screen has
+        CHECK(s.maximise && s.w == 1024 && s.h == 560 && s.x == 0 && s.y == 0 && s.minW == 1024.0f && s.minH == 560.0f);
+        s = fit(1.25f, 1366, 728, 0, 0);               // 1366 x 768 at 125 %: the work area is 1093 x 582 logical, under the 640 minimum height: maximised, minimum 1024 x 582.4
+        CHECK(s.maximise && s.w == 1366 && s.h == 728 && s.minW == 1024.0f && s.minH > 582.3f && s.minH < 582.5f);
+        s = fit(1.0f, 5120, 1392, 1360, 270);          // the 5120 x 1440 desk: 1600 x 900 fits and stays where it is
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 1360 && s.y == 270 && !s.maximise);
+        s = fit(1.0f, 5120, 1392, 4000, 800);          // opened near the right and bottom edges: moved in, never out of the area
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 3520 && s.y == 492);
+        s = fit(2.5f, 5120, 1392, 100, 100);           // 250 %: 4000 x 2250 asked; the area is 1392 high, under the 1600 minimum: maximised, minimum 556.8 logical high
+        CHECK(s.maximise && s.w == 5120 && s.h == 1392 && s.minW == 1024.0f && s.minH > 556.7f && s.minH < 556.9f);
+        s = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{1920, 0, 3840, 1040}, 100, 100);   // a second monitor: placed inside ITS area
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 1920 && s.y == 100);
+        s = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{}, 77, 88);   // no work area known: the wanted size, left where it is
+        CHECK(s.w == 1600 && s.h == 900 && s.x == 77 && s.y == 88 && !s.maximise && s.minW == 1024.0f);
+        for (int w : {1024, 1280, 1366, 1536, 1920, 2560, 5120}) {   // whatever the area: the window is inside it
+            for (int h : {560, 680, 728, 864, 1040, 1392}) {
+                for (float sc : {1.0f, 1.25f, 1.5f, 2.0f, 2.5f}) {
+                    s = fit(sc, w, h, 3000, 3000);
+                    CHECK(s.x >= 0 && s.y >= 0 && s.x + static_cast<int>(s.w) <= w && s.y + static_cast<int>(s.h) <= h);
+                }
+            }
+        }
+    }
+    // THE HOLD AFTER THE FIT (review C1 + C2): the fit is held while the system settles, and let go of the moment the USER has the window
+    {
+        const StartFit fit = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{0, 0, 1366, 728}, 104, 104);   // 1366 x 728 at 0,0
+        const HoldLook before{1600, 900, 104, 104, false, false};
+        const auto fresh = [&](const StartFit& f, const HoldLook& b) { StartHold h; h.begin(b, f); return h; };
+        {   // a normal start: asked; the system maps the window at ITS size and place after the first ask (not the user's: asked again); then it takes the fit; the hold runs out
+            StartHold h = fresh(fit, before);
+            HoldAction a = h.look(before, 0);
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace && !a.setMaximised);
+            a = h.look(HoldLook{1600, 900, 156, 156, false, false}, 33);   // mapped at the system's default place: not the user's
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace);
+            a = h.look(HoldLook{1366, 728, 156, 156, false, false}, 66);   // the size was taken, the place not yet
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && a.setPlace);
+            a = h.look(HoldLook{1366, 728, 0, 0, false, false}, 99);       // both taken: nothing more to ask
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && !a.setPlace);
+            bool ended = false;
+            for (int i = 0; i < 40 && !ended; ++i) { ended = h.look(HoldLook{1366, 728, 0, 0, false, false}, 130 + i * 33).kind == HoldAction::Kind::Finished; }
+            CHECK(ended && h.over());   // 20 looks, then it lets go
+        }
+        {   // the user moves the window once the fit has been taken (two looks in a row): never undone, and the hold stays over
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 33);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 66);
+            HoldAction a = h.look(HoldLook{1366, 728, 60, 40, false, false}, 99);
+            CHECK(a.kind == HoldAction::Kind::User && h.over());
+            a = h.look(before, 132);
+            CHECK(a.kind == HoldAction::Kind::User && !a.setSize && !a.setPlace && !a.setMaximised);   // later looks are answered "user", nothing is asked
+        }
+        {   // the user (a Win+Arrow snap, a system drag) sizes it after the fit was taken: a size that is neither the fit's nor the old one
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 33);
+            (void)h.look(HoldLook{1366, 728, 0, 0, false, false}, 66);
+            const HoldAction a = h.look(HoldLook{1246, 648, 0, 0, false, false}, 99);
+            CHECK(a.kind == HoldAction::Kind::User);
+        }
+        {   // the user maximises it (not what the fit asked for)
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            const HoldAction a = h.look(HoldLook{1366, 728, 0, 0, true, false}, 33);
+            CHECK(a.kind == HoldAction::Kind::User);
+        }
+        {   // the user minimises it
+            StartHold h = fresh(fit, before);
+            (void)h.look(before, 0);
+            const HoldAction a = h.look(HoldLook{1600, 900, -32000, -32000, false, true}, 33);
+            CHECK(a.kind == HoldAction::Kind::User);
+        }
+        {   // a window that starts minimised or maximised is left exactly as it is
+            StartHold h = fresh(fit, HoldLook{1600, 900, -32000, -32000, false, true});
+            CHECK(h.look(HoldLook{1600, 900, -32000, -32000, false, true}, 0).kind == HoldAction::Kind::User);
+            StartHold m = fresh(fit, HoldLook{1920, 1040, 0, 0, true, false});
+            CHECK(m.look(HoldLook{1920, 1040, 0, 0, true, false}, 0).kind == HoldAction::Kind::User);
+        }
+        {   // the time bound: a slow start (a look every 200 ms) is held for 1.5 s at most, not for 20 looks
+            StartHold h = fresh(fit, before);
+            HoldAction a;
+            int looks = 0;
+            for (; looks < 20; ++looks) { a = h.look(before, looks * 200); if (a.kind != HoldAction::Kind::Reassert) { break; } }
+            CHECK(a.kind == HoldAction::Kind::Finished && looks < 10);
+        }
+        {   // the fit maximises (a work area under the smallest window): the size and the place go FIRST, the maximise in the same ask, so Restore gives the fitted window
+            const StartFit tiny = fitStartWindow(1600.0f, 900.0f, 1024.0f, 640.0f, 1.0f, WorkRect{0, 0, 1024, 560}, 104, 104);
+            CHECK(tiny.maximise && tiny.w == 1024 && tiny.h == 560 && tiny.x == 0 && tiny.y == 0);
+            StartHold h = fresh(tiny, before);
+            HoldAction a = h.look(before, 0);
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace && !a.setMaximised);   // NOT maximised yet: the restore rectangle must be the fitted one
+            a = h.look(HoldLook{1600, 900, 156, 156, false, false}, 33);   // the system mapped the window at its own size and place: asked again, still no maximise
+            CHECK(a.kind == HoldAction::Kind::Reassert && a.setSize && a.setPlace && !a.setMaximised);
+            a = h.look(HoldLook{1024, 560, 0, 0, false, false}, 66);       // taken (first look)
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && !a.setPlace && !a.setMaximised);
+            a = h.look(HoldLook{1024, 560, 0, 0, false, false}, 99);       // taken (second look in a row): NOW the maximise, after the size and the place
+            CHECK(a.kind == HoldAction::Kind::Reassert && !a.setSize && !a.setPlace && a.setMaximised);
+            a = h.look(HoldLook{5120, 1392, -8, -8, true, false}, 132);    // maximised: done, never touched again
+            CHECK(a.kind == HoldAction::Kind::Finished);
+            a = h.look(HoldLook{1024, 560, 0, 0, false, false}, 165);      // (a Restore by the user afterwards is not undone)
+            CHECK(a.kind == HoldAction::Kind::Finished && !a.setMaximised);
+        }
+    }
 }
 
 // MAP FOCUS: the torn-off page windows follow the main window's rule (look_logic.hpp tornResizeAt / tornMoveAt): the size and the place are a function of the press and of the pointer's
@@ -419,9 +533,70 @@ void edgeDrag() {
     CHECK(f.w == 1024 && f.h == 640);
 }
 
+// USER BUG C3 (2026-11-23): Interface size "Auto" on a screen whose work area, at Windows' scale, is smaller than the layout (1024 x 640 logical) is lowered to the largest step that holds the layout.
+// The work areas are the screen less a 40 px task bar, in physical pixels.
+void autoFit() {
+    const auto fit = [](int w, int h, float os, const char* choice = "auto") { return autoScaleToFit(w, h, os, choice, 1024.0f, 640.0f); };
+    AutoFit a;
+    a = fit(1280, 680, 1.5f);   // 1280 x 720 at 150 %: 853 x 453 logical -> 100 % (1280 x 680 holds 1024 x 640)
+    CHECK(a.lowered && near(a.scale, 1.0f) && a.holds);
+    a = fit(1366, 728, 1.25f);  // 1366 x 768 at 125 %: 1093 x 582 logical -> 100 %
+    CHECK(a.lowered && near(a.scale, 1.0f) && a.holds);
+    a = fit(1920, 1040, 1.5f);  // 1920 x 1080 at 150 %: 1280 x 693 logical holds the layout: not lowered
+    CHECK(!a.lowered && near(a.scale, 1.5f) && a.holds);
+    a = fit(1920, 1040, 1.75f); // 1920 x 1080 at 175 %: 1097 x 594 logical -> 150 % (1280 x 693 holds it)
+    CHECK(a.lowered && near(a.scale, 1.5f) && a.holds);
+    a = fit(1024, 560, 1.0f);   // 1024 x 600 at 100 %: cannot hold it at any scale: not lowered (the start fit maximises and lowers the minimum)
+    CHECK(!a.lowered && near(a.scale, 1.0f) && !a.holds);
+    a = fit(3840, 2120, 2.5f);  // 3840 x 2160 at 250 %: 1536 x 848 logical holds it
+    CHECK(!a.lowered && near(a.scale, 2.5f) && a.holds);
+    // a chosen size is never overridden, on a small screen either, and is not checked
+    for (const char* chosen : {"100", "125", "150", "175", "200", "250"}) {
+        a = fit(1280, 680, 1.5f, chosen);
+        CHECK(!a.lowered && near(a.scale, std::stof(chosen) / 100.0f));
+    }
+    // a hand-edited choice degrades to Auto, and is lowered as Auto is
+    a = fit(1280, 680, 1.5f, "bogus");
+    CHECK(a.lowered && near(a.scale, 1.0f));
+    // a screen whose size is not known: nothing is checked
+    a = fit(0, 0, 1.5f);
+    CHECK(!a.lowered && near(a.scale, 1.5f));
+    // the layout is held to whole physical pixels: 1536 x 960 at 150 % fits a 1536 x 960 area exactly and one pixel less in either direction does not
+    CHECK(!fit(1536, 960, 1.5f).lowered && fit(1535, 960, 1.5f).lowered && fit(1536, 959, 1.5f).lowered);
+    // the largest step: 250 % on a 2560 x 1392 work area (1024 x 557 logical at 250 %) steps down until the height holds: 200 % gives 696 high, which holds
+    a = fit(2560, 1392, 2.5f);
+    CHECK(a.lowered && near(a.scale, 2.0f));
+    // a system scale under 100 % has nothing to lower to
+    a = fit(800, 500, 0.8f);
+    CHECK(!a.lowered && near(a.scale, 0.8f));
+
+    // the follower: Auto lowered on the first look, and the number it dispatched hides nothing - the monitor's own scale (the hint) is the system's
+    ScaleFollower f;
+    ScalePlan p = f.plan("auto", 1.5f, 1280, 680, 1024.0f, 640.0f, 0.0f);   // the first look: the window reports 150 % on a 1280 x 680 work area
+    CHECK(p.lowered && near(p.want, 1.0f) && p.change && near(p.os, 1.5f));
+    f.applied(p.want);
+    p = f.plan("auto", 1.0f, 1280, 680, 1024.0f, 640.0f, 0.0f);   // after the dispatch: nothing more to do, and the system is still 150 %
+    CHECK(p.lowered && near(p.want, 1.0f) && !p.change && near(p.os, 1.5f));
+    // moved to a bigger 100 % monitor (the window then reports 1.0 again, the very number it dispatched: only the hint tells): Auto is the system's again
+    p = f.plan("auto", 1.0f, 2560, 1400, 1024.0f, 640.0f, 1.0f);
+    CHECK(!p.lowered && near(p.want, 1.0f) && !p.change && near(p.os, 1.0f));
+    // moved to a bigger 150 % monitor: 150 %, not lowered
+    p = f.plan("auto", 1.0f, 3840, 2120, 1024.0f, 640.0f, 1.5f);
+    CHECK(!p.lowered && near(p.want, 1.5f) && p.change && near(p.os, 1.5f));
+    // a chosen size on the small screen: not overridden, and the screen is not consulted
+    ScaleFollower g;
+    p = g.plan("150", 1.5f, 0, 0, 1024.0f, 640.0f, 1.5f);
+    CHECK(!p.lowered && near(p.want, 1.5f) && !p.change);
+    // no work area given (the older call): as before
+    ScaleFollower h;
+    p = h.plan("auto", 1.5f);
+    CHECK(!p.lowered && near(p.want, 1.5f) && !p.change);
+}
+
 }  // namespace
 
 int main() {
+    autoFit();
     edgeDrag();
     windowSizeAtEverySize(1920, 1040);   // a 1920 x 1080 screen less its task bar
     windowSizeAtEverySize(5120, 1440);   // drive fixes 6: the owner's screen, and the same less a 48 px task bar

@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <complex>
 #include <cstdio>
 #include <deque>
@@ -731,6 +732,50 @@ int main() {
             ref.stop();
             CHECK(!want.empty());
             CHECK(have == want);
+        }
+        o.src.stop();
+    }
+
+    // U10b (review A2): a gain written DURING the re-open while automatic gain is on ends automatic gain too. It used to be acknowledged, logged and then dropped: the re-open put automatic gain
+    // back (the wanted flag still said on) and skipped the gain (applyWanted does not write a gain under automatic mode). After the re-open the radio is on manual gain and holds the gain written.
+    {
+        auto pool = std::make_shared<Pool>();
+        auto slowNew = goodFake();
+        slowNew->refuseControlOut = [](const cascade::usb::FakeControl&) {   // (every write takes 4 ms: the re-open lasts long enough to call into the radio during it)
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            return false;
+        };
+        pool->fakes.push_back(std::move(slowNew));
+        pool->absentFirst = 5;
+        Opened o;
+        openOn(o, goodFake());
+        o.live->bulkQueue.push_back(payload(2048));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(5000, 100);
+        CHECK(o.src.setAutoGain(true));
+        CHECK(o.src.autoGain());
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        kill(*o.live);
+        CHECK(waitFor([&] { return pool->calls.load() >= 1; }, 4000));
+        const bool ok = o.src.setGainDb("TUNER", 15.0);   // during the re-open: kept, and put on with the rest
+        CHECK(ok);
+        CHECK(!o.src.autoGain());                          // the answer during the re-open is already manual
+        CHECK(drain(o.src, 2048, 6000) >= 2048);
+        CHECK(!o.src.faulted());
+        std::printf("  gain written during the re-open under automatic gain: auto after %d, gain %.1f\n", o.src.autoGain() ? 1 : 0, o.src.gainDb("TUNER"));
+        CHECK(!o.src.autoGain());                          // and after it: the radio is on manual gain...
+        {   // ...holding the gain that was written: what a plain write of 15 dB on a radio that was on automatic gain reads back (the gain steps are coarser than 0.1 dB)
+            RtlSdrSource ref;
+            auto rf = std::make_unique<FakeUsbDevice>();
+            dressAsR820T(*rf);
+            CHECK(ref.openWithTransport(std::move(rf), "fake R820T dongle"));
+            CHECK(ref.setAutoGain(true));
+            CHECK(ref.setGainDb("TUNER", 15.0));
+            CHECK(!ref.autoGain());
+            const double want = ref.gainDb("TUNER");
+            CHECK(want > 14.0 && want < 16.0);
+            CHECK(std::fabs(o.src.gainDb("TUNER") - want) < 0.05);
         }
         o.src.stop();
     }

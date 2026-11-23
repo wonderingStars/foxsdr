@@ -1863,6 +1863,12 @@ src/slint/main.cpp::main::stderr::clipprobelog end	ALLOW	command-line / develope
 src/slint/main.cpp::main::stderr::clipprobewindow % %	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
 src/slint/main.cpp::main::stderr::foxsdrslint %	ALLOW	the settings-file lock is best effort by design (a second window is allowed)	seed
 src/slint/main.cpp::main::stderr::foxsdrslint % frames painted % buffer detaches # every frame	ALLOW	command-line / developer output (a console nobody runs the app from; the user chose the flag)	seed
+src/slint/main.cpp::main::stderr::foxsdrslint window fit the monitors work area is not known t	ALLOW	developer line on stderr: the monitor's work area could not be read, so the start-time window fit left the window where the system put it (nothing is lost; the run goes on)	user-bug-C
+src/slint/main.cpp::main::stderr::foxsdrslint window fit work area %x% at %% scale % window %x	ALLOW	developer line on stderr: what the start-time window fit did (the size and place it chose); a report of its own, not a fault	user-bug-C
+src/slint/main.cpp::main::stderr::foxsdrslint window fit the window starts % it is left as it	ALLOW	developer line on stderr: a window that starts minimised or maximised is left as it is by the start-time window fit (the user chose it, not a fault)	user-bug-C
+src/slint/main.cpp::main::stderr::foxsdrslint window fit the window was moved sized maximised	ALLOW	developer line on stderr: the user has laid hands on the window, so the start-time window fit lets go of it (the user acted, not a fault)	user-bug-C
+src/slint/main.cpp::main::stderr::foxsdrslint window fit the window was moved sized maximised#2	ALLOW	developer line on stderr: the same line from the second place that ends the hold (the window itself shows the change); not a fault	user-bug-C
+src/slint/main.cpp::main::stderr::foxsdrslint bounded run the users % at tick %	ALLOW	developer line on stderr of a bounded test run only: what the test seam FOXSDR_SLINT_USER_ACT did to the window; not a fault	user-bug-C
 src/slint/main.cpp::main::stderr::foxsdrslint %#2	PENDING:S1-startup	start-up failure (the window application exits with a line on a console nobody has: class of failure only)	seed
 src/slint/main.cpp::main::stderr::foxsdrslint %#3	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/slint/main.cpp::main::stderr::foxsdrslint %#4	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed

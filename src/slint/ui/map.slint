@@ -119,6 +119,7 @@ export component MapPane inherits Rectangle {
     in property <string> scale-text;                 // "10 km"
     in property <float> scale-frac;                  // the bar's length as a fraction of the pane's width; 0 draws no bar
     in property <string> attribution;
+    in property <string> tiles-note;                 // user bug B: why the picture is the built-in coastline while the basemap's tiles are missing ("" none)
     in property <[string]> chart-lines;              // what the picture is, lettered top left (the satellites window: "EQUIRECTANGULAR - WGS 84")
     in property <[string]> key-lines;                // the marks the legend cannot explain, bottom right above the zoom keys
     in property <bool> zoom-in-enabled: true;
@@ -566,6 +567,15 @@ export component MapPane inherits Rectangle {
         max-w: max(40px, root.width - 260px);
         x: (root.width - self.width) / 2;
         y: root.height - self.height - 6px;
+    }
+
+    // ================= the tiles note: one quiet line, bottom centre above the attribution (user bug B) =================
+    if root.tiles-note != "" : HaloText {
+        text: root.tiles-note;
+        ink: Theme.fg-soft;
+        max-w: max(40px, root.width - 260px);
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 26px;
     }
 
     // ================= the zoom keys, bottom right =================

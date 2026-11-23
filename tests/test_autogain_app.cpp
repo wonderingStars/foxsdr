@@ -111,6 +111,9 @@ struct Registry {
     // TWENTY stages, S00..S19 (0..40 dB, 1 dB steps), for the cap on how many stages of one radio the
     // manual gain memory keeps (0.99.75). Takes the place of the LNA/PGA pair.
     std::atomic<bool> manyStages{false};
+    // THE RTL-SDR'S WAY (user bug A): a manual gain written to any stage takes the radio out of automatic gain (its setGainDb clears the tuner's flag). Off, the fake keeps its
+    // automatic gain through a gain write, as every earlier test here relies on.
+    std::atomic<bool> manualLeavesAuto{false};
 };
 Registry g_reg;
 
@@ -193,6 +196,7 @@ public:
         if (name == "LNA") {
             lna_ = std::round(std::min(std::max(db, 0.0), kLnaMax));
             rec_->gainNow[name] = lna_;
+            if (g_reg.manualLeavesAuto.load()) { agc_ = false; }
             return true;
         }
         if (name == "PGA" && !g_reg.refusePga.load()) {
@@ -337,6 +341,7 @@ void resetRegistry() {
     g_reg.refusePga = false;
     g_reg.autoGainGetterStale = false;
     g_reg.manyStages = false;
+    g_reg.manualLeavesAuto = false;
     cc::DiagLog::instance().resetForTest();
 }
 
@@ -1202,6 +1207,70 @@ void testManualRestart() {
     }
 }
 
+// USER BUG A (2026-11-23), the owner's decision after the review (A1): a gain written by SOFTWARE (a plugin with the radio-settings grant, the web remote, a script: the windows disable their gain
+// sliders under automatic gain, so a write that gets here is software's) while automatic gain is on is honoured, and automatic gain is switched off FOR THE SESSION: the engine's own flag (what the
+// control on screen shows: FOXAPI_RX_DEVICE_AGC, the slider's enabled state) follows, the user's REMEMBERED automatic-gain setting does NOT change (the next start and the next open of this radio come
+// back as the user saved it), one log line says what happened, and each write is one plain line in the diagnostics log (stage and value, no frequency). It applies to every radio whose driver reports
+// leaving automatic mode (the RTL-SDR's, rtl_tcp's and the Pluto's do): here the RTL-SDR and a second kind of radio, both fakes with that behaviour.
+void testManualWriteLeavesAutoGain() {
+    std::printf("  a gain written while automatic gain is on ends it for the session: the box follows, the memory and the saved config do not, the log says so\n");
+    for (const bool soapy : {false, true}) {   // the RTL-SDR, then a second kind of radio (a Soapy device) with the same driver behaviour
+        const std::string key = soapy ? kKeySoapy : kKeyA;
+        resetRegistry();
+        g_reg.stages = true;
+        g_reg.manualLeavesAuto = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));   // the engine's gain log is one per stage per 500 ms for the whole process: earlier tests here wrote LNA moments ago
+        cascade::core::AppConfig savedCfg;
+        {
+        th::TestWindow app;
+        const std::size_t r = openStaged(app, soapy);
+        CHECK(Access::toggle(app, true));
+        CHECK(Access::agc(app));
+        CHECK(entry(Access::memory(app), key) == 1);
+        CHECK(Access::userGain(app, 0, 12.0));   // LNA, by a control request
+        CHECK(!Access::agc(app));                // the engine's own flag followed the driver
+        CHECK(entry(Access::memory(app), key) == 1);   // the user's remembered switch still says automatic
+        CHECK(entry(Access::saved(app).autoGainByRadio, key) == 1);   // and so does the config that is saved at exit
+        CHECK(made(r).gainNow.at("LNA") == 12.0);
+        // the write is in the diagnostics log as one plain line without a frequency, and one line says that automatic gain was switched off for the session, and by whom
+        bool logged = false;
+        int sessionLines = 0;
+        for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) {
+            if (line.find("source: gain LNA 12.0 dB") != std::string::npos) { logged = true; CHECK(line.find("Hz") == std::string::npos); }
+            if (line.find("source: automatic gain switched off for this session by a gain setting from a control request") != std::string::npos) { ++sessionLines; }
+        }
+        CHECK(logged);
+        CHECK(sessionLines == 1);
+        // a second write on the radio, now on manual: no second session line
+        CHECK(Access::userGain(app, 0, 14.0));
+        int again = 0;
+        for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) { if (line.find("switched off for this session") != std::string::npos) { ++again; } }
+        CHECK(again == 1);
+        savedCfg = Access::saved(app);   // what the program would write at exit
+        }
+        // the next start comes back as the user saved it: the radio opens again and automatic gain is on
+        {
+            th::TestWindow app2;
+            const std::size_t idx = madeCount();
+            Access::restore(app2, savedCfg);
+            CHECK(madeCount() == idx + 1);
+            CHECK(Access::agc(app2));
+            CHECK(entry(Access::memory(app2), key) == 1);
+        }
+    }
+    // a radio that stays on automatic gain through a write (every other driver here) keeps the box on, and no session line is written
+    resetRegistry();
+    g_reg.stages = true;
+    {
+        th::TestWindow app2;
+        (void)openStaged(app2, false);
+        CHECK(Access::toggle(app2, true));
+        CHECK(Access::userGain(app2, 0, 12.0));
+        CHECK(Access::agc(app2));
+        for (const std::string& line : cc::DiagLog::instance().ringSnapshot()) { CHECK(line.find("switched off for this session") == std::string::npos); }
+    }
+}
+
 void testManualCaps() {
     std::printf("  manual gain: at most 64 radios and 16 stages of one radio are remembered; an entry already "
                 "there is always updated\n");
@@ -1292,6 +1361,7 @@ int main() {
     testManualBeforeTheRememberedAutoGain();
     testManualRestart();
     testManualCaps();
+    testManualWriteLeavesAutoGain();
 
     std::error_code ec;
     std::filesystem::remove_all(g_scratch, ec);

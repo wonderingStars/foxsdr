@@ -286,6 +286,11 @@ std::string KitPublisher::pagesLine() const {
     return s;
 }
 
+std::string KitPublisher::tilesNoteLine() const {
+    for (const auto& kv : surfaces_) { if (!kv.second->tilesNote.empty()) { return kv.second->tilesNote; } }
+    return std::string();
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 std::shared_ptr<slint::Model<PresetKeyModel>> KitPublisher::presetModel(const PluginRow& r, const FoxReceiverState& state, bool mine, std::string& sig) {
     std::vector<PresetKeyModel> keys;
@@ -559,7 +564,7 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
     if (s.w > 0 && s.h > 0) {
         s.comp.setSize(s.w, s.h);
         if (pg != nullptr) { s.comp.setView(pg->centreLat, pg->centreLon, pg->spanDeg); }
-        s.comp.setLayers(!tiles, true);
+        s.comp.setLayers(true, true);   // user bug B: the coastline is the picture until one tile of the basemap is painted for this view (the compositor draws it only while no tile is), and again when every tile of a view is missing
         s.comp.setTrailLook(look_.trailWidthPx, look_.iconPx, look_.trailStyle);   // the Display settings: trail width (to the wingspan) and style
         s.comp.setHome(home, state.rxLatDeg, state.rxLonDeg);
         if (s.coverageOn && home) {
@@ -580,6 +585,13 @@ void KitPublisher::fillMap(const Page& p, PageTab& t, const FoxReceiverState& st
             std::memcpy(other.begin(), buf.begin(), sizeof(slint::Rgba8Pixel) * buf.width() * buf.height());
         }
         m.base = slint::Image(s.buffers[static_cast<std::size_t>(s.which ^ 1)]);
+        // USER BUG B: when the view's tiles are missing and none was painted, one quiet line says so (the plugin's own category of failure, no address); it goes when a tile arrives
+        const slintmap::TileReport tileRep = s.comp.tileReport();
+        // (review B1 + B2: the wait is 3 s after every view change, the category is the last one seen since a tile painted, or the generic one; TilesNoteWatch)
+        const std::string tilesNote = s.tilesWatch.update(tiles, pg != nullptr ? mapViewKey(pg->centreLat, pg->centreLon, pg->spanDeg, s.w, s.h) : 0u, tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure(), clockMs());
+        m.tiles_note = ss(tilesNote);
+        s.tilesNote = tilesNote;
+        if (!tilesNote.empty()) { sig += "TN" + tilesNote; }
     }
     // the targets as items, the list as rows
     std::vector<MapTarget> targets;

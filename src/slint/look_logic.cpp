@@ -98,6 +98,84 @@ WindowPlace placeInWorkArea(int x, int y, std::uint32_t w, std::uint32_t h, cons
     return p;
 }
 
+StartFit fitStartWindow(float wantW, float wantH, float minW, float minH, float scale, const WorkRect& work, int curX, int curY) {
+    const double sf = static_cast<double>(std::clamp(scale, kMinScale, kMaxScale));
+    const auto phys = [sf](float logical) { return static_cast<std::uint32_t>(std::max(1.0, std::ceil(static_cast<double>(logical) * sf - 1e-3))); };   // (the 1e-3: a logical size made from a physical one comes back whole)
+    StartFit f;
+    f.minW = minW;
+    f.minH = minH;
+    f.x = curX;
+    f.y = curY;
+    if (work.right <= work.left || work.bottom <= work.top) {   // no work area known: the wanted size, left where it is
+        f.w = phys(wantW);
+        f.h = phys(wantH);
+        return f;
+    }
+    const std::uint32_t areaW = static_cast<std::uint32_t>(work.right - work.left);
+    const std::uint32_t areaH = static_cast<std::uint32_t>(work.bottom - work.top);
+    const WindowFit fit = fitWindowToScreen(phys(wantW), phys(wantH), static_cast<float>(sf), minW, minH, static_cast<int>(areaW), static_cast<int>(areaH));
+    f.maximise = areaW < phys(minW) || areaH < phys(minH);
+    if (f.maximise) {   // the screen cannot hold the smallest window: fill it, and the minimum for this session is what the screen has
+        f.minW = std::min(minW, static_cast<float>(static_cast<double>(areaW) / sf));
+        f.minH = std::min(minH, static_cast<float>(static_cast<double>(areaH) / sf));
+        f.w = areaW;
+        f.h = areaH;
+        f.x = work.left;
+        f.y = work.top;
+        return f;
+    }
+    f.w = fit.w;
+    f.h = fit.h;
+    const WindowPlace at = placeInWorkArea(curX, curY, f.w, f.h, work);
+    f.x = at.x;
+    f.y = at.y;
+    return f;
+}
+
+void StartHold::begin(const HoldLook& before, const StartFit& fit) {
+    before_ = before;
+    fit_ = fit;
+    startMs_ = -1;
+    looks_ = 0;
+    stable_ = 0;
+    over_ = false;
+    matched_ = false;
+    last_ = HoldAction::Kind::Finished;
+}
+
+HoldAction StartHold::look(const HoldLook& now, std::int64_t nowMs) {
+    HoldAction a;
+    if (over_) { a.kind = last_; return a; }
+    const auto end = [&](HoldAction::Kind k) { over_ = true; last_ = k; a.kind = k; return a; };
+    if (startMs_ < 0) { startMs_ = nowMs; }
+    // the user's, or the system's by the user's shortcut: a window that is minimised, or (on the first look) already maximised, is left exactly as it is
+    if (now.minimised) { return end(HoldAction::Kind::User); }
+    if (looks_ == 0 && now.maximised) { return end(HoldAction::Kind::User); }
+    if (++looks_ > kMaxTicks || nowMs - startMs_ > kMaxMs) { return end(HoldAction::Kind::Finished); }
+    const bool sizeOurs = now.w == fit_.w && now.h == fit_.h;
+    const bool placeOurs = now.x == fit_.x && now.y == fit_.y;
+    if (fit_.maximise) {
+        if (now.maximised) { return end(HoldAction::Kind::Finished); }   // maximised: the fit's work is done (a Restore later is the user's: the restore rectangle is the fitted one)
+        // the size and place are made the fit's FIRST and seen as such on two looks in a row (the system maps the window at its own size and place after the first ask, and the maximise keeps
+        // whatever the window is at that moment as the rectangle a Restore returns to): only then the maximise is asked, and again each look until the window is maximised
+        if (!(sizeOurs && placeOurs)) { stable_ = 0; a.setSize = !sizeOurs; a.setPlace = !placeOurs; return a; }
+        if (++stable_ >= 2) { a.setMaximised = true; }
+        return a;
+    }
+    if (now.maximised) { return end(HoldAction::Kind::User); }   // maximised since the fit looked: that is not the fit's doing
+    if (sizeOurs && placeOurs) {
+        if (++stable_ >= 2) { matched_ = true; }
+        return a;
+    }
+    // Until the system has TAKEN the fit (the window's size and place seen as the fit's on two looks in a row) a size or place that is not the fit's is the system settling (it maps the window at
+    // its own default place and size after the first ask): asked again. After that, any other size or place is the user's (a Win+Arrow snap, a drag): the hold ends.
+    if (matched_) { return end(HoldAction::Kind::User); }
+    stable_ = 0;
+    a.setSize = !sizeOurs;
+    a.setPlace = !placeOurs;
+    return a;
+}
+
 void EdgeDrag::begin(int edge, float px, float py, std::uint32_t w, std::uint32_t h) {
     active_ = true; edge_ = edge; px_ = px; py_ = py; w_ = w; h_ = h;
 }
@@ -181,12 +259,40 @@ std::pair<std::uint32_t, std::uint32_t> ScaleFollower::sizeAfter(std::uint32_t w
     return ns;
 }
 
-ScalePlan ScaleFollower::plan(const std::string& choice, float current) {
-    // The first look, or a window that reports a number this follower did not dispatch: the operating system set it.
-    if (applied_ <= 0.0f || std::fabs(current - applied_) > kSame) { os_ = current; }
+AutoFit autoScaleToFit(int workW, int workH, float osScale, const std::string& choice, float minW, float minH) {
+    AutoFit r;
+    r.scale = scaleWanted(choice, osScale);
+    for (const int step : cascade::gui::uiscale::kSteps) {
+        if (choice == std::to_string(step)) { return r; }   // a size the user chose: never overridden
+    }
+    if (workW <= 0 || workH <= 0 || !(minW > 0.0f) || !(minH > 0.0f)) { return r; }   // nothing known to fit to
+    const auto holds = [&](int percent) {   // the work area, in logical pixels at `percent`, is at least the layout (in whole physical pixels, as fitStartWindow asks for them)
+        return static_cast<double>(workW) * 100.0 >= std::ceil(static_cast<double>(minW) * percent - 1e-3) && static_cast<double>(workH) * 100.0 >= std::ceil(static_cast<double>(minH) * percent - 1e-3);
+    };
+    const int osPercent = static_cast<int>(std::lround(static_cast<double>(r.scale) * 100.0));
+    r.holds = holds(osPercent);
+    if (r.holds) { return r; }
+    int best = 0;
+    for (const int step : cascade::gui::uiscale::kSteps) {
+        if (step < osPercent && holds(step)) { best = step; }   // kSteps ascends: the last that holds is the largest
+    }
+    if (best > 0) {
+        r.scale = static_cast<float>(best) / 100.0f;
+        r.lowered = true;
+        r.holds = true;
+    }
+    return r;
+}
+
+ScalePlan ScaleFollower::plan(const std::string& choice, float current, int workW, int workH, float minW, float minH, float osHint) {
+    // The first look, or a window that reports a number this follower did not dispatch: the operating system set it. Where the monitor's own scale can be asked, that is the number.
+    if (osHint > 0.0f) { os_ = osHint; }
+    else if (applied_ <= 0.0f || std::fabs(current - applied_) > kSame) { os_ = current; }
     ScalePlan p;
     p.os = os_;
-    p.want = scaleWanted(choice, os_);
+    const AutoFit fit = autoScaleToFit(workW, workH, os_, choice, minW, minH);
+    p.want = std::clamp(fit.scale, kMinScale, kMaxScale);
+    p.lowered = fit.lowered;
     p.change = std::fabs(p.want - current) > kSame;
     return p;
 }

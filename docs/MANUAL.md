@@ -61,7 +61,7 @@ are still moving. What is in the current build:
   lettered in the unit that stage is really measured in — decibels on every
   radio but the Airspy R2/Mini, whose gains are the hardware's own
   register steps and are shown as bare step numbers rather than invented
-  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead); the AUTO key under the GAIN dial on the top bar is the same switch. Switching it off puts your manual gains back on the radio — some radios, a B200 among them, fall to the bottom of every stage when they leave automatic gain — and the sliders and the GAIN dial then show what the radio really holds. From 0.99.75 the gain you set with a slider, the GAIN dial or the scope's gain knob is remembered per radio, stage by stage, and put back when that radio is opened again (it replaces the 30 dB a SoapySDR radio such as a B200 used to start every stage at; a stage the radio no longer has is ignored, and an Airspy keeps its gains with its gain mode). Developed against an Ettus B200
+  decibels — and a bias-tee switch on the radios that have one. The **Auto gain** switch is remembered per radio and put back when that radio is opened again (an Airspy keeps its own gain mode instead); the AUTO key under the GAIN dial on the top bar is the same switch. Switching it off puts your manual gains back on the radio — some radios, a B200 among them, fall to the bottom of every stage when they leave automatic gain — and the sliders and the GAIN dial then show what the radio really holds. A gain written by a plugin or the web remote while Auto gain is on is honoured, and on a radio that leaves automatic gain with a manual one (an RTL-SDR, rtl_tcp, a Pluto) it switches Auto gain off for that session only: the setting you saved for the radio is not changed and comes back at the next start and the next time the radio is opened. From 0.99.75 the gain you set with a slider, the GAIN dial or the scope's gain knob is remembered per radio, stage by stage, and put back when that radio is opened again (it replaces the 30 dB a SoapySDR radio such as a B200 used to start every stage at; a stage the radio no longer has is ignored, and an Airspy keeps its gains with its gain mode). Developed against an Ettus B200
   and an RTL2838 (R820T); the built-in signal generator and IQ-file playback
   mean it runs with no radio at all.
   A saved SoapySDR RTL-SDR, HackRF, Airspy, Airspy HF+, HydraSDR
@@ -1605,6 +1605,18 @@ section of SYSTEM and starts folded; the configuration file records whether
 you left it open or folded, so it comes back that way, and every other
 section comes back at its usual state on the next launch. Every chip on a row
 still reports what that section is doing without opening it.
+
+**Interface size** (SYSTEM, Display) is **Auto** or 100 to 250 %. Auto follows
+the Windows display scaling of the monitor the window is on. The window's
+layout needs at least 1024 x 640 logical pixels, so where Auto would leave
+less than that on the screen's work area (a 1280 x 720 screen at Windows 150 %
+has about 853 x 453; at 1920 x 1080 and 175 %, about 1097 x 594) it uses the
+largest size, never under 100 %, at which the work area holds the layout, and
+the Auto row then reads, for example, "Auto (100% to fit this screen)". The
+window is then fitted to the work area as usual. A screen too small even at
+100 % (1024 x 600, say) gets the window maximised and a lowered minimum. A
+size you have chosen yourself is never changed, and a window moved to a larger
+monitor goes back to Auto's normal size.
 
 **Both side panels fold away.** The `<<` key at the right end of the
 FUNCTION SELECT title folds the rail to a thin strip, and since 0.99.74 the

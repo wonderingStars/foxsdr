@@ -91,6 +91,9 @@ bool squelchAuto(double squelchDb);
 double levelNorm(double audioLevelDb);                     // the VOLUME meter's -60 dB floor -> 0, 0 dBFS -> 1
 std::string levelText(double audioLevelDb, bool haveAudio); // "-12.4 dB", "-60 dB" at or below the floor, "--" with no audio
 std::string gainText(bool haveStage, bool agcOn, double value, const std::string& unit); // "N/A", "AUTO", "32 dB"
+// The words beside the gain slider (user bug A, 2026-11-23): under automatic gain the slider is off, and these say why instead of leaving a dead control:
+// "Automatic gain is on. Switch it off to set the gain by hand."; otherwise "<stage> stage . <radio>" (the stage the slider sets, and the radio).
+std::string gainHintText(bool agcOn, const std::string& stage, const std::string& device);
 
 // ---- the spectrum's axes (positions as fractions 0..1 of the plot: Slint floats are 32-bit) ----
 struct Tick {

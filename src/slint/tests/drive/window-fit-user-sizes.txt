@@ -1,0 +1,9 @@
+#! frames=140 FOXSDR_SLINT_WORK_AREA=1366x728 FOXSDR_SLINT_USER_ACT=3:resize
+# window-fit-user-sizes (user bug C, review C2): an edge drag on tick 3 (the seam asks the window for 120 x 80 pixels less, as the edge's own ask does) is not undone by the held fit: the window stays 1246 x 648.
+10 state running == 1
+state look.physw == 1246
+state look.physh == 648
++60 state look.physw == 1246
+state look.physh == 648
+state look.x == 0
+state look.y == 0

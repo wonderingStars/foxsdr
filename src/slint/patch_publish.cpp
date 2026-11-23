@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -484,6 +485,8 @@ struct PatchPublisher::Impl {
         int w = 0, h = 0;
         bool sourceSet = false, placed = false, zoomIn = true, zoomOut = true;
         std::string attribution, hover, scaleText;
+        std::string tilesNote;                       // user bug B (review B3): the note over the picture while the basemap's tiles are missing, as the map pages show it
+        foxsdr::slintkit::TilesNoteWatch tilesWatch;
         float scaleFrac = 0.0f;
         std::array<slint::SharedPixelBuffer<slint::Rgba8Pixel>, 2> buffers;
         int which = 0;
@@ -661,7 +664,7 @@ struct PatchPublisher::Impl {
             const foxsdr::slintmap::MapLook& look = self.pages_.mapLook();
             mf.comp.setSize(mf.w, mf.h);
             mf.comp.setView(mf.view.centreLat, mf.view.centreLon, mf.view.spanDeg);
-            mf.comp.setLayers(!tiles, true);
+            mf.comp.setLayers(true, true);   // user bug B (review B3): the coastline is the picture until one tile of the basemap is painted for this view (the compositor draws it only while no tile is)
             mf.comp.setTrailLook(look.trailWidthPx, look.iconPx, look.trailStyle);
             mf.comp.setHome(home, state.rxLatDeg, state.rxLonDeg);
             auto& buf = mf.buffers[static_cast<std::size_t>(mf.which)];
@@ -674,6 +677,12 @@ struct PatchPublisher::Impl {
                 std::memcpy(other.begin(), buf.begin(), sizeof(slint::Rgba8Pixel) * buf.width() * buf.height());
                 mf.base = slint::Image(mf.buffers[static_cast<std::size_t>(mf.which ^ 1)]);
                 changed = true;
+            }
+            {   // the note, by the map pages' own rule (kit_logic TilesNoteWatch): 3 s after the last view change or painted tile, the plugin's category since then or the generic one
+                const foxsdr::slintmap::TileReport rep = mf.comp.tileReport();
+                const std::int64_t steadyMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                const std::string note = mf.tilesWatch.update(tiles, foxsdr::slintkit::mapViewKey(mf.view.centreLat, mf.view.centreLon, mf.view.spanDeg, mf.w, mf.h), rep.drawn, rep.missing, rep.pending, bm.lastFailure(), steadyMs);
+                if (note != mf.tilesNote) { mf.tilesNote = note; changed = true; }
             }
             const std::vector<MapFaceTarget> now = projectTargets(mine, mf.comp, look, &presentOf);
             std::string was, is;
@@ -762,6 +771,7 @@ struct PatchPublisher::Impl {
                 o.map_zoom_in = mf.zoomIn;
                 o.map_zoom_out = mf.zoomOut;
                 o.map_hover = ss(mf.hover);
+                o.map_tiles_note = ss(mf.tilesNote);
             }
         }
         o.markers = model(std::move(markers));

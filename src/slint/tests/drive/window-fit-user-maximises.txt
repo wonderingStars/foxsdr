@@ -1,0 +1,5 @@
+#! frames=140 FOXSDR_SLINT_WORK_AREA=1366x728
+# window-fit-user-maximises (user bug C, review C2): the user's maximise (the F11 shortcut, the title bar's key and a double click on the title make the same call) on tick 3 is not undone by the held fit.
+3 key f11
++7 state look.maximised == 1
++60 state look.maximised == 1

@@ -186,6 +186,38 @@ void theNeededLibrariesTextIsForPeople() {
     CHECK(files == 3);
 }
 
+// USER BUG B (2026-11-23): while a basemap plugin was attached the host switched the built-in coastline OFF for good, so tiles that never came (no network, a refused request) left a blank map and nothing
+// said why. The compositor already draws the coastline only while no tile is painted, so the host must leave the layer on; the note is a property the map page binds, with its words.
+void theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing() {
+    const std::string kp = slurp(repoRoot() / "src" / "slint" / "kit_publish.cpp");
+    CHECK(has(kp, "s.comp.setLayers(true, true);"));
+    CHECK(!has(kp, "s.comp.setLayers(!tiles, true);"));
+    CHECK(has(kp, "s.tilesWatch.update(tiles, ") && has(kp, "tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure(), clockMs())"));   // the 3 s rule (TilesNoteWatch), not the old "a failure line is fresh" one
+    const std::string mainCpp = slurp(repoRoot() / "src" / "slint" / "main.cpp");   // the bounded run can read the note: `state kit.tilesNote` is inside the closed `kit.` list (it was a line nothing reached)
+    CHECK(has(mainCpp, "else if (what == \"tilesNote\") { out = publisher.tilesNoteLine();") && !has(mainCpp, "if (name == \"kit.tilesNote\")"));
+    // the patch page's map part (review B3): the same coastline rule and the same note
+    const std::string pp = slurp(repoRoot() / "src" / "slint" / "patch_publish.cpp");
+    CHECK(has(pp, "mf.comp.setLayers(true, true);") && !has(pp, "mf.comp.setLayers(!tiles, true);"));
+    CHECK(has(pp, "mf.tilesWatch.update(tiles, ") && has(pp, "o.map_tiles_note = ss(mf.tilesNote);"));
+    const std::string pps = slurp(repoRoot() / "src" / "slint" / "ui" / "patch_page.slint");
+    CHECK(has(pps, "map-tiles-note: string") && has(pps, "tiles-note: root.live.map-tiles-note;"));
+    const std::string pk = slurp(repoRoot() / "src" / "slint" / "plugin_kit.cpp");
+    CHECK(has(pk, "failureLog_.allow(nowMs)") && has(pk, "map: tile fetches are failing (%s)"));
+    const std::string ms = slurp(repoRoot() / "src" / "slint" / "ui" / "map.slint");
+    CHECK(has(ms, "in property <string> tiles-note;") && has(ms, "if root.tiles-note != \"\" : HaloText"));
+    const std::string pg = slurp(repoRoot() / "src" / "slint" / "ui" / "pages.slint");
+    CHECK(has(pg, "tiles-note: root.page.map.tiles-note;"));
+}
+
+// USER BUG A (2026-11-23): under automatic gain the gain slider is disabled and said nothing. It is still disabled (the radio sets its own gain), and the hint beside it now says why.
+void theGainSliderSaysWhyItIsOffUnderAutomaticGain() {
+    const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
+    CHECK(has(m, "ui->set_gain_enabled(lists.haveGain && !agc);"));
+    CHECK(has(m, "ui->set_gain_hint(ss(gainHintText(agc, lists.gainStage, state.deviceName)));"));
+    const std::string w = slurp(repoRoot() / "src" / "gui" / "app_window.cpp");   // the classic window: the same sentence under the sliders it greys out
+    CHECK(has(w, "if (agc && !airspyPanel && !c.gains.empty())") && has(w, "Automatic gain is on. Switch it off to set the gain by hand."));
+}
+
 // WINDOW STRIP LANE (look review B1): the receiver strip and the spectrum toolbar FOLD to a second row instead of being cut off, so the smallest window the drag edges allow
 // is 1024 x 640. OLD expectation: kMinWindowW = 1480.0f, kMinWindowH = 560.0f (a window cannot be dragged smaller than a screen it does not fit). NEW: 1024.0f and 640.0f.
 void theSmallestWindowIsTheMeasuredOne() {
@@ -195,7 +227,8 @@ void theSmallestWindowIsTheMeasuredOne() {
     const std::string m = slurp(repoRoot() / "src" / "slint" / "main.cpp");
     // Drive fixes 7: the edge drag's size is EdgeDrag::at (look_logic.cpp), which main.cpp hands the same two minimums at the scale in force; the clamp that used to be written in main.cpp
     // as std::max(kMinWindowW * scale() ...) is the `lo` of EdgeDrag::at's axis (the minimum, at the scale, rounded). Same rule, in its new place; the two sides are still checked.
-    CHECK(has(m, "edgeDrag.at(px, py, scale(), kMinWindowW, kMinWindowH"));
+    // User bug C: the minimum handed to the drag is the session's (winMinW / winMinH), which starts as kMinWindowW / kMinWindowH and is lowered only when the work area is smaller than that.
+    CHECK(has(m, "edgeDrag.at(px, py, scale(), winMinW, winMinH") && has(m, "float winMinW = kMinWindowW, winMinH = kMinWindowH;"));
     const std::string ll = slurp(repoRoot() / "src" / "slint" / "look_logic.cpp");
     CHECK(has(ll, "std::llround(static_cast<double>(minLogical) * sf)") && has(ll, "std::max(lo, v)"));
     CHECK(!has(m, "std::max(624.0f * scale()"));
@@ -289,6 +322,8 @@ int main() {
     theCatReachableTickIsNotOffered();
     theNeededLibrariesTextIsForPeople();
     theSmallestWindowIsTheMeasuredOne();
+    theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing();
+    theGainSliderSaysWhyItIsOffUnderAutomaticGain();
     theEmptyCommunityRowIsNotDrawn();
     theDropDownGrabsFocusWithoutATimer();
     theWindowSaysNothingOfWhatIsNotThere();
