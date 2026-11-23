@@ -1,4 +1,5 @@
-#! frames=900 bank=1 plugins=propagation-tools open=module:propagation-tools-0.1.0-abi3-win-x64.dll size=1600x1000
+#! frames=900 bank=1 plugins=propagation-tools open=module:propagation-tools-0.1.0-abi3-win-x64.dll size=1600x1700
+# size 1600x1700 (was 1600x1000): the page's Plugin settings fold, opened below, is 14 fields of the plugin's own (about 600 px) and sits above the globe's controls and readouts; at 1000 px the HOME POSITION readout is below the window's edge (kit drift, not a window change).
 # globe-propagation: THE HF PROPAGATION GLOBE (docs 6.65): the Propagation Tools picture page offers VIEW PICTURE / 3D GLOBE. The globe draws the day / night edge and the greyline band
 # for the clock, HOME (the plugin's locator, else the receiver position), the plugin's TARGET locator and the NCDXF/IARU beacons its panel says are on air, as skywave arcs coloured by
 # their hop count. BAND shows the beacons of one band, GREYLINE toggles the twilight band. The camera by the keyboard (no drag verb in the scripted input): left / right turn the
