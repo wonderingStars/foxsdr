@@ -551,7 +551,7 @@ int main() {
         // The SDRplay stall sentence (src/source/sdrplay_source.cpp sdrPlayStreamStalledSentence(), its text copied here: this target does not link the driver) and
         // the 3 s service sentence say "restart the SDRplay API service": a replug does not cure that, so no generic advice is appended under either.
         {
-            const std::string stall = "the SDRplay service stopped delivering (nothing for 5 s) - press START; if that fails pick the radio again; then restart the SDRplay API service and FoxSDR";
+            const std::string stall = "the SDRplay service stopped delivering (nothing for 5 s) - pick the radio again; if that fails, restart the SDRplay API service, then restart FoxSDR";
             r.t.facts["fact.status.deviceFault"] = "stream: " + stall;
             CHECK(readSource(r.t, r.s, r.o).stopped_line == "Device stopped: stream: " + stall);
             r.t.facts["fact.status.deviceFault"] = "the SDRplay service did not answer within 3 s - restart the SDRplay API service";

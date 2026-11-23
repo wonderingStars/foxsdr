@@ -193,6 +193,32 @@ void testAFailedSelectLeavesNothingClaimed() {
     CHECK(fake.orderingViolations.empty());
 }
 
+// F7 (final look of 7421b4c6): a service that no longer lists an RSP this process already holds must not be taken for "not connected": the
+// claim is consulted before that sentence.
+void testAClaimedRspTheServiceNoLongerListsIsInUseNotMissing() {
+    FakeSdrPlayApi fake;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource a, b;
+    a.setApiForTest(&fake.table);
+    b.setApiForTest(&fake.table);
+    CHECK(a.open("serial=1811003EFB"));
+    fake.unlistAllDevices();                                  // the service lists nothing: a selected RSP is not available to others (3.7)
+    const std::string claimed = "already open in another radio of this FoxSDR";
+    CHECK(!b.open("serial=1811003EFB"));
+    CHECK(std::string(b.lastError()).find(claimed) != std::string::npos);
+    CHECK(!b.open("serial=003EFB"));                           // the short form the select also matches
+    CHECK(std::string(b.lastError()).find(claimed) != std::string::npos);
+    CHECK(!b.open(""));                                        // no serial asked, nothing listed, an RSP is held here
+    CHECK(std::string(b.lastError()).find(claimed) != std::string::npos);
+    // an RSP nobody here holds is still just not connected
+    CHECK(!b.open("serial=9999999999"));
+    CHECK(std::string(b.lastError()).find("no SDRplay device") != std::string::npos);
+    CHECK(std::string(b.lastError()).find(claimed) == std::string::npos);
+    a.closeDevice();
+    CHECK(!b.open(""));                                        // released: nothing held, nothing listed
+    CHECK(std::string(b.lastError()) == "no SDRplay device is connected");
+}
+
 // --- B/C. a quiet stream is not a lost session ---------------------------------
 
 void testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns() {
@@ -208,7 +234,7 @@ void testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns() {
     {
         Reader reader(src);
         CHECK(waitFor([&] { return src.faulted(); }, 3000));
-        CHECK(std::string(src.lastError()).find("press START") != std::string::npos);
+        CHECK(std::string(src.lastError()).find(cascade::source::sdrPlayStreamStalledSentence()) != std::string::npos);
         reader.stopReading();
     }
     // The stop is a REAL Uninit - the service answers it - and the process's session is NOT lost.
@@ -216,17 +242,23 @@ void testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns() {
     CHECK(fake.countStarting("Uninit") == 1);
     CHECK(!fake.table.sessionLost);
     CHECK(!cascade::source::sdrPlayApiStateOf(fake.table).sessionLost);
-    // The user's next START runs Init again instead of being refused for the rest of the session.
-    CHECK(src.start());
-    CHECK(!src.faulted());
-    CHECK(fake.countStarting("Init") == 2);
-    src.stop();
+    // START IS REFUSED after a stall (final look of 7421b4c6, F1/F2): sdrplay_api_Init is never called on this open, and the refusal says the
+    // same one sentence the stall fault did - the advice is not replaced by a bare "Init failed".
+    CHECK(!src.start());
+    CHECK(fake.countStarting("Init") == 1);
+    CHECK(std::string(src.lastError()) == std::string(cascade::source::sdrPlayStreamStalledSentence()));
+    CHECK(std::string(src.lastError()).find("pick the radio again") != std::string::npos);
+    CHECK(std::string(src.lastError()).find("then restart FoxSDR") != std::string::npos);
+    CHECK(src.faulted());
     src.closeDevice();
-    // Nothing is left selected in the service, so another radio opens (the "no SDRplay device is connected" of fault C).
+    // Nothing is left selected in the service, so another radio opens (the "no SDRplay device is connected" of fault C), and a fresh open streams.
     CHECK(fake.releaseCount == 1);
     SdrPlaySource again;
     again.setApiForTest(&fake.table);
     CHECK(again.open(""));
+    CHECK(again.start());
+    CHECK(!again.faulted());
+    again.stop();
     again.closeDevice();
     std::printf("quiet stream: violations: %s\n", violations(fake).c_str());
     CHECK(fake.orderingViolations.empty());
@@ -419,7 +451,17 @@ void testAnOpenWaitingBehindAHungCloseIsRefusedWhenItReturnsLate() {
     const int opensBefore = fake.openCount;
     const int selectsBefore = fake.selectCount;
     bool opened = true;
-    std::thread opener([&] { opened = waiter.open(""); });          // passes the (still unset) latch pre-check and waits on the mutex
+    // THE INTERLEAVING IS CHECKED, NOT HOPED FOR (final look of 7421b4c6): the opener must be running and still parked on the mutex while the latch
+    // is clear. If its thread starts too late (after the 1 s bound set the latch) the test FAILS here instead of passing through the pre-check.
+    std::atomic<bool> openerStarted{false};
+    std::atomic<bool> openerDone{false};
+    const auto insideAt = std::chrono::steady_clock::now();
+    std::thread opener([&] { openerStarted.store(true); opened = waiter.open(""); openerDone.store(true); });   // passes the (still unset) latch pre-check and waits on the mutex
+    CHECK(waitFor([&] { return openerStarted.load(); }, 400));
+    waitFor([&] { return false; }, 150);                             // time for it to reach the mutex, well inside the 1 s bound
+    CHECK(std::chrono::steady_clock::now() - insideAt < std::chrono::milliseconds(800));
+    CHECK(!fake.table.sessionLostFlag.load());                       // the latch is still clear ...
+    CHECK(!openerDone.load());                                       // ... and the opener is parked behind the mutex, not refused by the pre-check
     closer.join();                                                   // the 1 s bound: abandoned, latch set
     CHECK(fake.table.sessionLostFlag.load());
     fake.releaseCloseHang.store(true);                               // the hung Close returns late and frees the mutex
@@ -456,8 +498,8 @@ void testAStalledRspDuoRefusesATunerChange() {
     a.closeDevice();
 }
 
-// ITEM 3: the stall Uninit was REFUSED (Fail): START must not run Init on a stream the service still holds. (A clean Uninit lets START run:
-// testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns.)
+// ITEM 3: the stall Uninit was REFUSED (Fail): START must not run Init on a stream the service still holds. (A clean Uninit refuses START too,
+// since the final look of 7421b4c6: testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns.)
 void testStartAfterAStallWhoseUninitFailedIsRefused() {
     StallRig r;
     r.fake.uninitResult = abi::Fail;
@@ -466,7 +508,7 @@ void testStartAfterAStallWhoseUninitFailedIsRefused() {
     const int initsBefore = r.fake.countStarting("Init");
     CHECK(!r.a.start());
     CHECK(r.fake.countStarting("Init") == initsBefore);
-    CHECK(std::string(r.a.lastError()).find("pick the radio again") != std::string::npos);
+    CHECK(std::string(r.a.lastError()) == std::string(cascade::source::sdrPlayStreamStalledSentence()));
     // closing still works and releases the radio (bounded: this open stalled)
     r.fake.uninitResult = abi::Success;
     r.a.closeDevice();
@@ -475,14 +517,18 @@ void testStartAfterAStallWhoseUninitFailedIsRefused() {
 }
 
 // The 22 Nov shape: after the stall the service answers NotInitialised ("Device has not been selected", specification 3.16) to Uninit: that is
-// a clean stop, and the following START Init answers NotInitialised too - said, not hung, and the radio can then be closed and picked again.
+// a clean stop, and the following START is REFUSED without calling Init (it would answer NotInitialised too): the user is told, in the one stall
+// sentence and not a bare "Init failed", to pick the radio again - which can then be closed and picked.
 void testANotInitialisedStallIsStoppedAndStartSaysSo() {
     StallRig r;
     r.fake.uninitResult = abi::NotInitialised;
     r.a.stop();
     r.fake.initResult = abi::NotInitialised;
+    const int initsBefore = r.fake.countStarting("Init");
     CHECK(!r.a.start());
-    CHECK(std::string(r.a.lastError()).find("NotInitialised") != std::string::npos);
+    CHECK(r.fake.countStarting("Init") == initsBefore);
+    CHECK(std::string(r.a.lastError()).find("NotInitialised") == std::string::npos);
+    CHECK(std::string(r.a.lastError()) == std::string(cascade::source::sdrPlayStreamStalledSentence()));
     r.fake.initResult = abi::Success;
     r.fake.uninitResult = abi::Success;
     r.a.closeDevice();
@@ -570,6 +616,7 @@ int main() {
     testTheTunerReselectIsBracketedByTheApiLock();
     testAFailedInitLeavesNothingHeld();
     testAFailedSelectLeavesNothingClaimed();
+    testAClaimedRspTheServiceNoLongerListsIsInUseNotMissing();
     testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns();
     testADeadServiceStillLatchesTheSession();
     testANumberingThatGoesBackwardsIsNotFourBillionMissingSamples();

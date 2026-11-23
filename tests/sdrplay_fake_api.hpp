@@ -482,6 +482,9 @@ public:
         devices.push_back(d);
     }
 
+    // A service that lists nothing any more (an RSP that is selected is "no longer available for other applications", specification 3.7).
+    void unlistAllDevices() { devices.clear(); }
+
     void addRspDuo(const char* serial) {
         // A free RSPduo offers every mode and both tuners; the driver is
         // expected to narrow that to single-tuner at SelectDevice.

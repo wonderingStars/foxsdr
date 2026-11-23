@@ -438,7 +438,9 @@ void testASilentStreamIsNamedAndTheRadioIsLeftAlone() {
     const std::string shown = src.lastError();
     std::printf("the receiver shows \"%s\"\n", shown.c_str());
     CHECK(shown.find(cascade::source::sdrPlayStreamStalledSentence()) != std::string::npos);
-    CHECK(shown.find("press START") != std::string::npos);   // a stall no longer costs the session (fault B)
+    CHECK(shown.find("pick the radio again") != std::string::npos);   // a stall no longer costs the session (fault B); START is refused, the re-pick is the step
+    CHECK(shown.find("press START") == std::string::npos);
+    CHECK(shown.find("then restart FoxSDR") != std::string::npos);
     CHECK(ringHas("source: SDRplay stream stalled"));
     // Review note 4: the teardown line says WHICH of the three it was.
     // (Checked after the stop below.)

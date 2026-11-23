@@ -264,7 +264,15 @@ void Engine::journalRecovery(const std::string& kind, const std::string& args, c
 void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::size_t ringHighWaterSamples) {
     RadioJournalSlot& j = radioJournal_[scopedSlot()];
     // A FAULTED RADIO IS OVER (field data 2026-11-19: 38 windows after a close): its slot stays open until the pass sees it leave, but no window is said for it
-    if (!j.open || j.faulted) { return; }
+    if (!j.open) { return; }
+    // ...UNLESS IT STREAMS AGAIN (final look of 7421b4c6, F5): a radio whose fault the pipeline has since cleared (a restart after a stream fault)
+    // and which delivered samples this minute is in use, not over. The pass re-latches j.faulted if the pipeline faults again.
+    if (j.faulted) {
+        if (samplesRead == 0 || rx().pipeline_.faulted()) { return; }
+        j.faulted = false;
+        j.faultReason.clear();
+        j.faultDead = false;
+    }
     const double now = clockS();
     // FAULT E (field data 2026-11-23: one RSP1B "open" with 61 zero-sample minutes of 69, an RSPduo 31 of 105): a radio
     // that is open while the receiver is STOPPED is not delivering anything, by the user's own choice, and the
@@ -275,11 +283,21 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     RadioRun& run = (*radioRun_)[scopedSlot()];
     const double ranSec = run.runningSec;
     run.runningSec = 0.0;
-    if (samplesRead == 0 && ranSec < 0.5 * std::max(1.0, now - j.lastMinuteS)) {
+    // THE PREVIOUS SOURCE'S SAMPLES ARE NOT THIS RADIO'S (final look of 7421b4c6, F6b): the read mark is the receiver's and the pipeline's counter runs
+    // across sources, so the open's first window holds whatever was read between the last mark and the open. j.readAtOpen is the counter at the
+    // open; the mark this window started from is the one closeDspMinute has just moved (dspReadAtMinute_ minus what this window read).
+    if (samplesRead > 0 && rx().dspReadAtMinute_ >= samplesRead) {
+        const std::uint64_t windowStartMark = rx().dspReadAtMinute_ - samplesRead;
+        if (j.readAtOpen > windowStartMark) { samplesRead -= std::min<std::uint64_t>(samplesRead, j.readAtOpen - windowStartMark); }
+    }
+    const double wall = std::max(1.0, now - j.lastMinuteS);
+    if (samplesRead == 0 && ranSec < 0.5 * wall) {
         j.lastMinuteS = now;
         return;
     }
-    const double dt = std::max(1.0, now - j.lastMinuteS);
+    // THE MINUTE'S LENGTH IS THE TIME THE PIPELINE RAN IN IT (F6a), where the pass saw it run: a minute the receiver ran 20 s of is not 60 s of
+    // rate. Wall time where the pass saw none (the seams that call this directly).
+    const double dt = ranSec > 0.0 ? std::clamp(ranSec, 1.0, wall) : wall;
     j.lastMinuteS = now;
     j.accRead += samplesRead;
     j.accDropped += samplesDropped;
