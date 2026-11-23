@@ -21,6 +21,8 @@
 
 #if defined(_WIN32)
 #include <process.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -41,6 +43,7 @@
 #include "test_host.hpp"
 #include "pass_seam.hpp"
 #include "source/device_source.hpp"
+#include "source/rtl_tcp_source.hpp"
 #include "test_check.hpp"
 #include "usb/usb_device.hpp"
 
@@ -72,8 +75,11 @@ std::atomic<bool> g_driverSaysRefusals{false};   // the fake radio reports its o
 std::atomic<bool> g_refuseTune{false};           // the fake radio refuses a tune
 std::atomic<bool> g_netFault{false};             // the fake radio latches a fault the way a network source's reader does (faulted + deviceDead, no driver helper)
 
+std::atomic<bool> g_realTcp{false};   // the "rtltcp" kind is the REAL RtlTcpSource (against a local listener), not the scripted fake
+
 class FakeRadio final : public cascade::source::DeviceSource {
 public:
+    explicit FakeRadio(const char* key = "rtlsdr") : key_(key) {}
     bool start() override { abort_ = false; return true; }
     void stop() override { abort_ = true; }
     bool running() const override { return !abort_; }
@@ -99,7 +105,7 @@ public:
     }
     const char* name() const override { return "Fake radio"; }
     const char* lastError() const override { return error_.c_str(); }
-    const char* driverKey() const override { return "rtlsdr"; }
+    const char* driverKey() const override { return key_; }
     bool open(const std::string&) override {
         ++g_opens;
         while (g_hold.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
@@ -134,6 +140,7 @@ public:
     std::string faultedWhile() const override { return g_netFault.load() ? std::string("the network radio's connection failed") : std::string(); }
 
 private:
+    const char* key_;
     std::atomic<bool> abort_{true};
     double rate_ = 2.4e6;
     double centre_ = 100.0e6;
@@ -181,6 +188,10 @@ private:
 
 std::unique_ptr<cascade::source::DeviceSource> makeFake(const std::string& kind) {
     if (kind == "soapy") { return std::make_unique<FakeSoapy>(); }
+    if (kind == "rtltcp") {
+        if (g_realTcp.load()) { return std::make_unique<cascade::source::RtlTcpSource>(); }
+        return std::make_unique<FakeRadio>("rtltcp");
+    }
     if (kind != "rtlsdr") { return nullptr; }
     return std::make_unique<FakeRadio>();
 }
@@ -245,6 +256,21 @@ struct AppWindowTestAccess {
     }
     static bool deviceOpen(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).device_ != nullptr; }); }
     static void selectGenerator(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(0); }); }
+    static int attempts(AppWindow& a) { return passseam::read<int>(th::engine(a), [&] { return th::engine(a).savedRadioRetryAttempts_; }); }
+    static void usbArrives(AppWindow& a) {
+        passseam::on(th::engine(a), [&] {
+            th::engine(a).hotplugArr_.store(1);
+            th::engine(a).hotplugSettled_.store(true);
+            th::engine(a).pumpHotplug();
+        });
+        // the walk it started must be over, or the retry is held off by "a scan is pending" and the test would prove nothing
+        const auto t0 = std::chrono::steady_clock::now();
+        while (passseam::read<bool>(th::engine(a), [&] { return th::engine(a).soapyScanPending_; }) && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(90)) {
+            passseam::custom(th::engine(a), [&] { th::engine(a).pollSourceAsync(); });
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    static void openTcp(AppWindow& a, const std::string& addr) { passseam::on(th::engine(a), [&] { th::engine(a).openRtlTcpAt("rtltcp=" + addr); }); }
     static void selectSoapy(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(th::engine(a).soapyRowBase() + i); }); }
     static void selectNative(AppWindow& a, int i) { passseam::on(th::engine(a), [&] { th::engine(a).selectSource(cascade::engine::kNativeRowBase + i); }); }
     static void staleTheOpen(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).rx().sourceGen_; }); }
@@ -704,6 +730,197 @@ void seriesScenarios(std::vector<json>& everything) {
 
 }
 
+
+// A LISTENER THAT ACCEPTS AND SAYS NOTHING, on 127.0.0.1 (a saved rtl_tcp server that is up but never sends its header), or no listener at all.
+struct SilentServer {
+    SOCKET listener = INVALID_SOCKET;
+    std::atomic<bool> run{true};
+    std::thread th;
+    std::vector<SOCKET> held;
+    int port = 0;
+    SilentServer() {
+        WSADATA d{};
+        WSAStartup(MAKEWORD(2, 2), &d);
+        listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        bind(listener, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+        int len = sizeof(a);
+        getsockname(listener, reinterpret_cast<sockaddr*>(&a), &len);
+        port = ntohs(a.sin_port);
+        listen(listener, 8);
+        th = std::thread([this] {
+            while (run.load()) {
+                fd_set r;
+                FD_ZERO(&r);
+                FD_SET(listener, &r);
+                timeval tv{0, 50000};
+                if (select(0, &r, nullptr, nullptr, &tv) > 0) {
+                    const SOCKET c = accept(listener, nullptr, nullptr);
+                    if (c != INVALID_SOCKET) { held.push_back(c); }
+                }
+            }
+        });
+    }
+    ~SilentServer() {
+        run = false;
+        th.join();
+        for (SOCKET c : held) { closesocket(c); }
+        closesocket(listener);
+    }
+};
+
+int freePortThatRefuses() {
+    SilentServer tmp;
+    return tmp.port;   // the listener is closed again when tmp goes: nothing listens there now
+}
+
+cascade::core::AppConfig savedTcp(const std::string& addr) {
+    cascade::core::AppConfig cfg;
+    cfg.sourceKind = "rtltcp";
+    cfg.nativeArgs = "rtltcp=" + addr;
+    cfg.sampleRateHz = 2.4e6;
+    cfg.centerHz = 100.0e6;
+    return cfg;
+}
+
+const char* const kRefusedText = "could not reach the rtl_tcp server at 127.0.0.1:1234 - connect failed (network error 10061) (nothing at that address accepted the connection - is rtl_tcp running there?)";
+
+// THE SAVED rtl_tcp SERVER'S SERIES (2026-11-23, the review of fix/rtltcp): one failure report per incident, the series stops where it ends, a USB arrival does
+// not restart it, the log says what happened, a pick cancels a pending network open, and the start-up restore does not wait on the network.
+void rtlTcpScenarios() {
+    {
+        std::printf("  a saved rtl_tcp server that stays off through the whole series: ONE failure report, the log says it did not answer\n");
+        resetFake();
+        g_failures = 100;
+        g_failText = kRefusedText;
+        th::TestWindow app;
+        Rig rig("tcpoff");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedTcp("127.0.0.1:1234"));
+        CHECK(Access::retryArmed(app));
+        double t = 0.0;
+        for (const double delay : {2.0, 4.0, 8.0, 16.0}) {
+            t += delay;
+            Access::clock(app, t);
+            Access::poll(app);
+            CHECK(Access::settle(app));
+        }
+        t += 64.0;
+        Access::clock(app, t);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        CHECK(g_opens == 5);   // the restore and four tries, no fifth
+        const std::vector<json> q = queued(rig.qdir());
+        const std::vector<json> fails = ofKind(q, "radio_fail");
+        CHECK(fails.size() == 1);
+        if (fails.size() == 1) { CHECK(fails[0]["body"]["trigger"] == "startup-restore" && fails[0]["body"]["reasonClass"] == "absent"); }
+        const std::string ring = [] { std::string all; for (const std::string& l : cascade::core::DiagLog::instance().ringSnapshot()) { all += l + "\n"; } return all; }();
+        CHECK(ring.find("saved rtl_tcp server at its saved address did not answer after 4 more tries") != std::string::npos);
+        CHECK(ring.find("in use by another program") == std::string::npos);
+        // a USB device arriving afterwards does not start the series again (it did, for any saved radio that was merely waiting)
+        const int before = g_opens.load();
+        Access::usbArrives(app);
+        t += 64.0;
+        Access::clock(app, t);
+        Access::poll(app);
+        CHECK(Access::settle(app));
+        CHECK(g_opens.load() == before);
+        CHECK(Access::attempts(app) == 4);
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").size() == 1);
+    }
+    {
+        std::printf("  a saved rtl_tcp server that comes up before the third try: one failure report, then the radio opens\n");
+        resetFake();
+        g_failures = 3;   // the restore and the first two tries
+        g_failText = kRefusedText;
+        th::TestWindow app;
+        Rig rig("tcpappears");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedTcp("127.0.0.1:1234"));
+        double t = 0.0;
+        for (const double delay : {2.0, 4.0, 8.0}) {
+            t += delay;
+            Access::clock(app, t);
+            Access::poll(app);
+            CHECK(Access::settle(app));
+        }
+        CHECK(Access::deviceOpen(app));
+        const std::vector<json> q = queued(rig.qdir());
+        CHECK(ofKind(q, "radio_fail").size() == 1);
+        std::size_t oks = 0;
+        for (const json& o : ofKind(q, "radio_open")) { if (o["body"]["phase"] == "ok" && o["body"]["trigger"] == "saved-retry") { ++oks; } }
+        CHECK(oks == 1);
+    }
+    {
+        std::printf("  a port that answers but is not rtl_tcp is not retried: four more connections to somebody else's server would be wrong\n");
+        resetFake();
+        g_failures = 100;
+        g_failText = "nothing at 127.0.0.1:1234 speaks rtl_tcp (it answered, but not with an rtl_tcp header)";
+        th::TestWindow app;
+        Rig rig("tcpwrong");
+        rig.start();
+        Access::clock(app, 0.0);
+        Access::restore(app, savedTcp("127.0.0.1:1234"));
+        CHECK(!Access::retryArmed(app));
+        Access::clock(app, 100.0);
+        Access::poll(app);
+        CHECK(g_opens == 1);
+    }
+    {
+        std::printf("  picking another source cancels a pending rtl_tcp open: back within a second, no failure report\n");
+        resetFake();
+        g_realTcp = true;
+        SilentServer srv;
+        th::TestWindow app;
+        Rig rig("tcpcancel");
+        rig.start();
+        Access::openTcp(app, "127.0.0.1:" + std::to_string(srv.port));
+        CHECK(Access::pending(app));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));   // inside the (12 s) header wait
+        CHECK(Access::pending(app));
+        const auto t0 = std::chrono::steady_clock::now();
+        Access::scanNative(app);
+        Access::selectNative(app, 0);   // another radio (the generator is the row already selected, and re-picking a row does nothing)
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("    the pick of another radio went through after %lld ms\n", static_cast<long long>(ms));
+        CHECK(ms < 1500);
+        CHECK(Access::settle(app));   // the pick's own open (the scripted radio) finishes
+        CHECK(Access::deviceOpen(app));
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").empty());
+        g_realTcp = false;
+    }
+    {
+        std::printf("  the start-up restore does not wait on a saved network radio: a silent server costs its short wait, not the patient 12 s\n");
+        resetFake();
+        g_realTcp = true;
+        SilentServer srv;
+        th::TestWindow app;
+        Rig rig("tcprestore");
+        rig.start();
+        Access::clock(app, 0.0);
+        const auto t0 = std::chrono::steady_clock::now();
+        Access::restore(app, savedTcp("127.0.0.1:" + std::to_string(srv.port)));
+        const auto silentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("    restore with a saved server that is up but silent returned after %lld ms\n", static_cast<long long>(silentMs));
+        CHECK(silentMs < 7000);
+        CHECK(Access::retryArmed(app));   // and the patience is the series', in the background
+        resetFake();
+        g_realTcp = true;
+        const int dead = freePortThatRefuses();
+        th::TestWindow app2;
+        const auto t1 = std::chrono::steady_clock::now();
+        Access::restore(app2, savedTcp("127.0.0.1:" + std::to_string(dead)));
+        const auto refusedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
+        std::printf("    restore with a saved server that is switched off returned after %lld ms\n", static_cast<long long>(refusedMs));
+        CHECK(refusedMs < 4000);
+        g_realTcp = false;
+    }
+}
+
 // W2 (field data 2026-11-19): a radio SoapySDR lists that a native driver already listed (the same serial) is one radio_found, not a phantom row. (A function of
 // its own: main's frame is already near the stack limit and one more block of locals overflowed it.)
 static __declspec(noinline) void phantomFoundTest() {
@@ -806,6 +1023,7 @@ int main(int argc, char** argv) {
 
     handoffScenarios(everything);   // (a function of its own: main's frame was at the stack's limit)
     seriesScenarios(everything);
+    rtlTcpScenarios();
 
     // --- the D3 sentence through the real engine -------------------------------------------------------------------------------------------------
     {

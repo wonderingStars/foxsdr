@@ -43,6 +43,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -122,6 +123,16 @@ public:
     // a transport that has nothing to wake the default does nothing.
     virtual void shutdown() {}
 
+    // WAIT FOR A RECEIVE TO BE POSSIBLE WITHOUT TOUCHING THE SOCKET'S RECEIVE TIMEOUT: up to `w`, then 1 when a recv() will return at once
+    // (data, an orderly close or an error - recv says which), 0 when the wait ran out and nothing is there, -1 on a failed wait with
+    // lastError() set. The rtl_tcp header wait uses it (a receive that has timed out leaves a Windows socket in an indeterminate state,
+    // Microsoft's own wording, so a wait for a slow server must never be a receive timeout). The default says "readable", which is right
+    // for a scripted transport whose recvSome blocks or fails by its own script.
+    virtual int waitForData(std::chrono::milliseconds w) {
+        (void)w;
+        return 1;
+    }
+
     // Idempotent. After it, every send and receive fails.
     virtual void close() = 0;
 
@@ -150,10 +161,16 @@ struct PeerWording {
     const char* unreachableHint = "";
 };
 
+// The sentence connectTcp reports when `cancel` was raised during the connect.
+constexpr const char* kOpenCancelledText = "the open was cancelled";
+
+// `cancel`, when given, is looked at every ~50 ms of the connect wait: raised, the attempt is abandoned at once (socket closed) and
+// `error` is kOpenCancelledText. (A host-name lookup in progress cannot be interrupted; it is checked when it returns.)
 std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t port,
                                       std::chrono::milliseconds connectWait,
                                       std::chrono::milliseconds ioWait, std::string& error,
-                                      const PeerWording& peer = PeerWording());
+                                      const PeerWording& peer = PeerWording(),
+                                      const std::atomic<bool>* cancel = nullptr);
 
 // --- the context ----------------------------------------------------------
 //

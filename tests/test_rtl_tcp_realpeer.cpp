@@ -15,6 +15,8 @@
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -62,6 +64,7 @@ bool openWhenUp(RtlTcpSource& s, const std::string& args, int seconds, double& o
     const auto t0 = Clock::now();
     while (std::chrono::duration<double>(Clock::now() - t0).count() < seconds) {
         const auto a = Clock::now();
+        s.setPatient(true);   // a user's own pick, as the engine's open worker makes it
         if (s.open(args)) {
             openMs = std::chrono::duration<double, std::milli>(Clock::now() - a).count();
             return true;
@@ -145,6 +148,7 @@ int main() {
         Server srv;
         CHECK(srv.start(exe, port));
         RtlTcpSource late;
+        late.setPatient(true);
         double openMs = 0;
         CHECK(openWhenUp(late, args, 15, openMs));
         std::printf("[server started after] second open ok\n");
@@ -166,6 +170,7 @@ int main() {
         first.closeDevice();
         for (int i = 0; i < 3; ++i) {
             RtlTcpSource again;
+            again.setPatient(true);
             const auto a = Clock::now();
             const bool ok = again.open(args);
             std::printf("[reopen %d right after close] open=%d after %.0f ms%s%s\n", i, ok ? 1 : 0, std::chrono::duration<double, std::milli>(Clock::now() - a).count(),
@@ -174,6 +179,36 @@ int main() {
             if (ok) { CHECK(again.start()); measure(again, 1); }
             again.closeDevice();
         }
+        srv.kill();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    }
+
+    // H: an open that cannot finish (the real server is serving another client, so it refuses or stays silent) is cancelled
+    // within a fraction of a second - the engine raises the flag when the user picks another radio or quits.
+    {
+        Server srv;
+        CHECK(srv.start(exe, port));
+        RtlTcpSource holder;
+        double openMs = 0;
+        CHECK(openWhenUp(holder, args, 15, openMs));
+        CHECK(holder.start());
+        measure(holder, 1);
+        auto flag = std::make_shared<std::atomic<bool>>(false);
+        RtlTcpSource second;
+        second.setPatient(true);
+        second.setCancelFlag(flag);
+        std::thread canceller([flag] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            flag->store(true);
+        });
+        const auto a = Clock::now();
+        const bool ok = second.open(args);
+        const double ms = std::chrono::duration<double, std::milli>(Clock::now() - a).count();
+        canceller.join();
+        std::printf("[cancel] second open while the server is busy: open=%d, back %.0f ms after start (flag raised at 700 ms); text: %s\n", ok ? 1 : 0, ms, second.lastError());
+        CHECK(!ok);
+        CHECK(ms < 1200);
+        holder.closeDevice();
         srv.kill();
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     }

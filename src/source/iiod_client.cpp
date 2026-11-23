@@ -269,6 +269,36 @@ public:
         return true;
     }
 
+    int waitForData(std::chrono::milliseconds w) override {
+        if (sock_ == kInvalidSock) {
+            recvError_ = "the connection is closed";
+            lastIsRecv_.store(true, std::memory_order_release);
+            return -1;
+        }
+        fd_set rfds;
+        FD_ZERO(&rfds);
+#if defined(_WIN32)
+        FD_SET(static_cast<SOCKET>(sock_), &rfds);
+        const int nfds = 0;
+#else
+        FD_SET(static_cast<int>(sock_), &rfds);
+        const int nfds = static_cast<int>(sock_) + 1;
+#endif
+        if (w.count() < 0) { w = std::chrono::milliseconds(0); }
+        timeval tv{};
+        tv.tv_sec = static_cast<long>(w.count() / 1000);
+        tv.tv_usec = static_cast<long>((w.count() % 1000) * 1000);
+        const int r = ::select(nfds, &rfds, nullptr, nullptr, &tv);
+        if (r > 0) { return 1; }
+        if (r == 0) { return 0; }
+#if !defined(_WIN32)
+        if (interrupted(lastSocketError())) { return 0; }
+#endif
+        recvError_ = socketErrorText("wait", lastSocketError());
+        lastIsRecv_.store(true, std::memory_order_release);
+        return -1;
+    }
+
     // Wakes a receive parked on another thread WITHOUT closing the descriptor
     // (closing one under a blocked recv is undefined on POSIX and racy on
     // Windows). Both directions are shut, so a send in flight fails too.
@@ -348,8 +378,9 @@ std::string unescape(const std::string& in) {
 std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t port,
                                       std::chrono::milliseconds connectWait,
                                       std::chrono::milliseconds ioWait, std::string& error,
-                                      const PeerWording& peer) {
+                                      const PeerWording& peer, const std::atomic<bool>* cancel) {
     error.clear();
+    const auto cancelled = [cancel] { return cancel != nullptr && cancel->load(std::memory_order_relaxed); };
     if (!ensureWinsock()) {
         error = "could not initialise the network stack";
         return nullptr;
@@ -369,10 +400,20 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
                 peer.unknownHostHint + ")";
         return nullptr;
     }
+    if (cancelled()) {
+        ::freeaddrinfo(results);
+        error = kOpenCancelledText;
+        return nullptr;
+    }
 
     std::intptr_t sock = kInvalidSock;
     std::string lastFailure;
     for (addrinfo* a = results; a != nullptr && sock == kInvalidSock; a = a->ai_next) {
+        if (cancelled()) {
+            ::freeaddrinfo(results);
+            error = kOpenCancelledText;
+            return nullptr;
+        }
         const std::intptr_t s =
             static_cast<std::intptr_t>(::socket(a->ai_family, a->ai_socktype, a->ai_protocol));
         if (s == kInvalidSock) {
@@ -428,10 +469,14 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
                 auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
                     deadline - std::chrono::steady_clock::now());
                 if (left.count() < 0) { left = std::chrono::milliseconds(0); }
+                // SLICES OF 50 ms, so a cancel is heard within about that (a select cannot be woken from another thread)
+                if (cancel != nullptr && left.count() > 50) { left = std::chrono::milliseconds(50); }
                 timeval tv{};
                 tv.tv_sec = static_cast<long>(left.count() / 1000);
                 tv.tv_usec = static_cast<long>((left.count() % 1000) * 1000);
                 sel = ::select(nfds, nullptr, &wfds, &efds, &tv);
+                if (cancelled()) { break; }
+                if (sel == 0 && std::chrono::steady_clock::now() < deadline) { continue; }
 #if !defined(_WIN32)
                 if (sel < 0 && interrupted(lastSocketError()) &&
                     std::chrono::steady_clock::now() < deadline) {
@@ -439,6 +484,12 @@ std::unique_ptr<Transport> connectTcp(const std::string& host, std::uint16_t por
                 }
 #endif
                 break;
+            }
+            if (cancelled()) {
+                closeSock(s);
+                ::freeaddrinfo(results);
+                error = kOpenCancelledText;
+                return nullptr;
             }
             if (sel <= 0) {
                 lastFailure = std::string(peer.name) +

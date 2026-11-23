@@ -221,7 +221,7 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
     const cascade::core::health::RadioReason failedReason = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_);
     const bool failedBusy = failedReason == cascade::core::health::RadioReason::Busy;
     const bool waitMayCure = cascade::gui::savedRadioFailureWorthRetry(
-        failedBusy, kind == "rtltcp" && (failedReason == cascade::core::health::RadioReason::Absent || failedReason == cascade::core::health::RadioReason::Timeout));
+        failedBusy, cascade::gui::savedNetworkServerNotThere(kind, failedReason == cascade::core::health::RadioReason::Absent || failedReason == cascade::core::health::RadioReason::Timeout, rx().sourceError_));
     std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args) : modelFromNativeLabel(nativeLabelFor(kind, args));
     if (label.empty() || label == args) { label = kind; }
     cascade::core::diagWarnf("radio: radio %u could not be restored on %s (%s): %s - it is on the signal generator and the radio stays saved",

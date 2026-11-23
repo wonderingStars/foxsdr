@@ -146,6 +146,7 @@ public:
         Normal,          // "RTL0", tunerType, gainCount
         BadMagic,        // twelve bytes that are not an rtl_tcp header
         Silent,          // accept, say nothing
+        Pieces,          // the header in two parts, headerDelayMs apart (5 bytes, then 7)
         CloseImmediately // accept, hang up
     };
 
@@ -281,8 +282,8 @@ private:
             sendFully(s, Bytes(junk.begin(), junk.end()));
             // Keep the socket open: it is the client that must decide this is
             // not rtl_tcp, not a close that tells it so.
-        } else if (h == Header::Normal) {
-            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(headerDelayMs.load());
+        } else if (h == Header::Normal || h == Header::Pieces) {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(h == Header::Pieces ? 0 : headerDelayMs.load());
             while (std::chrono::steady_clock::now() < until && run_.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -294,6 +295,17 @@ private:
                 hdr.push_back(static_cast<std::uint8_t>(v >> 16));
                 hdr.push_back(static_cast<std::uint8_t>(v >> 8));
                 hdr.push_back(static_cast<std::uint8_t>(v));
+            }
+            if (h == Header::Pieces) {
+                if (!sendFully(s, Bytes(hdr.begin(), hdr.begin() + 5))) {
+                    closeSock(s);
+                    return;
+                }
+                const auto gap = std::chrono::steady_clock::now() + std::chrono::milliseconds(headerDelayMs.load());
+                while (std::chrono::steady_clock::now() < gap && run_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                hdr.erase(hdr.begin(), hdr.begin() + 5);
             }
             if (!sendFully(s, hdr)) {
                 closeSock(s);
@@ -635,6 +647,15 @@ int main() {
         CHECK(host == "::1" && port == 4321);
         CHECK(cascade::source::parseRtlTcpAddress("rtltcp=sdr.local:1234/", host, port, error));
         CHECK(host == "sdr.local" && port == 1234);
+        // A scheme of some other protocol is refused, and so is an address with nothing in it after a scheme or a slash (both used to
+        // be taken for "nothing typed" and silently meant 127.0.0.1:1234).
+        CHECK(cascade::source::parseRtlTcpAddress("rtltcp=TCP://sdr.local", host, port, error));
+        CHECK(host == "sdr.local");
+        for (const char* bad : {"rtltcp=tcp://", "rtltcp=rtl_tcp:///", "rtltcp=/", "rtltcp=http://sdr.local", "rtltcp=udp://sdr.local:1234"}) {
+            const bool ok = cascade::source::parseRtlTcpAddress(bad, host, port, error);
+            CHECK(!ok);
+            CHECK(!error.empty());
+        }
         // Nothing typed: the server's own default place.
         CHECK(cascade::source::parseRtlTcpAddress("", host, port, error));
         CHECK(host == "127.0.0.1" && port == 1234);
@@ -1190,6 +1211,7 @@ int main() {
         daemon.headerDelayMs.store(5000);
         daemon.streamEnabled.store(false);
         RtlTcpSource src;
+        src.setPatient(true);   // a user's own pick runs on the open worker and waits; the start-up restore does not (below)
         const auto t0 = std::chrono::steady_clock::now();
         CHECK(src.open(daemon.args()));
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
@@ -1213,6 +1235,7 @@ int main() {
             late.start();
         });
         RtlTcpSource src;
+        src.setPatient(true);
         const bool ok = src.open("rtltcp=127.0.0.1:" + std::to_string(port));
         starter.join();
         CHECK(ok);
@@ -1227,12 +1250,82 @@ int main() {
         probe.stop();
         RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, std::chrono::milliseconds(800));
         RtlTcpSource src;
+        src.setPatient(true);
         CHECK(!src.open(args));
         const std::string err = src.lastError();
         CHECK(hasWord(err, "accepted the connection"));
         CHECK(hasWord(err, "one client at a time"));
         CHECK(health::classifyRadioOpen("rtltcp", err) == health::RadioReason::Absent);
         RtlTcpSource::setWaitsForTest(RtlTcpSource::kHeaderWaitDefault, RtlTcpSource::kRefusedRetryDefault);
+    }
+    {
+        // THE START-UP RESTORE IS SHORT-WINDED (a source that was not told to be patient): a silent server costs its 4 s, not 12, and a
+        // refusal is not retried - the window must not wait on a saved network radio that is switched off. Before setPatient existed the
+        // restore waited the full 12 s + 6 s (the review of 3f510fbe, finding 1).
+        FakeRtlTcp silent;
+        CHECK(silent.start());
+        silent.header.store(FakeRtlTcp::Header::Silent);
+        RtlTcpSource a;
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(!a.open(silent.args()));
+        const auto silentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("     short-winded, silent server: %lld ms\n", static_cast<long long>(silentMs));
+        CHECK(silentMs >= 3800 && silentMs < 6500);
+        CHECK(hasWord(a.lastError(), "within 4 s"));
+        FakeRtlTcp gone;
+        CHECK(gone.start());
+        const std::string goneArgs = gone.args();
+        gone.stop();
+        RtlTcpSource b;
+        const auto t1 = std::chrono::steady_clock::now();
+        CHECK(!b.open(goneArgs));
+        const auto refusedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t1).count();
+        std::printf("     short-winded, refused: %lld ms\n", static_cast<long long>(refusedMs));
+        CHECK(refusedMs < 3500);   // one Windows connect attempt (about 2 s), no retry
+    }
+    {
+        // A HEADER THAT ARRIVES IN TWO PIECES 2.5 s APART (longer than the socket's 2 s receive bound that the old wait used, which left the
+        // socket in an indeterminate state after it fired): opens, and reads the right tuner.
+        FakeRtlTcp daemon;
+        CHECK(daemon.start());
+        daemon.header.store(FakeRtlTcp::Header::Pieces);
+        daemon.headerDelayMs.store(2500);
+        daemon.streamEnabled.store(false);
+        RtlTcpSource src;
+        CHECK(src.open(daemon.args()));
+        CHECK(src.isOpen());
+        CHECK(src.tunerName() == "R820T" && src.tunerGainCount() == 29);
+        src.closeDevice();
+    }
+    {
+        // AN OPEN IS CANCELLABLE: the flag the engine raises when the user picks another source or quits. A silent server and a 12 s wait,
+        // cancelled after 300 ms, returns within a fraction of a second and says it was cancelled.
+        FakeRtlTcp daemon;
+        CHECK(daemon.start());
+        daemon.header.store(FakeRtlTcp::Header::Silent);
+        auto flag = std::make_shared<std::atomic<bool>>(false);
+        RtlTcpSource src;
+        src.setPatient(true);
+        src.setCancelFlag(flag);
+        std::thread canceller([flag] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            flag->store(true);
+        });
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(!src.open(daemon.args()));
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        canceller.join();
+        std::printf("     cancelled during the header wait: back after %lld ms\n", static_cast<long long>(ms));
+        CHECK(ms >= 250 && ms < 900);
+        CHECK(hasWord(src.lastError(), "was cancelled"));
+        CHECK(!src.isOpen());
+        // A flag that is already raised stops the next open at the dial.
+        RtlTcpSource again;
+        again.setCancelFlag(flag);
+        const auto t1 = std::chrono::steady_clock::now();
+        CHECK(!again.open(daemon.args()));
+        CHECK(std::chrono::steady_clock::now() - t1 < std::chrono::milliseconds(500));
+        CHECK(hasWord(again.lastError(), "was cancelled"));
     }
     {
         // An address that is not one.

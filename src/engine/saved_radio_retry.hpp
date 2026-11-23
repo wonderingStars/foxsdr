@@ -7,6 +7,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <string_view>
+
 namespace cascade::gui {
 
 // --- Trying a busy saved radio again, a few times, once the window is up -----
@@ -58,6 +60,14 @@ inline constexpr double kSavedRadioRetryDelaysSec[4] = {2.0, 4.0, 8.0, 16.0};
 // previous client), or silent (it is still starting its dongle). Field data 2026-11-22: a saved rtl_tcp server refused at launch, no retry
 // was made, and the next launch 14 minutes later opened it. Any other class (a wrong driver, a refused rate, an unplugged USB dongle)
 // is not cured by waiting. `networkServerNotThere` is true only for the rtltcp driver with an absent or timeout reason.
+// The network-server half, from the open's own words: the rtltcp driver, an absent-or-timeout class, and NOT the two sentences that say
+// waiting will not help - a port that answers with something that is not rtl_tcp ("speaks rtl_tcp": four more connections to somebody
+// else's server would be wrong) and an open that was cancelled.
+inline bool savedNetworkServerNotThere(std::string_view kind, bool absentOrTimeout, std::string_view error) {
+    return kind == "rtltcp" && absentOrTimeout && error.find("speaks rtl_tcp") == std::string_view::npos &&
+           error.find("was cancelled") == std::string_view::npos;
+}
+
 inline bool savedRadioFailureWorthRetry(bool busy, bool networkServerNotThere) { return busy || networkServerNotThere; }
 
 inline bool savedRadioRetryDue(bool keptRadioValid, bool lastFailureBusy, int attemptsMade,
