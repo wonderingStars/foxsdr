@@ -10525,10 +10525,12 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
                                          : modelFromNativeLabel(nativeLabelFor(kind, args));
             if (triedModel.empty() || triedModel == args) { triedModel = kind; }
             cascade::core::diagWarnf(
-                "source: the saved radio (%s, %s) did not reopen (%s), the driver said: %s - the receiver is on the "
+                "source: the saved radio (%s, %s) did not reopen (%s)%s - the receiver is on the "
                 "signal generator and the radio stays saved",
                 triedModel.c_str(), kind.c_str(), whyClass.c_str(),
-                cascade::core::radioreport::openFailureWords(kind, args, rx().sourceError_).c_str());
+                // THE VENDOR'S OWN WORDS, for a SoapySDR radio only (a log line that said just "(vendor)" left a failed B200 reopen unexplained). A native
+                // radio's sentence stays out of the ring: it is the usb layer's own and quotes the device.
+                kind == "soapy" ? (", the driver said: " + cascade::core::radioreport::openFailureWords(kind, args, rx().sourceError_)).c_str() : "");
 
             // ...AND THE CONFIG GOES ON NAMING IT. The session runs on the
             // generator above, which is right - it has to run on something -
