@@ -137,7 +137,8 @@ void testEveryTokenIsLegalAndNothingElseIs() {
     // 6 kinds x 8 families = 48 more failure tokens.
     // engine fixes 7: four more recovered words (companioncrash, companionstall, companionbreak, companiongaveup: a plugin's companion program failed) = 44.
     // engine fixes 8: the radio-open reason "control" adds one fail token per driver word (14) = 234.
-    CHECK(all.size() == 7 + 234 + 48 + 54 + 44);
+    // freeze diagnosis stage two: one more, pluginslow = 45.
+    CHECK(all.size() == 7 + 234 + 48 + 54 + 45);
     std::set<std::string> unique(all.begin(), all.end());
     CHECK(unique.size() == all.size());
     for (const std::string& t : all) {
@@ -957,7 +958,7 @@ void testRecoveredWordsAndCap() {
                                             "iqfilegone", "cataloguebad", "catstop", "filekept",
                                             "takeheader", "sentinelgone", "displaywatch", "devlatch", "softgl",
                                             "pluginfault", "pluginquarantine", "pluginwedge", "pluginoveruse", "threadwedge",
-                                            "companioncrash", "companionstall", "companionbreak", "companiongaveup"};
+                                            "companioncrash", "companionstall", "companionbreak", "companiongaveup", "pluginslow"};
     CHECK(health::recoveredWords() == words);
     CHECK(health::kRecoveredCount == words.size());
     for (std::size_t i = 0; i < words.size(); ++i) {
@@ -978,7 +979,7 @@ void testRecoveredWordsAndCap() {
                                         "webroute", "sdrenum", "sdrlost", "audiolead", "viewport",
                                         "readerleak", "closeleak", "linkstranded", "streamrestart",
                                         "tunerretry", "latecall", "scanlimit", "usbstuck", "iqfilegone",
-                                        "cataloguebad", "filekept", "sentinelgone", "displaywatch", "devlatch", "softgl", "pluginoveruse"};
+                                        "cataloguebad", "filekept", "sentinelgone", "displaywatch", "devlatch", "softgl", "pluginoveruse", "pluginslow"};
     for (std::size_t i = 0; i < words.size(); ++i) {
         CHECK(health::recoveredOncePerSession(static_cast<health::Recovered>(i)) == (once.count(words[i]) == 1));
     }

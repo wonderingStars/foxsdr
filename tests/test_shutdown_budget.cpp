@@ -1147,6 +1147,10 @@ const KnownWait kKnownWaits[] = {
      "The teardown itself raises issues (CatStop, CloseLeak, ReaderLeak) and each is filed by a writer thread; the flush waits for them, only while a write really is out, and "
      "the bound is spent ONCE per process (a second ask - the engine's destructor - finds it spent). 250 ms, on the teardown thread. 26500 -> 26750, and kShutdownThresholdMs "
      "59000 -> 59500 with it"},
+    {"src/core/plugin_runner.hpp", "kClearWait", 1,
+     "PluginRunner::clear() - the plugins' unload at shutdown (and the rescan's): in start-worker mode (stage two) it waits for the runner's queued and running create() and "
+     "destroy() calls at most this long, ONE deadline for every runner cleared in a teardown, and leaves what has not finished to the worker with its module pinned. 250 ms on "
+     "the teardown thread. It cannot share the issue reports' flush (a different wait at a different point). 26750 -> 27000, and kShutdownThresholdMs 59500 -> 60000 with it"},
     {"src/engine/engine.cpp", "kNetworkCancelWait", 0,
      "how long the control pass waits for a cancelled network open worker (rtl_tcp) to come back when a person picks another radio; the worker hears the cancel within ~50 ms. Reached only from the pick-a-radio command (Engine::cancelPendingNetworkOpen), never from the shutdown stretch"},
     {"src/core/transmitter.hpp", "kAudioPollWait", 0,

@@ -903,6 +903,7 @@ The sites that are counted:
 | `pluginquarantine` | `fault::totals().quarantines`: a plugin was switched off for the session | the engine's pass |
 | `pluginwedge` | `fault::totals().wedges`: a guarded call never returned (the stage-2 finding of the call budget), or an unload timed out inside one | the engine's pass |
 | `pluginoveruse` | `fault::totals().overruns`: a guarded call overran its budget (the stage-1 finding), once a session | the engine's pass |
+| `pluginslow` | `PluginRunner::slowStartCount()`: a plugin's create() on the start worker ran past 30 s (`PluginRunner::kReportStartMs`; the report is filed at that moment by the runner's slow-start sink, naming the plugin's public id and version and `over-30s` / `over-2min`), once a session. **The deployed Worker and site must learn the word, the issue report's `blamed-plugin`, `blamed-plugin-version` and `slow-start` header fields and the `slowStart` context key before a release sends them; nothing was deployed.** | the engine's pass |
 | `threadwedge` | `HangWatchdog`'s poll found a registered worker thread past its budget and wrote a freeze report naming it (see *A worker that stops answering is reported by name*) | the engine's pass, from `beats::Registry::wedgesFound()` (a counter, like the four above) |
 | `companioncrash`, `companionstall`, `companionbreak`, `companiongaveup` | `core/companion_fault.cpp`, `wordOfKind`: a plugin's `report_fault(kind, count)` call (plugin_abi.h; at most one a minute per plugin and kind, the sums kept in `PluginApiCore`) drained by the engine's pass (`pumpWireC`). HELD BACK while `kCompanionFaultReportsOn` is false (it is, until the Worker lists the four words); nothing of the plugin is kept | the engine's pass |
 
@@ -5758,10 +5759,37 @@ that still says `pending` is not uploaded yet (the sweep leaves it for the next 
 **What the site does with them (read from `foxsdr-site` `crash.go`, read-only).** The decoder is `json.Unmarshal` into `CrashReport` with no `DisallowUnknownFields`; `Context` is a
 `map[string]any`; `storedFromReport` keeps at most `crashMaxContextKeys = 24` of them, SORTED BY NAME, each key clipped to 48 characters and each value to 200. Unknown context
 keys are therefore ACCEPTED AND STORED, and shown in the report page's context table; nothing refuses them. The limit is the one to watch: the application now sends 22
-context keys, so TWO more fit. The site keeps the first 24 by name, so the alphabetically LAST keys are the ones lost: a 25th key drops `watchdog`, a 26th drops `uptimeSec`, a 27th
+context keys (23 since the plugin start worker's `slowStart`), so ONE more fits. The site keeps the first 24 by name, so the alphabetically LAST keys are the ones lost: a 25th key drops `watchdog`, a 26th drops `uptimeSec`, a 27th
 drops `updateChannel` (and a new key that itself sorts after `watchdog` is the one dropped). (Corrected in the review of fix/freezes: this paragraph named the wrong order.) The site reads a freeze `reason` strictly against the frame sentence
 (`freezeScopeOf`, `sentinel.go`): the control sentence is not recognised there and shows no frame scope, which is correct for it. What the site could add (not needed for the
 application to send these): show `watchdog`, `passPhase`, `lockWait` and `blamedPluginHow` on the report page, group by them, and recognise `freeze: the engine pass was in <phase>`.
+
+### The plugin start worker (freeze diagnosis stage two)
+
+A plugin's `create()` can take as long as the plugin likes (dvb-receiver 0.4.0's waited for cmd.exe with no limit). Stage one built outside the runner's lock; stage two moves
+every `create()` and `destroy()` off the control thread, onto ONE process-wide worker (`core/plugin_start_worker.hpp`), in the window's real sessions and the headless engine
+(`ServiceOptions::asyncPluginStart`; the default stays synchronous, which the tests and any caller that reads state straight after a start rely on).
+
+- **One serial worker.** A plugin's `create()` is never concurrent with a `destroy()` of the same module, on any radio, and a destroy posted before a create of the same plugin
+  runs first. The ABI text now says create and destroy come from one host thread that is never the real-time thread (`plugin_abi.h`).
+- **The pass never waits.** `startPlugin`, `rebuild`, `stopPlugin` and the put-downs post jobs and return; `PluginRunner::pumpStarts()` (called first in the engine's plugin
+  step every pass) publishes finished builds under the runner's lock with every check the synchronous path made. Invariants I1 to I8 of the lock split are kept: I1 (a handle in
+  one call at a time) because a stage is private until published and the worker is serial; I2 (destroy once, after the last other call) because a published instance is destroyed by
+  the existing paths, now posted, and a discarded stage is put down, never published; I3 (vectors and rows agree) because publication is one critical section; I4 (rate and centre)
+  by the build epoch and `retuneStageLocked`; I5/I6 (stopped, dormant, one set per plugin) by `starting_` and the re-check at publish; I7 (one clock writer) because `rebuilding_`
+  now stays set until the last build of a rebuild is published; I8 untouched.
+- **Rows.** "starting" at once; after 2 s `"<name>" is taking longer than usual to start.`; after 30 s the `pluginslow` issue is filed once (the plugin's public id and version and
+  `over-30s` or `over-2min`; the three header fields and the `slowStart` context key are new); after 120 s the worker thread is ABANDONED (parked, its module pinned), the plugin
+  is switched off through the containment's own wedge path with the existing sentence (`... stopped answering in create and was switched off for this session ... RE-ENABLE it in
+  Fitted modules ...`; on a reload the existing gate's "Not loaded: it faulted, threw an error or stopped answering earlier in this session and was switched off...") and a
+  REPLACEMENT worker takes the queue. At most four threads are abandoned per process; past that a start waits.
+- **Freeze reports.** The worker is not the control thread or the window, so a slow create there writes neither's report; the create is still a guarded call (CallScope), so
+  past its 30 s budget the existing plugin-call report is written (`hang-<pid>-w<N>`, `watchdog: plugin-call`) and, with the outcome of finding 1, closed when it returns.
+- **Exit and unload.** `PluginRunner::clear()` waits for the runner's jobs at most 250 ms, ONE deadline for all runners cleared in a teardown; what has not finished is left to the
+  worker with its module pinned and its build never published (counted in `HangWatchdog::kShutdownBoundedWaitsMs`: 26750 -> 27000, threshold 59500 -> 60000). It could not share the
+  issue reports' 250 ms flush: a different wait at a different point, and `clear()` is also the plugin rescan's.
+- **Not deployed.** The Worker (`telemetry-worker/worker.js` lists `pluginslow`) and the site must learn the word, the three header fields and the context key before a release sends
+  them. Nothing was deployed.
 
 ### A freeze or crash report carries the window's last-known state
 

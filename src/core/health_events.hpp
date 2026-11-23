@@ -148,8 +148,12 @@ enum class Recovered : std::uint8_t {
     CompanionStall,
     CompanionBreak,
     CompanionGaveUp,
+    // STAGE TWO'S ONE (freeze diagnosis host design 7 to 10): a plugin's create() ran longer than the host waits quietly for it (30 s) on the start worker. Counted from
+    // PluginRunner's slow-start count by the engine's poll; its issue report names the plugin's PUBLIC id and version and the time as one word. THE DEPLOYED WORKER AND SITE MUST
+    // LEARN `recovered.pluginslow` (and the report's new fields) BEFORE A RELEASE SENDS IT (telemetry-worker/worker.js is the source; the standing deploy-before rule).
+    PluginSlow,
 };
-inline constexpr std::size_t kRecoveredCount = 44;
+inline constexpr std::size_t kRecoveredCount = 45;
 
 // HOW FAR A SESSION GOT (field-early-warning): the stages between "the program started" and
 // "the radio is doing its job", one fixed word each. They are the working-session metric and
@@ -556,6 +560,7 @@ struct RecoveryReadings {
     unsigned long long pluginQuarantines = 0;
     unsigned long long pluginWedges = 0;
     unsigned long long pluginOveruses = 0;
+    unsigned long long pluginSlows = 0;             // PluginRunner::slowStartCount(): plugin create() calls reported as slow to start (stage two)
 };
 class RecoveryWatch {
 public:

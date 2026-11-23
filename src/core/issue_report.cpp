@@ -143,6 +143,8 @@ constexpr const char* kSentences[health::kRecoveredCount] = {
     "the link between a plugin and a program it runs beside FoxSDR broke, and the plugin carried on without it",
     // CompanionGaveUp
     "a plugin stopped restarting a program it runs beside FoxSDR, after it kept failing",
+    // PluginSlow
+    "a plugin took a long time to start",
 };
 static_assert(sizeof(kSentences) / sizeof(kSentences[0]) == health::kRecoveredCount,
               "every recovered-from word has an issue sentence");
@@ -212,7 +214,20 @@ std::string issueSignature(Recovered word) {
     return out;
 }
 
-std::string renderIssueReport(Recovered word) {
+namespace {
+// A plugin's version as it may be written into a report: letters, digits and . + - _ only, at most 24 characters; anything else reads as "unknown", nothing as "none".
+std::string cleanVersionField(const std::string& v) {
+    if (v.empty()) { return "none"; }
+    if (v.size() > 24) { return "unknown"; }
+    for (const char c : v) {
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '+' || c == '-' || c == '_';
+        if (!ok) { return "unknown"; }
+    }
+    return v;
+}
+}  // namespace
+
+std::string renderIssueReport(Recovered word, const Blame* blame) {
     std::string out;
     out.reserve(16384);
     // THE HEADER: the fields issueReportFieldNames() declares and PRIVACY.md lists, and
@@ -220,6 +235,10 @@ std::string renderIssueReport(Recovered word) {
     out += "kind: issue\n";
     out += "reason: " + issueReason(word) + "\n";
     out += "signature: " + issueSignature(word) + "\n";
+    // THE PLUGIN, only for a report that is about one (`pluginslow`): the public id and version of the plugin that was slow to start, and the time as one of two words.
+    out += "blamed-plugin: " + ((blame != nullptr && !blame->publicId.empty()) ? beats::reportId(blame->publicId.c_str()) : std::string("none")) + "\n";
+    out += "blamed-plugin-version: " + (blame != nullptr ? cleanVersionField(blame->version) : std::string("none")) + "\n";
+    out += "slow-start: " + ((blame != nullptr && (blame->startTime == "over-30s" || blame->startTime == "over-2min")) ? blame->startTime : std::string("none")) + "\n";
     // THE CONTEXT, the same bytes a crash or freeze report carries, and the window's
     // last-known state beside it, as the freeze report has it.
     out += "--- context ---\n";
@@ -301,10 +320,10 @@ static bool writeReportFile(const std::string& path, const std::string& text) {
     return true;
 }
 
-static std::string fileImpl(Recovered word, bool offThread);
+static std::string fileImpl(Recovered word, bool offThread, const Blame* blame = nullptr);
 
 std::string fileIssueReport(Recovered word) { return fileImpl(word, false); }
-std::string fileIssueReportOffThread(Recovered word) { return fileImpl(word, true); }
+std::string fileIssueReportOffThread(Recovered word, const Blame* blame) { return fileImpl(word, true, blame); }
 
 void setDiskHookForTest(std::function<void()> hook) {
     std::lock_guard<std::mutex> lk(hookBox().mu);
@@ -346,7 +365,7 @@ bool waitForWritesForTest(unsigned ms) {
     return true;
 }
 
-static std::string fileImpl(Recovered word, bool offThread) {
+static std::string fileImpl(Recovered word, bool offThread, const Blame* blame) {
     const std::size_t i = static_cast<std::size_t>(word);
     if (i >= health::kRecoveredCount) { return std::string(); }
     // Consent and a directory, both, or nothing is written - the crash handler's own
@@ -367,7 +386,7 @@ static std::string fileImpl(Recovered word, bool offThread) {
 
     const std::string path = dir + "/issue-" + stamp() + "-" + std::to_string(processId()) + "-" +
                              std::to_string(g_seq.fetch_add(1u) + 1u) + ".txt";
-    const std::string text = renderIssueReport(word);
+    const std::string text = renderIssueReport(word, blame);
     if (offThread) {
         // THE FILE CALLS ARE A WORKER'S (freeze FA0B39E3: the control pass sat in the ofstream below). The gates, the path and the text are the caller's and
         // cost no disk; the worker opens, writes, logs and counts, or gives the once-a-session bit back, as the synchronous branch does.

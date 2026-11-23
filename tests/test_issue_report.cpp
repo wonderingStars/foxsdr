@@ -29,6 +29,8 @@
 #include <atomic>
 #include <set>
 #include <thread>
+
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -293,6 +295,7 @@ int main() {
             {Recovered::PluginQuarantine, &health::RecoveryReadings::pluginQuarantines},
             {Recovered::PluginWedge, &health::RecoveryReadings::pluginWedges},
             {Recovered::PluginOveruse, &health::RecoveryReadings::pluginOveruses},
+            {Recovered::PluginSlow, &health::RecoveryReadings::pluginSlows},
             {Recovered::ThreadWedge, &health::RecoveryReadings::threadWedges},
         };
         health::RecoveryReadings now = base;
@@ -321,7 +324,7 @@ int main() {
         for (const Case& c : cases) { now.*(c.field) += 1; }
         watch.poll(now);
         CHECK(issueFiles(dir).size() == expected);
-        CHECK(expected == 5);
+        CHECK(expected == 6);
     }
 
     // --- A WATCH BASELINED WHEN ITS OWNER STARTS COUNTS WHAT MOVES BEFORE ITS FIRST POLL (deep review of engine/stage4, batch A) ---------
@@ -431,6 +434,43 @@ int main() {
         CHECK(issue::fileIssueReport(Recovered::Audio).empty());    // and a report that DID get written is still once a session
         CHECK(issueFiles(flaky).size() == 1);
         CHECK(issue::takeNewlyFiled() == 0);                        // a refused repeat is not a reason to sweep again
+    }
+
+    // --- THE REPORT OF A SLOW-STARTING PLUGIN NAMES IT (freeze diagnosis stage two) -------------------------------------------------------------
+    // `pluginslow`: the plugin's public id and version and the time as one of two words, in three header fields that every other issue report writes as `none`; each
+    // is checked again where it is written, so nothing but an id, a version and one of two words can leave the machine; the uploader carries them as context.
+    {
+        issue::Blame b;
+        b.publicId = "dvb-receiver";
+        b.version = "0.4.0";
+        b.startTime = "over-30s";
+        const std::string text = issue::renderIssueReport(Recovered::PluginSlow, &b);
+        CHECK(text.find("\nkind: issue\n") != std::string::npos || text.rfind("kind: issue\n", 0) == 0);
+        CHECK(text.find("\nreason: issue: pluginslow - a plugin took a long time to start\n") != std::string::npos);
+        CHECK(text.find("\nblamed-plugin: dvb-receiver\n") != std::string::npos);
+        CHECK(text.find("\nblamed-plugin-version: 0.4.0\n") != std::string::npos);
+        CHECK(text.find("\nslow-start: over-30s\n") != std::string::npos);
+        CHECK(headerFields(text) == std::set<std::string>(issueReportFieldNames().begin(), issueReportFieldNames().end()));
+        ParsedReport pr;
+        CHECK(parseReportText(text, pr));
+        CHECK(pr.kind == "issue" && pr.blamedPlugin == "dvb-receiver" && pr.blamedPluginVersion == "0.4.0" && pr.slowStart == "over-30s");
+        const nlohmann::json up = nlohmann::json::parse(uploadJson(pr, std::string()), nullptr, false);
+        CHECK(!up.is_discarded() && up["context"].value("slowStart", std::string()) == "over-30s" && up["context"].value("blamedPlugin", std::string()) == "dvb-receiver" &&
+              up["context"].value("blamedPluginVersion", std::string()) == "0.4.0");
+        // a hostile id, version and time word are not written
+        issue::Blame bad;
+        bad.publicId = "C:\Zebra\plugin.dll";
+        bad.version = "1.0 beta (mine)";
+        bad.startTime = "forty seconds";
+        const std::string t2 = issue::renderIssueReport(Recovered::PluginSlow, &bad);
+        CHECK(t2.find("Zebra") == std::string::npos && t2.find("(mine)") == std::string::npos && t2.find("forty") == std::string::npos);
+        CHECK(t2.find("\nblamed-plugin: unknown\n") != std::string::npos);
+        CHECK(t2.find("\nblamed-plugin-version: unknown\n") != std::string::npos);
+        CHECK(t2.find("\nslow-start: none\n") != std::string::npos);
+        // every other word's report has none of the three
+        const std::string t3 = issue::renderIssueReport(Recovered::Viewport);
+        CHECK(t3.find("\nblamed-plugin: none\n") != std::string::npos && t3.find("\nblamed-plugin-version: none\n") != std::string::npos &&
+              t3.find("\nslow-start: none\n") != std::string::npos);
     }
 
     // --- A SWEEP NEVER SEES A SHORT REPORT (review of fix/freezes, finding 3a) ------------------------------------------------------------

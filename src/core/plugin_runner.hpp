@@ -235,6 +235,42 @@ public:
     // it and startPlugin() takes it out, so a later rebuild() keeps the runner
     // as the per-plugin calls left it. Keyed on id, like the stop set.
     bool startPlugin(const LoadedPlugin& lp);
+
+    // ----- STAGE TWO: THE START WORKER (freeze diagnosis host design 7 to 10; core/plugin_start_worker.hpp) -----
+    //
+    // With asyncStart on, EVERY create() and destroy() of this runner runs on the process's one start worker thread, and the control thread never waits for either:
+    // startPlugin() / rebuild() mark the plugin "starting", post the build and return; stopPlugin() / clear() / a rebuild's put-down post the destroys and return (clear() waits
+    // a bounded time, below). The finished builds are PUBLISHED by pumpStarts(), which the control pass calls every pass: under the lock, with every check the synchronous
+    // path made (stopped, dormant, cleared, rates changed -> built again). Off (the default), everything is as it was in stage one: the calling thread builds and
+    // publishes before it returns, which the many tests and the synchronous callers rely on.
+    //
+    // WHAT THE USER SEES while a create() runs: the row says "starting" at once; after kSlowStartMs it says "<name> is taking longer than usual to start."; after kReportStartMs
+    // one report goes to the slow-start sink (the engine files the `pluginslow` issue: public id, version, "over 30 s" or "over 2 min"), once; after kAbandonStartMs the worker
+    // thread is ABANDONED (parked for good, its module pinned and never unloaded), the plugin is switched off with the existing sentence, and a replacement worker takes the
+    // queue so other plugins still start.
+    void setAsyncStart(bool on);
+    bool asyncStart() const;
+    // Control thread, once a pass. Publishes finished builds, moves the slow-start clocks. No-op when asyncStart is off.
+    void pumpStarts();
+    // Whether anything of this runner is queued, running or waiting to be published on the worker.
+    bool startsPending() const;
+    // clear() waits at most this long for this runner's jobs; what has not finished is left to the worker with its module pinned (and is never published).
+    static constexpr std::chrono::milliseconds kClearWait{250};
+    // The three times of a create() on the worker: the row says it is slow (2 s), the report goes out (30 s), the worker is abandoned and the plugin switched off (120 s, four
+    // times the create budget the call monitor uses, plugin_fault.hpp).
+    static constexpr std::int64_t kSlowStartMs = 2000;
+    static constexpr std::int64_t kReportStartMs = 30000;
+    static constexpr std::int64_t kAbandonStartMs = 120000;
+    struct SlowStart {
+        std::string publicId;   // the plugin's PUBLIC id (fault::publicIdOf)
+        std::string version;    // the version the load recorded
+        bool overTwoMinutes = false;
+    };
+    static void setSlowStartSink(void (*sink)(const SlowStart&));
+    // How many slow-start reports the pump has made in this process (the engine's health poll counts the word from it).
+    static unsigned long long slowStartCount();
+    // TESTS ONLY: the three times, in milliseconds. 0 puts a default back.
+    static void setStartTimingsForTest(std::int64_t slowMs, std::int64_t reportMs, std::int64_t abandonMs);
     void stopPlugin(const std::string& pluginKey);
     void setDormant(std::vector<std::string> keys);
     bool isDormant(const std::string& pluginKey) const;
@@ -737,6 +773,17 @@ private:
     void markStartingLocked(const LoadedPlugin& lp);
     // Lock held. Takes the starting mark (row and key) off every plugin in the list.
     void unmarkStartingLocked(const std::vector<const LoadedPlugin*>& plugins);
+    // Lock held on entry and return, dropped meanwhile: puts down, here and now, every finished build not yet published.
+    void sweepFinishedLocked(std::unique_lock<stall::TaggedMutex>& lock);
+    struct AsyncShared;   // the finished builds, handed from the worker to pumpStarts()
+    struct DeadSet;
+    struct Done;
+    // Lock held; may drop and retake it (synchronous mode) while the destroy() calls run. In async mode posts them to the worker and returns at once.
+    void disposeDeadLocked(DeadSet dead, std::unique_lock<stall::TaggedMutex>& lock);
+    // Lock held. Async mode: posts the build of one plugin (against the rates now in force).
+    void postBuildLocked(const LoadedPlugin& lp, int round, bool fromRebuild);
+    // Lock held. One finished build: publish, build again, or put down.
+    void finishBuildLocked(Done& d);
     // Lock held on entry and on return; DROPPED while the creates run. Every plugin in `wanted` has been marked starting. Builds each into a Stage with the lock
     // dropped, then publishes the ones still wanted (or builds again against the new rates when a rebuild() came meanwhile; discards when stopped, switched off or
     // cleared) and takes the marks off. The body rebuild() and startPlugin() share.
@@ -799,6 +846,23 @@ private:
             return instances.empty() && iqInstances.empty() && imageInstances.empty() && processors.empty();
         }
     };
+    struct DeadSet {
+        std::vector<Instance> audio;
+        std::vector<IqInstance> iq;
+        std::vector<ImageInstance> image;
+        std::vector<ProcessorInstance> proc;
+    };
+    // One plugin whose create() is queued or running (async mode), for the pump's rows, clocks and reports. Under mutex_.
+    static DeadSet deadOfStage(Stage& s);
+    struct StartInfo {
+        std::string key;
+        std::string name;
+        std::string publicId;
+        std::string version;
+        bool fromRebuild = false;
+        bool slowShown = false;
+        bool reported = false;
+    };
     // Frames the interleaved scratch is sized for at rebuild; a larger block
     // grows it once (the pipeline's own buffers follow the same rule).
     static constexpr std::size_t kChainReserveFrames = 16384;
@@ -815,6 +879,13 @@ private:
     // True from the instant rebuild() has destroyed the old instances to the instant it has published the new ones (its builds run outside the lock): the stream
     // clock is not advanced meanwhile, because nothing is being fed and an instance is promised that the count is what it has received.
     bool rebuilding_ = false;
+    // STAGE TWO (see startPlugin). All under mutex_ except async_'s own.
+    bool asyncStart_ = false;
+    std::uint64_t runnerId_ = 0;
+    std::shared_ptr<AsyncShared> async_;
+    std::vector<StartInfo> startInfos_;
+    std::vector<std::string> abandonedKeys_;   // keys whose create() was abandoned: a build that returns late is put down, never published
+    std::size_t rebuildPending_ = 0;           // builds of the rebuild() in progress not yet published (rebuilding_ stays set until none)
     std::vector<ProcessorInstance> processors_;
     std::vector<float> chainBuf_;
     std::uint64_t processorNonFinite_ = 0;

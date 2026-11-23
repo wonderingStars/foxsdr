@@ -1133,7 +1133,7 @@ const std::vector<std::string>& issueReportFieldNames() {
     // "--- context ---": the kind, one fixed reason (a recovered-from word and its
     // sentence) and the signature of the word. No code, no address, no thread:
     // nothing faulted. tests/test_issue_report.cpp compares the set both ways.
-    static const std::vector<std::string> names = {"kind", "reason", "signature"};
+    static const std::vector<std::string> names = {"kind", "reason", "signature", "blamed-plugin", "blamed-plugin-version", "slow-start"};
     return names;
 }
 

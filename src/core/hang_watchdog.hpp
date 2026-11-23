@@ -327,7 +327,12 @@ public:
     // AND THE ISSUE REPORTS' BOUNDED FLUSH IS THE SIXTH (review of fix/freezes, finding 3b): the teardown itself raises issues (CatStop, CloseLeak, ReaderLeak), each filed by
     // a writer thread, and Engine::shutdownDrain() waits for writers in flight at most issue::kShutdownFlushWait, 250 ms, spent ONCE per process however many places
     // ask (the engine's destructor asks again; it finds the bound spent). Only while a write really is out. 26500 -> 26750, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 26750;
+    //
+    // AND THE PLUGIN START WORKER'S DRAIN IS THE SEVENTH (stage two): PluginRunner::clear() - the plugins' unload, at shutdown - waits for the runner's queued and running create()
+    // and destroy() calls at most PluginRunner::kClearWait, 250 ms, and ONE deadline for all the runners cleared in a teardown (eight waits would be two seconds); what has
+    // not finished is left to the worker with its module pinned. It cannot share the issue reports' 250 ms: that is a different wait at a different point, and clear() is
+    // also the plugin rescan's, outside any shutdown. 26750 -> 27000, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 27000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, queuing the teardown's two config saves (the WRITE is
@@ -353,7 +358,8 @@ public:
     // (53000 -> 59000 with the Soapy restart's give-back above: twice (26500 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
     // really wedges is reported 6 s later than it was.)
     // (59000 -> 59500 with the issue reports' flush above: twice (26750 + kShutdownReserveMs 3000).)
-    static constexpr unsigned kShutdownThresholdMs = 59500;
+    // (59500 -> 60000 with the start worker's drain above: twice (27000 + kShutdownReserveMs 3000).)
+    static constexpr unsigned kShutdownThresholdMs = 60000;
 
     HangWatchdog() = default;
     ~HangWatchdog();

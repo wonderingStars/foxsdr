@@ -54,6 +54,7 @@ constexpr std::chrono::milliseconds kFinalPassBound{500};
 EngineService::EngineService(ServiceOptions options) : options_(std::move(options)) {
     // Before anything can scan: the engine is built and restored for a front end that is not here yet (ServiceOptions::frontEndFollows).
     if (options_.frontEndFollows) { engine_.expectFrontEnd(true); }
+    if (options_.asyncPluginStart) { engine_.setAsyncPluginStart(true); }
 }
 
 EngineService::~EngineService() { stopKeeper(); }

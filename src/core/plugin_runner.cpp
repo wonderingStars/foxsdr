@@ -14,6 +14,7 @@
 #include "core/plugin_marker.hpp"
 #include "core/utf8_text.hpp"  // utf8Floor: audioPathSnapshot cuts a name on a character
 #include "core/plugin_run.hpp"
+#include "core/plugin_start_worker.hpp"
 
 namespace cascade::core {
 namespace {
@@ -118,6 +119,9 @@ void destroyOne(fault::Slot* slot, const std::string& key, const Api* api, void*
     calls::destroy(slot, api, handle);
 }
 
+// The one deadline the runners' clear() calls of a teardown share (see PluginRunner::clear); 0 = none set. StartWorker::nowMs() clock.
+std::atomic<std::int64_t> g_clearDeadlineMs{0};
+
 }  // namespace
 
 PluginRunner::~PluginRunner() { clear(); }
@@ -221,6 +225,21 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
     if (wanted.empty()) { return; }
     // THE CREATES RUN WITH THE LOCK DROPPED (buildAndPublishLocked). The runner is empty meanwhile, which the code already calls "the truth" during destroy(), and
     // the stream clock stands still: nothing is being fed, and an instance is promised that the count is what it has received.
+    if (asyncStart_) {
+        // STAGE TWO: every create() is posted to the start worker (after the destroys of the old instances, which were posted first) and rebuild() returns. The stream clock
+        // stays still until the last of these builds is published (pumpStarts), as it did while rebuild() built.
+        rebuilding_ = true;
+        rebuildPending_ += wanted.size();
+        try {
+            for (const LoadedPlugin* lp : wanted) { postBuildLocked(*lp, 0, true); }
+        } catch (...) {
+            unmarkStartingLocked(wanted);
+            rebuildPending_ = 0;
+            rebuilding_ = false;
+            throw;
+        }
+        return;
+    }
     // (A scope guard: a throw out of the build must not leave the flag set, or the stream clock never advances again. The lock is held again whenever the guard runs.)
     struct RebuildingScope {
         bool& flag;
@@ -271,6 +290,16 @@ bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
     applyPendingCentreLocked();
     // MARKED "STARTING" UNDER THE LOCK, BUILT WITHOUT IT, PUBLISHED UNDER IT AGAIN (buildAndPublishLocked): the window and the sound go on while create() runs.
     markStartingLocked(lp);
+    if (asyncStart_) {
+        // STAGE TWO: the create() is the start worker's. The row says "starting" now; pumpStarts() publishes the plugin when the worker has built it.
+        try {
+            postBuildLocked(lp, 0, false);
+        } catch (...) {
+            unmarkStartingLocked({&lp});
+            throw;
+        }
+        return true;
+    }
     buildAndPublishLocked({&lp}, lock);
     return true;
 }
@@ -609,6 +638,15 @@ void PluginRunner::buildPlugin(const LoadedPlugin& lp, Stage& s) {
 void PluginRunner::markStartingLocked(const LoadedPlugin& lp) {
     const std::string key = pluginKey(lp);
     starting_.push_back(key);
+    if (asyncStart_) {
+        StartInfo si;
+        si.key = key;
+        si.name = lp.name;
+        const fault::Slot* slot = fault::slotFor(key);
+        if (const char* id = fault::publicIdOf(slot)) { si.publicId = id; }
+        if (const char* v = fault::versionOf(slot)) { si.version = v; }
+        startInfos_.push_back(std::move(si));
+    }
     DecoderStatus st;
     st.plugin = lp.name;
     st.key = key;
@@ -628,6 +666,7 @@ void PluginRunner::unmarkStartingLocked(const std::vector<const LoadedPlugin*>& 
 }
 
 void PluginRunner::dropStartingRowLocked(const std::string& key) {
+    startInfos_.erase(std::remove_if(startInfos_.begin(), startInfos_.end(), [&](const StartInfo& si) { return si.key == key; }), startInfos_.end());
     // The "starting" row goes, and the rows after it move up: an instance reports through the index it was created with, so the survivors follow (as in
     // removePluginLocked).
     constexpr std::size_t kGone = static_cast<std::size_t>(-1);
@@ -878,7 +917,43 @@ void PluginRunner::clear() {
     // The modules are about to be unloaded: a create() still running on another thread is stale for good (its stage is destroyed, never rebuilt or published).
     ++clearEpoch_;
     starting_.clear();
+    // STAGE TWO: what must stay mapped if the worker has not finished with it by the time the wait below gives up - the plugins being created, and the ones being put down.
+    std::vector<fault::Slot*> pins;
+    if (asyncStart_) {
+        for (const StartInfo& si : startInfos_) { pins.push_back(fault::slotFor(si.key)); }
+        for (const Instance& i : instances_) { pins.push_back(i.slot); }
+        for (const IqInstance& i : iqInstances_) { pins.push_back(i.slot); }
+        for (const ImageInstance& i : imageInstances_) { pins.push_back(i.slot); }
+        for (const ProcessorInstance& p : processors_) { pins.push_back(p.slot); }
+        startInfos_.clear();
+        abandonedKeys_.clear();
+        rebuildPending_ = 0;
+        rebuilding_ = false;
+    }
     destroyInstances(lock);
+    if (asyncStart_) {
+        // THE MODULES ARE ABOUT TO BE UNLOADED, and a module is never unloaded while a call into it is running or queued: wait for this runner's jobs, a bounded time. A job
+        // that is not done by then (a create() that never returns) keeps its module mapped for the rest of the session (the containment's pin), and its build is never
+        // published (clearEpoch_ moved); the worker puts it down when it returns.
+        // ONE DEADLINE FOR EVERY RUNNER'S clear() IN A TEARDOWN: up to eight runners are cleared one after the other, and a job stuck in one runner holds the worker for the
+        // others' queued jobs too - eight waits of kClearWait would be two seconds. The first clear that has to wait sets the deadline (now + kClearWait), the rest wait only
+        // until it; a clear that finds everything drained puts it away again, so a later, unrelated clear gets a bound of its own.
+        lock.unlock();
+        std::int64_t deadline = g_clearDeadlineMs.load(std::memory_order_acquire);
+        if (deadline == 0) {
+            const std::int64_t mine = StartWorker::nowMs() + static_cast<std::int64_t>(kClearWait.count());
+            std::int64_t expected = 0;
+            deadline = g_clearDeadlineMs.compare_exchange_strong(expected, mine, std::memory_order_acq_rel) ? mine : expected;
+        }
+        const std::int64_t left = std::max<std::int64_t>(0, deadline - StartWorker::nowMs());
+        const bool drained = StartWorker::instance().waitDrained(runnerId_, std::chrono::milliseconds(left));
+        if (drained) { g_clearDeadlineMs.store(0, std::memory_order_release); }
+        lock.lock();
+        if (!drained) { for (fault::Slot* s : pins) { if (s != nullptr) { fault::pin(s); } } }
+        // Builds that finished and were not yet published are put down HERE, now (their module is still mapped: it was not unloaded, or it is pinned): the pump will not
+        // see them after the modules are gone. (A job that returns after this point is put down by the pump, its module pinned.)
+        sweepFinishedLocked(lock);
+    }
     // THE STREAM ENDS HERE. A new epoch with no rates says so: a plugin still
     // reading the clock (a patch-page instance, a worker thread) sees the
     // epoch move and both rates at zero rather than a count frozen mid-run.
@@ -978,20 +1053,49 @@ void PluginRunner::destroyInstances(std::unique_lock<stall::TaggedMutex>& lock) 
     audioFed_ = 0;
     iqFed_ = 0;
 
+    DeadSet dead;
+    dead.audio = std::move(deadAudio);
+    dead.iq = std::move(deadIq);
+    dead.image = std::move(deadImage);
+    dead.proc = std::move(deadProc);
+    disposeDeadLocked(std::move(dead), lock);
+}
+
+namespace {
+// THE ORDER IS THE ABI'S: a handle is destroyed exactly once, after the last call of anything else on it. An instance that failed permanently kept its handle for
+// precisely this moment. The moved-out vectors are released after, outside the lock: a resampler's buffers are a free() and belong outside it too.
+template <class Dead>
+void destroyAllOf(Dead& d) {
+    for (auto& i : d.audio) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (auto& i : d.iq) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (auto& i : d.image) { destroyOne(i.slot, i.key, i.api, i.handle); }
+    for (auto& p : d.proc) { destroyOne(p.slot, p.key, p.api, p.handle); }
+    d.audio.clear();
+    d.iq.clear();
+    d.image.clear();
+    d.proc.clear();
+}
+}  // namespace
+
+void PluginRunner::disposeDeadLocked(DeadSet dead, std::unique_lock<stall::TaggedMutex>& lock) {
+    if (dead.audio.empty() && dead.iq.empty() && dead.image.empty() && dead.proc.empty()) { return; }
+    if (asyncStart_) {
+        // STAGE TWO: the destroy() calls are the start worker's, in the order they are posted (a destroy before a create of the same plugin runs first). The lock stays as
+        // it is: nothing here waits.
+        auto set = std::make_shared<DeadSet>(std::move(dead));
+        StartWorker::Job job;
+        job.owner = runnerId_;
+        job.isCreate = false;
+        const std::uint32_t radioNo = radio();
+        job.run = [set, radioNo]() {
+            const CurrentRadioScope scope(radioNo);
+            destroyAllOf(*set);
+        };
+        StartWorker::instance().post(std::move(job));
+        return;
+    }
     lock.unlock();
-    // THE ORDER IS THE ABI'S: a handle is destroyed exactly once, after the
-    // last call of anything else on it. An instance that failed permanently
-    // kept its handle for precisely this moment.
-    for (Instance& i : deadAudio) { destroyOne(i.slot, i.key, i.api, i.handle); }
-    for (IqInstance& i : deadIq) { destroyOne(i.slot, i.key, i.api, i.handle); }
-    for (ImageInstance& i : deadImage) { destroyOne(i.slot, i.key, i.api, i.handle); }
-    for (ProcessorInstance& p : deadProc) { destroyOne(p.slot, p.key, p.api, p.handle); }
-    // The moved-out vectors are released here, with the lock still down: a
-    // resampler's buffers are a free() and belong outside it too.
-    deadAudio.clear();
-    deadIq.clear();
-    deadImage.clear();
-    deadProc.clear();
+    destroyAllOf(dead);
     lock.lock();
 }
 
@@ -1101,16 +1205,12 @@ void PluginRunner::removePluginLocked(const std::string& key,
     // DESTROYED WITH THE LOCK DROPPED, for the reason destroyInstances gives: a
     // plugin's destroy() may call the host back, and the host's tune service
     // comes straight back into retune() and this mutex.
-    lock.unlock();
-    for (Instance& i : deadAudio) { destroyOne(i.slot, i.key, i.api, i.handle); }
-    for (IqInstance& i : deadIq) { destroyOne(i.slot, i.key, i.api, i.handle); }
-    for (ImageInstance& i : deadImage) { destroyOne(i.slot, i.key, i.api, i.handle); }
-    for (ProcessorInstance& p : deadProc) { destroyOne(p.slot, p.key, p.api, p.handle); }
-    deadAudio.clear();
-    deadIq.clear();
-    deadImage.clear();
-    deadProc.clear();
-    lock.lock();
+    DeadSet dead;
+    dead.audio = std::move(deadAudio);
+    dead.iq = std::move(deadIq);
+    dead.image = std::move(deadImage);
+    dead.proc = std::move(deadProc);
+    disposeDeadLocked(std::move(dead), lock);
 }
 
 void PluginRunner::processAudio(const float* mono, std::size_t frames) {
@@ -2023,6 +2123,234 @@ void PluginRunner::feedSnapshot(std::size_t& active, std::vector<std::string>& f
         ++k;
     }
     feedingKeys.resize(k);
+}
+
+}  // namespace cascade::core
+
+// ---------------------------------------------------------------------------
+// STAGE TWO: the start worker's side of the runner
+// ---------------------------------------------------------------------------
+
+namespace cascade::core {
+
+struct PluginRunner::Done {
+    std::shared_ptr<LoadedPlugin> lp;
+    Stage stage;
+    int round = 0;
+    bool fromRebuild = false;
+    bool threw = false;
+};
+
+struct PluginRunner::AsyncShared {
+    std::mutex mu;
+    std::vector<Done> done;
+};
+
+namespace {
+std::atomic<std::uint64_t> g_nextRunnerId{1};
+std::atomic<void (*)(const PluginRunner::SlowStart&)> g_slowSink{nullptr};
+std::atomic<std::int64_t> g_slowMs{PluginRunner::kSlowStartMs};
+std::atomic<std::int64_t> g_reportMs{PluginRunner::kReportStartMs};
+std::atomic<std::int64_t> g_abandonMs{PluginRunner::kAbandonStartMs};
+}  // namespace
+
+std::atomic<unsigned long long> g_slowCount{0};
+void PluginRunner::setSlowStartSink(void (*sink)(const SlowStart&)) { g_slowSink.store(sink, std::memory_order_relaxed); }
+unsigned long long PluginRunner::slowStartCount() { return g_slowCount.load(std::memory_order_relaxed); }
+
+void PluginRunner::setStartTimingsForTest(std::int64_t slowMs, std::int64_t reportMs, std::int64_t abandonMs) {
+    g_slowMs.store(slowMs > 0 ? slowMs : kSlowStartMs, std::memory_order_relaxed);
+    g_reportMs.store(reportMs > 0 ? reportMs : kReportStartMs, std::memory_order_relaxed);
+    g_abandonMs.store(abandonMs > 0 ? abandonMs : kAbandonStartMs, std::memory_order_relaxed);
+}
+
+void PluginRunner::setAsyncStart(bool on) {
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
+    if (on && !async_) { async_ = std::make_shared<AsyncShared>(); }
+    if (on && runnerId_ == 0) { runnerId_ = g_nextRunnerId.fetch_add(1); }
+    asyncStart_ = on;
+}
+
+bool PluginRunner::asyncStart() const {
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
+    return asyncStart_;
+}
+
+bool PluginRunner::startsPending() const {
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
+    if (!asyncStart_) { return false; }
+    if (!startInfos_.empty()) { return true; }
+    if (StartWorker::instance().pendingFor(runnerId_) != 0) { return true; }
+    std::lock_guard<std::mutex> g(async_->mu);
+    return !async_->done.empty();
+}
+
+PluginRunner::DeadSet PluginRunner::deadOfStage(Stage& s) {
+    // (the speakers and the transmit claims borrow a decoder's handle and own none: dropped first, as discardStage does)
+    s.audioInstances.clear();
+    s.txInstances.clear();
+    DeadSet d;
+    d.audio = std::move(s.instances);
+    d.iq = std::move(s.iqInstances);
+    d.image = std::move(s.imageInstances);
+    d.proc = std::move(s.processors);
+    s.instances.clear(); s.iqInstances.clear(); s.imageInstances.clear(); s.processors.clear(); s.status.clear();
+    return d;
+}
+
+void PluginRunner::postBuildLocked(const LoadedPlugin& lp, int round, bool fromRebuild) {
+    Stage stage;
+    stage.audioRateHz = audioRateHz_;
+    stage.iqRateHz = iqRateHz_;
+    stage.centreHz = centreHz_;
+    stage.epoch = buildEpoch_;
+    stage.clearEpoch = clearEpoch_;
+    stage.key = pluginKey(lp);
+    auto lpCopy = std::make_shared<LoadedPlugin>(lp);   // the engine's list may change while the worker builds: the job owns its copy
+    auto shared = async_;
+    const std::uint32_t radioNo = radio();
+    StartWorker::Job job;
+    job.owner = runnerId_;
+    job.key = stage.key;
+    job.isCreate = true;
+    job.run = [shared, lpCopy, stage = std::make_shared<Stage>(std::move(stage)), radioNo, round, fromRebuild]() mutable {
+        const CurrentRadioScope scope(radioNo);
+        bool threw = false;
+        try {
+            buildPlugin(*lpCopy, *stage);
+        } catch (...) {
+            threw = true;
+        }
+        Done d;
+        d.lp = lpCopy;
+        d.stage = std::move(*stage);
+        d.round = round;
+        d.fromRebuild = fromRebuild;
+        d.threw = threw;
+        std::lock_guard<std::mutex> g(shared->mu);
+        shared->done.push_back(std::move(d));
+    };
+    StartWorker::instance().post(std::move(job));
+}
+
+void PluginRunner::finishBuildLocked(Done& d) {
+    const LoadedPlugin& lp = *d.lp;
+    Stage& s = d.stage;
+    const auto settleRebuild = [&] {
+        if (d.fromRebuild && rebuildPending_ > 0 && --rebuildPending_ == 0) { rebuilding_ = false; }
+    };
+    std::unique_lock<stall::TaggedMutex> noLock;   // (disposeDeadLocked takes the lock only to drop it in synchronous mode; async mode never touches it)
+    const auto putDown = [&](Stage& st) {
+        DeadSet dead = deadOfStage(st);
+        disposeDeadLocked(std::move(dead), noLock);
+    };
+    const auto abandoned = std::find(abandonedKeys_.begin(), abandonedKeys_.end(), s.key);
+    if (abandoned != abandonedKeys_.end()) {
+        // The create() was abandoned (the plugin is switched off) and has now returned: its instance is dropped, never published. (Nothing of it is called again if the
+        // containment refuses the destroy.)
+        abandonedKeys_.erase(abandoned);
+        putDown(s);
+        return;
+    }
+    if (d.threw) {
+        dropStartingRowLocked(s.key);
+        starting_.erase(std::remove(starting_.begin(), starting_.end(), s.key), starting_.end());
+        putDown(s);
+        settleRebuild();
+        return;
+    }
+    const bool rebuiltMeanwhile = s.epoch != buildEpoch_ && s.clearEpoch == clearEpoch_;
+    if (rebuiltMeanwhile && stageStillWantedLocked(lp, s) && (audioRateHz_ > 0.0 || iqRateHz_ > 0.0) && d.round + 1 < 3) {
+        // Built against rates that have since changed: put it down and build again, against the new ones. The starting mark stays.
+        putDown(s);
+        postBuildLocked(lp, d.round + 1, d.fromRebuild);
+        return;
+    }
+    dropStartingRowLocked(s.key);
+    starting_.erase(std::remove(starting_.begin(), starting_.end(), s.key), starting_.end());
+    if (s.epoch == buildEpoch_ && stageStillWantedLocked(lp, s)) {
+        retuneStageLocked(s);
+        publishLocked(s);
+    } else {
+        putDown(s);
+    }
+    settleRebuild();
+}
+
+void PluginRunner::sweepFinishedLocked(std::unique_lock<stall::TaggedMutex>& lock) {
+    std::vector<Done> leftovers;
+    if (async_) { std::lock_guard<std::mutex> g(async_->mu); leftovers.swap(async_->done); }
+    lock.unlock();
+    for (Done& d : leftovers) {
+        DeadSet dead = deadOfStage(d.stage);
+        destroyAllOf(dead);
+    }
+    lock.lock();
+}
+
+void PluginRunner::pumpStarts() {
+    std::vector<SlowStart> reports;
+    {
+        std::unique_lock<stall::TaggedMutex> lock(mutex_);
+        if (!asyncStart_ || !async_) { return; }
+        const CurrentRadioScope radioScope(radio());
+        std::vector<Done> done;
+        { std::lock_guard<std::mutex> g(async_->mu); done.swap(async_->done); }
+        for (Done& d : done) { finishBuildLocked(d); }
+
+        // THE CLOCKS of the create() the worker is inside, if it is this runner's.
+        const StartWorker::Current cur = StartWorker::instance().current();
+        if (cur.busy && cur.isCreate && cur.owner == runnerId_) {
+            auto it = std::find_if(startInfos_.begin(), startInfos_.end(), [&](const StartInfo& si) { return si.key == cur.key; });
+            if (it != startInfos_.end()) {
+                if (cur.sinceMs >= g_slowMs.load(std::memory_order_relaxed) && !it->slowShown) {
+                    it->slowShown = true;
+                    for (DecoderStatus& st : status_) {
+                        if (st.key == it->key && st.reason == DecoderIdleReason::Starting) {
+                            st.detail = "\"" + it->name + "\" is taking longer than usual to start.";
+                            statusGen_.fetch_add(1, std::memory_order_release);
+                        }
+                    }
+                }
+                if (cur.sinceMs >= g_reportMs.load(std::memory_order_relaxed) && !it->reported) {
+                    it->reported = true;
+                    SlowStart rep;
+                    rep.publicId = it->publicId;
+                    rep.version = it->version;
+                    rep.overTwoMinutes = cur.sinceMs >= kAbandonStartMs;
+                    reports.push_back(std::move(rep));
+                }
+                if (cur.sinceMs >= g_abandonMs.load(std::memory_order_relaxed)) {
+                    const std::string key = it->key;
+                    const std::string name = it->name;
+                    const bool fromRebuild = it->fromRebuild;
+                    if (StartWorker::instance().abandonCurrent(key)) {
+                        // THE WORKER THREAD IS PARKED FOR GOOD and a replacement takes the queue. The plugin is switched off through the containment's own wedge path (the
+                        // same count and quarantine the call monitor makes at four budgets), which keeps its module mapped; the row says so with the existing sentence.
+                        fault::Slot* slot = fault::slotFor(key);
+                        if (!fault::isQuarantined(slot)) { fault::noteMonitorFinding(slot, 2, "create"); }
+                        dropStartingRowLocked(key);
+                        starting_.erase(std::remove(starting_.begin(), starting_.end(), key), starting_.end());
+                        abandonedKeys_.push_back(key);
+                        DecoderStatus st;
+                        st.plugin = name;
+                        st.key = key;
+                        st.reason = DecoderIdleReason::CreateFailed;
+                        st.stream = DecoderStream::None;
+                        st.detail = quarantineSentence(name, slot);
+                        status_.push_back(std::move(st));
+                        statusGen_.fetch_add(1, std::memory_order_release);
+                        if (fromRebuild && rebuildPending_ > 0 && --rebuildPending_ == 0) { rebuilding_ = false; }
+                    }
+                }
+            }
+        }
+    }
+    // (the sink runs with no lock held: it files an issue report)
+    if (void (*sink)(const SlowStart&) = g_slowSink.load(std::memory_order_relaxed)) {
+        for (const SlowStart& r : reports) { sink(r); }
+    }
+    g_slowCount.fetch_add(reports.size(), std::memory_order_relaxed);
 }
 
 }  // namespace cascade::core

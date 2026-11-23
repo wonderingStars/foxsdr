@@ -148,6 +148,7 @@ int runEngine(const cascade::engine::BootResult& boot) {
     cascade::engine::ServiceOptions options;
     options.configPath = boot.configPath;
     options.safePlugins = boot.safePlugins;
+    options.asyncPluginStart = true;   // a slow plugin create() must never make the service uncontrollable (freeze diagnosis stage two)
     // The service sets the shutdown stages of the sentinel's timeline as it goes (a no-op without a sentinel: no block is attached); the rest of the timeline is
     // this function's - see the head of this file.
     options.breadcrumbs = true;

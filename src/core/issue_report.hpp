@@ -60,7 +60,15 @@ std::string issueSignature(health::Recovered word);
 
 // The whole report text as it would be filed now: the header (issueReportFieldNames in
 // core/diag_report.hpp), the application context, the process block and the recent log.
-std::string renderIssueReport(health::Recovered word);
+// WHICH PLUGIN, for the one word whose report is about a plugin (`pluginslow`; stage two): its PUBLIC id and version, and how long it took as one word. Everything is
+// re-validated where it is written (letters, digits and a few separators only; the time from a closed list), so nothing but a public id, a version and one of two words
+// can leave the machine in these three header fields. Every other word's report writes `none` for all three.
+struct Blame {
+    std::string publicId;     // fault::publicIdOf
+    std::string version;      // the version the load recorded
+    std::string startTime;    // "over-30s" or "over-2min"
+};
+std::string renderIssueReport(health::Recovered word, const Blame* blame = nullptr);
 
 // Files the report for `word` into activeCrashDir(), once per word per process. Returns
 // the path written, or empty: capture is off (no directory, or Diagnostics off), this word
@@ -74,7 +82,7 @@ std::string fileIssueReport(health::Recovered word);
 // call does. The file is written under a temporary name and renamed, so a sweep never sees a short report. The SHUTDOWN waits for writers in flight, a bounded time
 // (flushWritesAtShutdown below): the teardown itself raises issues (CatStop, CloseLeak, ReaderLeak), and they must be on disk when the process ends. A writer still running
 // after the bound is abandoned and touches nothing that is destroyed at exit.
-std::string fileIssueReportOffThread(health::Recovered word);
+std::string fileIssueReportOffThread(health::Recovered word, const Blame* blame = nullptr);
 
 // THE BOUNDED FLUSH (review of fix/freezes, finding 3b): waits until every queued write has finished or `boundMs` has passed, whichever is first; true when none is out. The
 // bound is ONE deadline for the process (the first call that finds a write out sets it; every call waits only until that instant), so the teardown pays at most kShutdownFlushWait

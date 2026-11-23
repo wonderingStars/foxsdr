@@ -357,6 +357,8 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                     sawKind = true;
                 } else if (k == "signature") {
                     out.signature = v;
+                } else if (k == "slow-start") {
+                    out.slowStart = (v == "over-30s" || v == "over-2min") ? v : std::string();
                 } else if (k == "address") {
                     addressText = v;
                 } else if (k == "reason") {
@@ -691,6 +693,8 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
         ctx["outcome"] = outcome;
     }
     ctx["lockWait"] = cleanLockWait(r.lockWait);
+    // HOW LONG A PLUGIN TOOK TO START, one of two words (the issue report of a slow create(); empty for every other report). The 23rd of the site's 24 context keys.
+    ctx["slowStart"] = (r.slowStart == "over-30s" || r.slowStart == "over-2min") ? r.slowStart : std::string();
     {
         // "<how>[:<entry>]" again, split and checked: the how from its two words, the entry from the fault entries' own list.
         const std::size_t colon = r.blamedPluginHow.find(':');
@@ -802,7 +806,7 @@ const std::vector<std::string>& uploadContextFieldNames() {
                                                    "reloadPhase", "blamedPlugin", "blamedPluginVersion",
                                                    "blamedPluginOrigin", "trail", "updateChannel",
                                                    "watchdog", "threadRole", "passPhase", "stalledMs", "thresholdMs",
-                                                   "outcome", "lockWait", "blamedPluginHow"};
+                                                   "outcome", "lockWait", "blamedPluginHow", "slowStart"};
     return names;
 }
 

@@ -67,7 +67,10 @@
  *
  * A decoder instance (the void* from create) is owned by exactly one host
  * thread at a time and is never used concurrently from two threads. create
- * and destroy are called from the host's control thread; process, retune and
+ * and destroy are called from ONE host thread (the host's start worker; since the
+ * plugin start worker, no longer the control thread), which is never the real-time
+ * thread and never runs a create or destroy while any other call on the same
+ * instance is running; process, retune and
  * poll_text are called from a real-time audio/DSP thread, so they must not
  * block, allocate unboundedly, or perform I/O. destroy happens-after the last
  * process/retune/poll_text for that instance.
@@ -92,8 +95,8 @@
  * cannot reach that point (its interface is not running frames) does not unmap the
  * module at all, it waits. A host with NO interface (a headless engine) creates
  * and destroys these instances from its control thread and never polls them.
- * DECODERS ARE UNCHANGED: create and destroy come from the host's control thread, as
- * above.
+ * DECODERS ARE UNCHANGED: create and destroy come from the host's one start thread
+ * (the host's control thread in a host without a start worker), as above.
  *
  * ====================== ABI 3 - WHAT CHANGED, AND WHY ======================
  *
@@ -564,7 +567,7 @@ typedef struct CascadeDecoderApi {
  *
  * THREADING - identical rules to the audio table, and they matter more here
  * because the block rate is the DEVICE rate, not the audio rate. create() and
- * destroy() come from the host's control thread. process(), retune() and
+ * destroy() come from the host's one start thread (see above). process(), retune() and
  * poll_text() are called from the real-time DSP thread and are serialised
  * with respect to each other (never concurrent), so they need no internal
  * locking - and must not block, must not allocate, must not perform I/O, and
@@ -1347,7 +1350,7 @@ typedef struct CascadeTxAudioApi {
  * bypass switch: stop the plugin and the chain is exactly what it was.
  *
  * THREADING - the decoder tables' rules exactly. create() and destroy() come
- * from the host's control thread; process() from the real-time audio thread,
+ * from the host's one start thread (see above); process() from the real-time audio thread,
  * never concurrently with itself, and it must not block, allocate, perform I/O
  * or throw. A rate or channel change is a destroy() and a fresh create(), not
  * a call into a live instance.
