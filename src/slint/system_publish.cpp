@@ -739,6 +739,7 @@ void SystemPublisher::execute(const Effect& e, const char* what) {
 ReadOptions SystemPublisher::buildOptions() {
     // the monitor's scale as a whole percent (the Auto row's "% here")
     opts_.monitor_percent = std::clamp(static_cast<int>(std::lround(static_cast<double>(osScale_ > 0.0f ? osScale_ : ui_.window().scale_factor()) * 100.0)), 50, 400);
+    opts_.fit_percent = autoFitScale_ > 0.0f ? static_cast<int>(std::lround(static_cast<double>(autoFitScale_) * 100.0)) : 0;
     if (opts_.language_reason.empty()) {
         // The languages this machine has no face for, and why (docs 6.62; cached, so the font files are read once): the list greys them and says so beside the name.
         for (const cascade::i18n::Language& l : cascade::i18n::languages()) {

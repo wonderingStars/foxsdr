@@ -1606,6 +1606,18 @@ you left it open or folded, so it comes back that way, and every other
 section comes back at its usual state on the next launch. Every chip on a row
 still reports what that section is doing without opening it.
 
+**Interface size** (SYSTEM, Display) is **Auto** or 100 to 250 %. Auto follows
+the Windows display scaling of the monitor the window is on. The window's
+layout needs at least 1024 x 640 logical pixels, so where Auto would leave
+less than that on the screen's work area (a 1280 x 720 screen at Windows 150 %
+has about 853 x 453; at 1920 x 1080 and 175 %, about 1097 x 594) it uses the
+largest size, never under 100 %, at which the work area holds the layout, and
+the Auto row then reads, for example, "Auto (100% to fit this screen)". The
+window is then fitted to the work area as usual. A screen too small even at
+100 % (1024 x 600, say) gets the window maximised and a lowered minimum. A
+size you have chosen yourself is never changed, and a window moved to a larger
+monitor goes back to Auto's normal size.
+
 **Both side panels fold away.** The `<<` key at the right end of the
 FUNCTION SELECT title folds the rail to a thin strip, and since 0.99.74 the
 `>>` key at the left end of the STATUS column's title does the same for the

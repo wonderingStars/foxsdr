@@ -1226,6 +1226,26 @@ int main(int argc, char** argv) {
         }
         return foxsdr::slintgaps::windowWorkRect(r.left, r.top, r.right, r.bottom);
     };
+    // USER BUG C3: THE SCALE THE WINDOW SHOULD HAVE, with the screen in view. Interface size "Auto" follows Windows' scale, but where the monitor's work area at that scale is smaller than the layout
+    // (1024 x 640 logical) the scale is lowered to the largest step that holds it (look_logic.hpp autoScaleToFit); a chosen size is never touched. Windows' own scale of this monitor is asked of the system
+    // (gaps_win windowDpiScale), so the lowered number this program dispatched cannot hide a move to another monitor. FOXSDR_SLINT_OS_SCALE=<scale> (1.5) stands in for it in a bounded run ONLY (the test
+    // seam: the hidden desktop is at 100 %): the follower then believes the system is at that scale and dispatches what it would have to.
+    float seamNativeScale = 0.0f;   // bounded seam only: the scale the window really had before any dispatch (the hidden desktop's own), which is what the system converts a logical size with
+    const auto osScaleForMirror = [&]() { return seamNativeScale > 0.0f ? seamNativeScale : scaleFollower.os(); };
+    const auto planNow = [&](const std::string& choice, float cur) {
+        bool chosen = false;
+        for (const int step : cascade::gui::uiscale::kSteps) { chosen = chosen || choice == std::to_string(step); }
+        int workW = 0, workH = 0;
+        foxsdr::slintlook::WorkRect wr;
+        if (!chosen && workRectNow(wr)) { workW = wr.right - wr.left; workH = wr.bottom - wr.top; }
+        float hint = 0.0f;
+        if (bounded.bounded()) {
+            if (const char* env = std::getenv("FOXSDR_SLINT_OS_SCALE"); env != nullptr && *env != '\0') { const float v = static_cast<float>(std::atof(env)); if (v >= 0.5f && v <= 4.0f) { hint = v; } }
+            if (hint > 0.0f && seamNativeScale <= 0.0f) { seamNativeScale = cur; }
+        }
+        if (hint <= 0.0f) { hint = foxsdr::slintgaps::windowDpiScale(); }
+        return scaleFollower.plan(choice, cur, workW, workH, kMinWindowW, kMinWindowH, hint);
+    };
     foxsdr::slintlook::EdgeDrag edgeDrag;       // the drag of a window edge: the size from the press and the pointer's place (drive fixes 7; look_logic.hpp)
     bool edgeDragBySystem = false;              // this drag follows the system's pointer (gaps_win.hpp systemPointer), not the edge's own moves
     std::string lookTheme, lookStyle;
@@ -1253,8 +1273,9 @@ int main(int argc, char** argv) {
             applyFace();
         }
         const float cur = ui->window().scale_factor();
-        const foxsdr::slintlook::ScalePlan plan = scaleFollower.plan(half.interfaceScale, cur);
+        const foxsdr::slintlook::ScalePlan plan = planNow(half.interfaceScale, cur);
         systemBank.setOsScale(plan.os);   // the Auto row says what the system reports, never the pinned number
+        systemBank.setAutoFitScale(plan.lowered ? plan.want : 0.0f);   // ... or, where Auto was lowered to fit the screen, what it was lowered to (user bug C3)
         if (plan.change) {
             const auto sz = ui->window().size();
             ui->window().dispatch_scale_factor_change_event(plan.want);
@@ -3180,7 +3201,7 @@ int main(int argc, char** argv) {
         {   // the screen follows the real window size (maximise, restore, a DPI change)
             const auto sz = ui->window().size();
             const float sf = std::max(0.5f, ui->window().scale_factor());
-            const foxsdr::slintlook::SizeMirror::Step mirror = sizeMirror.tick(sz.width, sz.height, ui->window().scale_factor(), scaleFollower.os());
+            const foxsdr::slintlook::SizeMirror::Step mirror = sizeMirror.tick(sz.width, sz.height, ui->window().scale_factor(), osScaleForMirror());
             if (mirror.write) { ui->set_win_w(mirror.winW); ui->set_win_h(mirror.winH); }
             if (mirror.repair) { ui->window().set_size(slint::PhysicalSize({mirror.repairW, mirror.repairH})); }
             (void)sf;
@@ -4019,12 +4040,26 @@ int main(int argc, char** argv) {
             if (what == "x") { out = std::to_string(ui->window().position().x); return std::string(); }   // user bug C: where the window is, and what the start-time fit did
             if (what == "y") { out = std::to_string(ui->window().position().y); return std::string(); }
             if (what == "startmax") { out = startMaximised ? "1" : "0"; return std::string(); }
+            if (what == "outside" || what == "controls") {   // user bug C3: how many controls with an accessible label are laid out partly or wholly outside the window's own box (and how many there are)
+                int all = 0, outside = 0;
+                const float ww = ui->get_win_w(), wh = ui->get_win_h();
+                slint::testing::ElementHandle::visit_elements(ui, [&](const slint::testing::ElementHandle& e) {
+                    const auto label = e.accessible_label();
+                    if (!label.has_value() || label->empty()) { return; }
+                    ++all;
+                    const auto pos = e.absolute_position();
+                    const auto size = e.size();
+                    if (pos.x < -0.5f || pos.y < -0.5f || pos.x + size.width > ww + 0.5f || pos.y + size.height > wh + 0.5f) { ++outside; }
+                });
+                out = std::to_string(what == "outside" ? outside : all);
+                return std::string();
+            }
             if (what == "minw") { out = fmt("%.0f", static_cast<double>(winMinW)); return std::string(); }
             if (what == "minh") { out = fmt("%.0f", static_cast<double>(winMinH)); return std::string(); }
             if (what == "bg") { out = hex(ui->global<Theme>().get_bg()); return std::string(); }
             if (what == "accent") { out = hex(ui->global<Theme>().get_accent()); return std::string(); }
             if (what == "face") { out = face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain"; return std::string(); }
-            return "look.scale|width|height|physw|physh|maximised|minimised|x|y|startmax|minw|minh|gainhint|gainenabled|bg|accent|face, not " + name;
+            return "look.scale|width|height|physw|physh|maximised|minimised|x|y|startmax|outside|controls|minw|minh|gainhint|gainenabled|bg|accent|face, not " + name;
         }
         if (name == "tunedHz") { out = fmt("%.6f", state.tunedHz); return std::string(); }
         if (name == "centreHz") { out = fmt("%.6f", state.centreHz); return std::string(); }
@@ -4419,6 +4454,8 @@ int main(int argc, char** argv) {
         if (!startFitDone) {
             if (wantedSize.has_value()) { startFitDone = true; startFitOver = true; return; }
             if (!force && foxsdr::slintgaps::findMainWindow() == nullptr) { return; }
+            // USER BUG C3: Auto lowered to fit the screen - the look dispatches that scale on this very tick (applyLook, after this); the fit waits for it and is then made at the scale the window will keep
+            { const foxsdr::slintlook::ScalePlan p = planNow(duties.interfaceHalf().interfaceScale, ui->window().scale_factor()); if (p.lowered && p.change && !force) { return; } }
             startFitDone = true;
             foxsdr::slintlook::WorkRect work;
             if (!workRectNow(work)) { std::fprintf(stderr, "foxsdr-slint: window fit: the monitor's work area is not known - the window stays as the system placed it\n"); startFitOver = true; return; }

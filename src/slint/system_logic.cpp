@@ -106,7 +106,8 @@ std::string scaleChoiceOf(int index) {
     if (index >= 1 && index <= kScaleStepCount) { return std::to_string(cascade::gui::uiscale::kSteps[index - 1]); }
     return {};
 }
-std::string scaleLabel(int index, int monitorPercent) {
+std::string scaleLabel(int index, int monitorPercent, int fitPercent) {
+    if (index == 0 && fitPercent > 0) { return cc::formatText(tr("Auto (%d%% to fit this screen)"), fitPercent); }
     if (index == 0) { return cc::formatText(tr("Auto (follows Windows, %d%% here)"), monitorPercent); }
     return scaleChoiceOf(index) + "%";
 }
@@ -229,7 +230,7 @@ DisplayModel readDisplay(TableReader& t, const cc::AppConfig& iface, const FoxRe
     DisplayModel m;
     for (int i = 0; i <= kScaleStepCount; ++i) {
         SelectItem s;
-        s.label = scaleLabel(i, o.monitor_percent);
+        s.label = scaleLabel(i, o.monitor_percent, o.fit_percent);
         s.id = scaleChoiceOf(i);
         m.scales.push_back(std::move(s));
     }

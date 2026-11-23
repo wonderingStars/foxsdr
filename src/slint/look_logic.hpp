@@ -161,16 +161,31 @@ private:
     float lastW_ = 0.0f, lastH_ = 0.0f;
 };
 
+// THE AUTO SCALE THAT FITS THE SCREEN (user bug C3, 2026-11-23). The layout needs `minW` x `minH` logical pixels (host_logic.hpp kMinWindowW / kMinWindowH, 1024 x 640). On a 1280 x 720 screen at
+// Windows 150 % the work area is 853 x 453 logical: 42 of 173 controls (the window's own Minimise / Maximise / Close keys among them) are outside the window and nothing scrolls. So when the Interface
+// size is "Auto" (`choice` is not one of the steps: the user has chosen no size) and the work area (`workW` x `workH`, physical pixels, task bar out; 0 = not known) at the scale Auto would use (`osScale`)
+// is smaller than the layout's, the scale is the LARGEST step of the Interface size setting (100 .. 250 %, gui/ui_scale.hpp) below the system's at which the work area holds the layout - never below
+// 100 %. Where even 100 % does not hold it (a 1024 x 600 screen) nothing is lowered: the start-time fit maximises the window and lowers the minimum (fitStartWindow). A chosen size is never overridden.
+struct AutoFit {
+    float scale = 1.0f;       // the scale to draw at
+    bool lowered = false;     // true when it is lower than the system's, to fit the screen
+    bool holds = true;        // true when the work area holds the layout at `scale` (false: the screen is too small even at 100 %, or its size is not known and nothing was checked)
+};
+AutoFit autoScaleToFit(int workW, int workH, float osScale, const std::string& choice, float minW, float minH);
+
 struct ScalePlan {
     float want = 1.0f;     // the scale the window should have
     bool change = false;   // true when it does not have it yet
     float os = 1.0f;       // the operating system's scale as far as this follower knows
+    bool lowered = false;  // `want` is lower than the system's because Auto would not fit the screen (autoScaleToFit)
 };
 
 class ScaleFollower {
 public:
-    // `choice`: the saved interface size; `current`: Window::scale_factor() now.
-    ScalePlan plan(const std::string& choice, float current);
+    // `choice`: the saved interface size; `current`: Window::scale_factor() now. `workW` x `workH`: the work area of the window's monitor in physical pixels (0 = not known: no lowering), `minW` x `minH`
+    // the layout's smallest logical size; `osHint`: the monitor's own Windows scale where it can be asked (0 = cannot: the follower infers it from what the window reports, as it always did). With the
+    // hint a scale this code dispatched (a lowered one) cannot hide a move to another monitor whose Windows scale happens to equal it.
+    ScalePlan plan(const std::string& choice, float current, int workW = 0, int workH = 0, float minW = 0.0f, float minH = 0.0f, float osHint = 0.0f);
     // The number the caller just dispatched to the window.
     void applied(float scale) { applied_ = scale; }
     float os() const { return os_; }

@@ -533,9 +533,70 @@ void edgeDrag() {
     CHECK(f.w == 1024 && f.h == 640);
 }
 
+// USER BUG C3 (2026-11-23): Interface size "Auto" on a screen whose work area, at Windows' scale, is smaller than the layout (1024 x 640 logical) is lowered to the largest step that holds the layout.
+// The work areas are the screen less a 40 px task bar, in physical pixels.
+void autoFit() {
+    const auto fit = [](int w, int h, float os, const char* choice = "auto") { return autoScaleToFit(w, h, os, choice, 1024.0f, 640.0f); };
+    AutoFit a;
+    a = fit(1280, 680, 1.5f);   // 1280 x 720 at 150 %: 853 x 453 logical -> 100 % (1280 x 680 holds 1024 x 640)
+    CHECK(a.lowered && near(a.scale, 1.0f) && a.holds);
+    a = fit(1366, 728, 1.25f);  // 1366 x 768 at 125 %: 1093 x 582 logical -> 100 %
+    CHECK(a.lowered && near(a.scale, 1.0f) && a.holds);
+    a = fit(1920, 1040, 1.5f);  // 1920 x 1080 at 150 %: 1280 x 693 logical holds the layout: not lowered
+    CHECK(!a.lowered && near(a.scale, 1.5f) && a.holds);
+    a = fit(1920, 1040, 1.75f); // 1920 x 1080 at 175 %: 1097 x 594 logical -> 150 % (1280 x 693 holds it)
+    CHECK(a.lowered && near(a.scale, 1.5f) && a.holds);
+    a = fit(1024, 560, 1.0f);   // 1024 x 600 at 100 %: cannot hold it at any scale: not lowered (the start fit maximises and lowers the minimum)
+    CHECK(!a.lowered && near(a.scale, 1.0f) && !a.holds);
+    a = fit(3840, 2120, 2.5f);  // 3840 x 2160 at 250 %: 1536 x 848 logical holds it
+    CHECK(!a.lowered && near(a.scale, 2.5f) && a.holds);
+    // a chosen size is never overridden, on a small screen either, and is not checked
+    for (const char* chosen : {"100", "125", "150", "175", "200", "250"}) {
+        a = fit(1280, 680, 1.5f, chosen);
+        CHECK(!a.lowered && near(a.scale, std::stof(chosen) / 100.0f));
+    }
+    // a hand-edited choice degrades to Auto, and is lowered as Auto is
+    a = fit(1280, 680, 1.5f, "bogus");
+    CHECK(a.lowered && near(a.scale, 1.0f));
+    // a screen whose size is not known: nothing is checked
+    a = fit(0, 0, 1.5f);
+    CHECK(!a.lowered && near(a.scale, 1.5f));
+    // the layout is held to whole physical pixels: 1536 x 960 at 150 % fits a 1536 x 960 area exactly and one pixel less in either direction does not
+    CHECK(!fit(1536, 960, 1.5f).lowered && fit(1535, 960, 1.5f).lowered && fit(1536, 959, 1.5f).lowered);
+    // the largest step: 250 % on a 2560 x 1392 work area (1024 x 557 logical at 250 %) steps down until the height holds: 200 % gives 696 high, which holds
+    a = fit(2560, 1392, 2.5f);
+    CHECK(a.lowered && near(a.scale, 2.0f));
+    // a system scale under 100 % has nothing to lower to
+    a = fit(800, 500, 0.8f);
+    CHECK(!a.lowered && near(a.scale, 0.8f));
+
+    // the follower: Auto lowered on the first look, and the number it dispatched hides nothing - the monitor's own scale (the hint) is the system's
+    ScaleFollower f;
+    ScalePlan p = f.plan("auto", 1.5f, 1280, 680, 1024.0f, 640.0f, 0.0f);   // the first look: the window reports 150 % on a 1280 x 680 work area
+    CHECK(p.lowered && near(p.want, 1.0f) && p.change && near(p.os, 1.5f));
+    f.applied(p.want);
+    p = f.plan("auto", 1.0f, 1280, 680, 1024.0f, 640.0f, 0.0f);   // after the dispatch: nothing more to do, and the system is still 150 %
+    CHECK(p.lowered && near(p.want, 1.0f) && !p.change && near(p.os, 1.5f));
+    // moved to a bigger 100 % monitor (the window then reports 1.0 again, the very number it dispatched: only the hint tells): Auto is the system's again
+    p = f.plan("auto", 1.0f, 2560, 1400, 1024.0f, 640.0f, 1.0f);
+    CHECK(!p.lowered && near(p.want, 1.0f) && !p.change && near(p.os, 1.0f));
+    // moved to a bigger 150 % monitor: 150 %, not lowered
+    p = f.plan("auto", 1.0f, 3840, 2120, 1024.0f, 640.0f, 1.5f);
+    CHECK(!p.lowered && near(p.want, 1.5f) && p.change && near(p.os, 1.5f));
+    // a chosen size on the small screen: not overridden, and the screen is not consulted
+    ScaleFollower g;
+    p = g.plan("150", 1.5f, 0, 0, 1024.0f, 640.0f, 1.5f);
+    CHECK(!p.lowered && near(p.want, 1.5f) && !p.change);
+    // no work area given (the older call): as before
+    ScaleFollower h;
+    p = h.plan("auto", 1.5f);
+    CHECK(!p.lowered && near(p.want, 1.5f) && !p.change);
+}
+
 }  // namespace
 
 int main() {
+    autoFit();
     edgeDrag();
     windowSizeAtEverySize(1920, 1040);   // a 1920 x 1080 screen less its task bar
     windowSizeAtEverySize(5120, 1440);   // drive fixes 6: the owner's screen, and the same less a 48 px task bar

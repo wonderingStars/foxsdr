@@ -1,0 +1,7 @@
+#! frames=200 bank=4 sections=4:0 config=window-fit-auto-small.json FOXSDR_SLINT_WORK_AREA=1280x680 FOXSDR_SLINT_OS_SCALE=1.5
+# window-fit-auto-lowered-label (user bug C3): the Interface size control SHOWS that Auto is in force and what it resolved to: "Auto (100% to fit this screen)" instead of "Auto (follows Windows, 150% here)".
+10 state running == 1
+state volume == 0
++60 state look.scale == 1.00
+expect "Interface size" value equals "Auto (100% to fit this screen)"
+state cfg.interfaceScale == auto

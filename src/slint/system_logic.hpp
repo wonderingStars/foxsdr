@@ -411,6 +411,7 @@ struct UpdatesFacts {                       // HostDuties::updateStatus() (+ the
 };
 struct ReadOptions {
     int monitor_percent = 100;             // uiscale::dpiToPercent(monitor dpi): "Auto (follows Windows, N% here)"
+    int fit_percent = 0;                   // > 0: Auto was lowered to this percent to fit the screen (user bug C3): "Auto (N% to fit this screen)"
     std::string system_locale;             // cascade::i18n::systemLocale(), read once ("" = none: Automatic lands on English)
     std::string country_filter;
     std::string plan_changed_note;         // "Display has since been set to a different band plan." while the publisher's bandPlanNoteDue says so ("" none)
@@ -447,7 +448,7 @@ SystemModels readSystem(TableReader& table, const cascade::core::AppConfig& ifac
 // Interface size: index 0 is Auto, 1..6 the steps; the stored text is "auto" or the percent. A hand-edited value degrades to Auto (uiscale::normalizeChoice).
 int scaleIndexOf(const std::string& stored);
 std::string scaleChoiceOf(int index);                       // "" for an index outside the list
-std::string scaleLabel(int index, int monitorPercent);      // "Auto (follows Windows, 150% here)", "125%"
+std::string scaleLabel(int index, int monitorPercent, int fitPercent = 0);      // "Auto (follows Windows, 150% here)", "125%"; with `fitPercent` > 0 (Auto lowered to fit a small screen) Auto's row reads "Auto (100% to fit this screen)"
 // The six themes (gui/theme.cpp): key, label, and what picking one brings with it.
 struct ThemePreset { const char* key; const char* label; const char* face; float counterScale; bool switches; float readings; };
 const ThemePreset& themePreset(int index);

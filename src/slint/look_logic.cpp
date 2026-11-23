@@ -259,12 +259,40 @@ std::pair<std::uint32_t, std::uint32_t> ScaleFollower::sizeAfter(std::uint32_t w
     return ns;
 }
 
-ScalePlan ScaleFollower::plan(const std::string& choice, float current) {
-    // The first look, or a window that reports a number this follower did not dispatch: the operating system set it.
-    if (applied_ <= 0.0f || std::fabs(current - applied_) > kSame) { os_ = current; }
+AutoFit autoScaleToFit(int workW, int workH, float osScale, const std::string& choice, float minW, float minH) {
+    AutoFit r;
+    r.scale = scaleWanted(choice, osScale);
+    for (const int step : cascade::gui::uiscale::kSteps) {
+        if (choice == std::to_string(step)) { return r; }   // a size the user chose: never overridden
+    }
+    if (workW <= 0 || workH <= 0 || !(minW > 0.0f) || !(minH > 0.0f)) { return r; }   // nothing known to fit to
+    const auto holds = [&](int percent) {   // the work area, in logical pixels at `percent`, is at least the layout (in whole physical pixels, as fitStartWindow asks for them)
+        return static_cast<double>(workW) * 100.0 >= std::ceil(static_cast<double>(minW) * percent - 1e-3) && static_cast<double>(workH) * 100.0 >= std::ceil(static_cast<double>(minH) * percent - 1e-3);
+    };
+    const int osPercent = static_cast<int>(std::lround(static_cast<double>(r.scale) * 100.0));
+    r.holds = holds(osPercent);
+    if (r.holds) { return r; }
+    int best = 0;
+    for (const int step : cascade::gui::uiscale::kSteps) {
+        if (step < osPercent && holds(step)) { best = step; }   // kSteps ascends: the last that holds is the largest
+    }
+    if (best > 0) {
+        r.scale = static_cast<float>(best) / 100.0f;
+        r.lowered = true;
+        r.holds = true;
+    }
+    return r;
+}
+
+ScalePlan ScaleFollower::plan(const std::string& choice, float current, int workW, int workH, float minW, float minH, float osHint) {
+    // The first look, or a window that reports a number this follower did not dispatch: the operating system set it. Where the monitor's own scale can be asked, that is the number.
+    if (osHint > 0.0f) { os_ = osHint; }
+    else if (applied_ <= 0.0f || std::fabs(current - applied_) > kSame) { os_ = current; }
     ScalePlan p;
     p.os = os_;
-    p.want = scaleWanted(choice, os_);
+    const AutoFit fit = autoScaleToFit(workW, workH, os_, choice, minW, minH);
+    p.want = std::clamp(fit.scale, kMinScale, kMaxScale);
+    p.lowered = fit.lowered;
     p.change = std::fabs(p.want - current) > kSame;
     return p;
 }

@@ -134,6 +134,13 @@ bool windowWorkRect(int& left, int& top, int& right, int& bottom) {
     return right > left && bottom > top;
 }
 
+float windowDpiScale() {
+    HWND h = static_cast<HWND>(findMainWindow());
+    if (h == nullptr) { return 0.0f; }
+    const UINT dpi = ::GetDpiForWindow(h);   // the Windows scale of the monitor the window is on now (the window is per-monitor DPI aware), whatever scale this program dispatched to its own layout
+    return dpi >= 48u && dpi <= 960u ? static_cast<float>(dpi) / 96.0f : 0.0f;
+}
+
 bool windowWorkArea(int& width, int& height) {
     int l = 0, t = 0, r = 0, b = 0;
     if (!windowWorkRect(l, t, r, b)) { return false; }
@@ -194,6 +201,7 @@ std::string clipboardText() {
 // Off Windows the same duties go to the desktop's own programs (desk_logic.cpp: xdg-open and the clipboard tools, started without a shell). The file drop is the window's own DropArea (main.slint), not a hook here.
 bool openUrl(const std::string& url) { return foxsdr::slintdesk::openAddress(url); }
 void* findMainWindow() { return nullptr; }
+float windowDpiScale() { return 0.0f; }
 bool windowWorkArea(int&, int&) { return false; }
 bool systemPointer(int&, int&, bool&) { return false; }
 bool windowWorkRect(int&, int&, int&, int&) { return false; }
