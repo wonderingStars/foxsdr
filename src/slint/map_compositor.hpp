@@ -83,6 +83,8 @@ struct Cell {
     }
 };
 
+struct TileReport { int drawn = 0, missing = 0, pending = 0; };
+
 class TileCompositor {
 public:
     TileCompositor();
@@ -131,6 +133,9 @@ public:
     double metresPerPixel() const;
     // The tile zoom the current view composes at (-1 without a tile source).
     int tileZoom() const;
+    // What the last compose that drew with a tile source found among the tiles the view shows (user bug B): how many were painted, how many the source has answered MISSING
+    // for (believed, not asked again for a while), how many are still PENDING. All zero without a tile source. The coastline is the picture while `drawn` is 0.
+    TileReport tileReport() const;
     std::size_t residentTiles() const;
     double centreLatDeg() const;
     double centreLonDeg() const;

@@ -3,6 +3,7 @@
 #include "kit_logic.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -694,6 +695,47 @@ bool fitView(const std::vector<cascade::core::HostTrack>& tracks, double& centre
 std::string imageTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s image"), plugin.c_str()); }
 bool mapDrawsTiles(bool basemapActive, bool satellitePage) { return basemapActive && !satellitePage; }
 bool mapImageryUnused(bool basemapActive, bool satellitePage) { return basemapActive && satellitePage; }
+BasemapFailure classifyBasemapLine(const std::string& line) {
+    std::string low = line;
+    for (char& ch : low) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+    BasemapFailure f;
+    for (std::size_t at = low.find("http "); at != std::string::npos; at = low.find("http ", at + 1)) {   // "HTTP 403": the server answered, with an error
+        std::size_t i = at + 5;
+        int code = 0, digits = 0;
+        while (i < low.size() && low[i] >= '0' && low[i] <= '9' && digits < 4) { code = code * 10 + (low[i] - '0'); ++i; ++digits; }
+        if (digits == 3 && code >= 400 && code < 600) { f.kind = BasemapFault::Refused; f.httpCode = code; return f; }
+    }
+    if (low.find("timed out") != std::string::npos || low.find("timeout") != std::string::npos) { f.kind = BasemapFault::TimedOut; return f; }
+    static const char* const kUnreachable[] = {"request failed", "failed fetching", "unreachable", "refused", "no connection", "resolve", "could not connect"};
+    for (const char* w : kUnreachable) {
+        if (low.find(w) != std::string::npos) { f.kind = BasemapFault::Unreachable; return f; }
+    }
+    return f;
+}
+
+std::string basemapFailureLogWords(const BasemapFailure& f) {
+    switch (f.kind) {
+        case BasemapFault::Unreachable: return "no connection";
+        case BasemapFault::TimedOut: return "timed out";
+        case BasemapFault::Refused: return "HTTP " + std::to_string(f.httpCode);
+        default: return "no reason given";
+    }
+}
+
+std::string mapTilesNote(bool tilesOn, int drawn, int missing, int pending, const BasemapFailure& why) {
+    // A failed tile is MISSING for the compositor, but the real plugin keeps a failed tile PENDING (it tries it again): so "pending and the plugin has reported a failure" counts as failing too.
+    if (!tilesOn || drawn > 0) { return std::string(); }
+    if (missing <= 0 && !(pending > 0 && why.kind != BasemapFault::None)) { return std::string(); }
+    std::string reason;
+    switch (why.kind) {
+        case BasemapFault::Unreachable: reason = cascade::i18n::tr("the map server could not be reached"); break;
+        case BasemapFault::TimedOut: reason = cascade::i18n::tr("the map server did not answer in time"); break;
+        case BasemapFault::Refused: reason = cascade::core::formatText(cascade::i18n::tr("the map server answered with an error (HTTP %d)"), why.httpCode); break;
+        default: reason = cascade::i18n::tr("the map source gave no picture"); break;
+    }
+    return cascade::core::formatText(cascade::i18n::tr("Map pictures could not be loaded: %s. The built-in coastline is shown instead."), reason.c_str());
+}
+
 std::string mapTitle(const std::string& plugin) { return cascade::core::formatText(cascade::i18n::tr("%s map"), plugin.c_str()); }
 
 std::string countText(std::size_t shown, std::size_t total, std::size_t unplaced) {

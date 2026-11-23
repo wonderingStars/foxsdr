@@ -112,6 +112,40 @@ int main() {
         CHECK(mapImageryUnused(true, true));               // the plugin runs and this page does not use it: the page says so
         CHECK(!mapImageryUnused(true, false) && !mapImageryUnused(false, true) && !mapImageryUnused(false, false));
     }
+    // ---- USER BUG B: the map when the basemap's pictures cannot be fetched. The plugin's text lines are sorted into a CATEGORY (never the address); the note over the map says it in one sentence
+    // while the view shows tiles of the basemap, none was painted and some are missing; it is gone when a tile is painted or when nothing is missing; the log line is the category only, once a minute ----
+    {
+        CHECK(classifyBasemapLine("request failed fetching http://127.0.0.1:9/3/2/2.png").kind == BasemapFault::Unreachable);
+        CHECK(classifyBasemapLine("request failed fetching https://tile.example.org/3/2/2.png").kind == BasemapFault::Unreachable);
+        CHECK(classifyBasemapLine("HTTP 403").kind == BasemapFault::Refused && classifyBasemapLine("HTTP 403").httpCode == 403);
+        CHECK(classifyBasemapLine("tile 3/2/2: HTTP 429 fetching https://tile.example.org/3/2/2.png").httpCode == 429);
+        CHECK(classifyBasemapLine("the request timed out").kind == BasemapFault::TimedOut);
+        CHECK(classifyBasemapLine("serving tiles from https://tile.openstreetmap.org/0/0/0.png").kind == BasemapFault::None);   // not a failure
+        CHECK(classifyBasemapLine("HTTP 200").kind == BasemapFault::None);
+        CHECK(classifyBasemapLine("").kind == BasemapFault::None);
+        BasemapFailure refused;
+        refused.kind = BasemapFault::Refused;
+        refused.httpCode = 403;
+        BasemapFailure unreachable;
+        unreachable.kind = BasemapFault::Unreachable;
+        // every tile missing and none painted: the note, with the plugin's category in plain words
+        CHECK(mapTilesNote(true, 0, 6, 0, unreachable) == "Map pictures could not be loaded: the map server could not be reached. The built-in coastline is shown instead.");
+        CHECK(mapTilesNote(true, 0, 6, 0, refused) == "Map pictures could not be loaded: the map server answered with an error (HTTP 403). The built-in coastline is shown instead.");
+        CHECK(mapTilesNote(true, 0, 6, 0, BasemapFailure{}) == "Map pictures could not be loaded: the map source gave no picture. The built-in coastline is shown instead.");
+        // the real plugin keeps a failed tile PENDING (it tries again): pending tiles after a reported failure are failing tiles too
+        CHECK(mapTilesNote(true, 0, 0, 12, unreachable) == "Map pictures could not be loaded: the map server could not be reached. The built-in coastline is shown instead.");
+        CHECK(mapTilesNote(true, 0, 0, 12, BasemapFailure{}).empty());   // pending and nothing reported: just slow, no note
+        // nothing in it is an address
+        CHECK(mapTilesNote(true, 0, 6, 0, unreachable).find("http") == std::string::npos && mapTilesNote(true, 0, 6, 0, unreachable).find("127.0.0.1") == std::string::npos);
+        // a tile arrived (the note goes), nothing asked, no basemap on this page: no note
+        CHECK(mapTilesNote(true, 3, 6, 0, unreachable).empty());
+        CHECK(mapTilesNote(true, 3, 0, 9, unreachable).empty());
+        CHECK(mapTilesNote(true, 0, 0, 0, unreachable).empty());
+        CHECK(mapTilesNote(false, 0, 6, 0, unreachable).empty());
+        CHECK(basemapFailureLogWords(refused) == "HTTP 403" && basemapFailureLogWords(unreachable) == "no connection" && basemapFailureLogWords(BasemapFailure{}) == "no reason given");
+        LogGate gate(60000);
+        CHECK(gate.allow(1000) && !gate.allow(1001) && !gate.allow(60999) && gate.allow(61000) && !gate.allow(61500));   // once a minute at most
+    }
     // ---- the NEW lamp holds four seconds from the first sight of an event (the old window's kInstrumentNewHoldSec), the teleprinter prints the last named column (window gaps 3) ----
     {
         NewHold h;

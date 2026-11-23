@@ -1563,6 +1563,85 @@ void sectionFigures() {
     }
 }
 
+// J. USER BUG B (2026-11-23): tiles that never come. A basemap plugin was attached, the coastline switched off, and a tile that could not be fetched painted nothing: a blank map. Now the coastline is the picture
+// while no tile of the view is painted (the host leaves the layer on: kit_publish.cpp setLayers(true, true)), and the compositor says what it found - painted, missing, pending - for the note over the map.
+void sectionTileFailure() {
+    std::printf("J. tiles that never come\n");
+    const Rgb red{255, 0, 0};
+    // ---- every tile MISSING: the coastline is drawn (London is land), nothing is painted red, the report says missing and no painted ----
+    {
+        Source src;
+        src.answer = [](std::uint32_t, std::uint32_t, std::uint32_t, Bytes&) { return -1; };
+        TileCompositor c;
+        Pic p(512, 384);
+        c.setMercator(true);
+        c.setView(51.5, -0.1, 20.0);
+        c.setLayers(true, false);
+        c.setTileSource(src.make(), 256, 0, 8);
+        CHECK(p.compose(c));
+        CHECK(near(p.at(256, 192), kLand));                                  // London: land, from the built-in coastline
+        CHECK(p.count(kCoast, 0, 0, 512, 384, 6) > 400);                     // the coast is stroked
+        const TileReport r = c.tileReport();
+        CHECK(r.drawn == 0 && r.missing > 0 && r.pending == 0);
+    }
+    // ---- every tile PENDING (asked, not yet fetched): the coastline too, and nothing is "missing" yet ----
+    {
+        Source src;
+        src.answer = [](std::uint32_t, std::uint32_t, std::uint32_t, Bytes&) { return 0; };
+        TileCompositor c;
+        Pic p(512, 384);
+        c.setMercator(true);
+        c.setView(51.5, -0.1, 20.0);
+        c.setLayers(true, false);
+        c.setTileSource(src.make(), 256, 0, 8);
+        CHECK(p.compose(c));
+        CHECK(near(p.at(256, 192), kLand));
+        const TileReport r = c.tileReport();
+        CHECK(r.drawn == 0 && r.missing == 0 && r.pending > 0);
+    }
+    // ---- tiles ARRIVE: the coastline goes (red everywhere, no coast stroke), the report says painted ----
+    {
+        Source src;
+        src.answer = [](std::uint32_t, std::uint32_t, std::uint32_t, Bytes& rgb) { fillTile(rgb, 256, 255, 0, 0); return 1; };
+        TileCompositor c;
+        Pic p(512, 384);
+        c.setMercator(true);
+        c.setView(51.5, -0.1, 20.0);
+        c.setLayers(true, false);
+        c.setTileSource(src.make(), 256, 0, 8);
+        CHECK(p.compose(c));
+        CHECK(near(p.at(256, 192), red));
+        CHECK(p.count(kCoast, 0, 0, 512, 384, 6) == 0);
+        const TileReport r = c.tileReport();
+        CHECK(r.drawn > 0 && r.missing == 0);
+    }
+    // ---- a view that had tiles and moves to where every tile is missing: the coastline comes back ----
+    {
+        Source src;
+        bool failing = false;
+        src.answer = [&failing](std::uint32_t, std::uint32_t, std::uint32_t, Bytes& rgb) {
+            if (failing) { return -1; }
+            fillTile(rgb, 256, 255, 0, 0);
+            return 1;
+        };
+        TileCompositor c;
+        Pic p(512, 384);
+        c.setMercator(true);
+        c.setView(51.5, -0.1, 20.0);
+        c.setLayers(true, false);
+        c.setTileSource(src.make(), 256, 0, 8);
+        CHECK(p.compose(c));
+        CHECK(near(p.at(256, 192), red));
+        failing = true;
+        c.setView(40.0, 30.0, 20.0);    // somewhere no tile has been fetched
+        CHECK(p.compose(c));
+        const TileReport r = c.tileReport();
+        CHECK(r.drawn == 0 && r.missing > 0);
+        int x = 0, y = 0;
+        CHECK(pixelOf(c, p, 39.0, 33.0, x, y) && near(p.at(x, y), kLand));   // central Turkey: land, drawn from the coastline again
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1577,5 +1656,6 @@ int main() {
     sectionTrails();
     sectionTrailLook();
     sectionFigures();
+    sectionTileFailure();
     return testSummary("test_slint_host_map");
 }

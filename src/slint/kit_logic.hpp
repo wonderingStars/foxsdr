@@ -228,6 +228,33 @@ bool mapDrawsTiles(bool basemapActive, bool satellitePage);
 // A map imagery plugin is running but this page does not use it (a satellites page): the page says so instead of leaving the user to wonder.
 bool mapImageryUnused(bool basemapActive, bool satellitePage);
 
+// ---- the map when its pictures cannot be fetched (user bug B) ----
+// The basemap plugin says why a fetch failed in its text stream ("request failed fetching <url>", "HTTP 403", ...). What the host keeps and shows is the CATEGORY only: never the address, the
+// host name or a path (a line on the map, or in the diagnostics log that is uploaded, must carry none of them).
+enum class BasemapFault { None, Unreachable, TimedOut, Refused, Other };
+struct BasemapFailure {
+    BasemapFault kind = BasemapFault::None;
+    int httpCode = 0;   // Refused: the server's answer
+    bool operator==(const BasemapFailure& o) const { return kind == o.kind && httpCode == o.httpCode; }
+};
+// What a text line of the basemap plugin says about a failed fetch; kind None for any other line (a "serving tiles from ..." line, say).
+BasemapFailure classifyBasemapLine(const std::string& line);
+// The category in plain words for the diagnostics log: "no connection", "timed out", "HTTP 403", "no reason given".
+std::string basemapFailureLogWords(const BasemapFailure& f);
+// The note over the map: "" unless the view shows tiles of the basemap, none was painted, and the tiles are failing (some answered MISSING, or still PENDING after the plugin reported a failed fetch);
+// else "Map pictures could not be loaded: <reason>. The built-in coastline is shown instead."
+std::string mapTilesNote(bool tilesOn, int drawn, int missing, int pending, const BasemapFailure& why);
+// At most one log line per `minGapMs`: allow(now) is true the first time and then again once the gap has passed.
+class LogGate {
+public:
+    explicit LogGate(std::int64_t minGapMs) : gap_(minGapMs) {}
+    bool allow(std::int64_t nowMs) { if (seen_ && nowMs - last_ < gap_) { return false; } seen_ = true; last_ = nowMs; return true; }
+private:
+    std::int64_t gap_;
+    std::int64_t last_ = 0;
+    bool seen_ = false;
+};
+
 // ---- the page titles and the rows' tooltips ----
 std::string imageTitle(const std::string& plugin);          // "<plugin> image"
 std::string mapTitle(const std::string& plugin);            // "<plugin> map"

@@ -240,6 +240,7 @@ export struct MapModel {
     follow-ask: bool,      // a drag was tried while following: "Stop following?" is asked (the classic's modal, here a card under the bar)
     follow-ask-text: string,
     list-footnote: string, // "Distance and bearing need the RX position above." while no position is set
+    tiles-note: string,    // user bug B: "Map pictures could not be loaded: ... The built-in coastline is shown instead." while the basemap's tiles are missing
     j: MapJModel,          // screen lane J (mapj.slint)
 }
 
@@ -696,7 +697,7 @@ export component PageBody inherits Rectangle {
                     TipTimer { x: 0px; y: 0px; hovered: div-area.has-hover; text: @tr("Drag to resize the list. Double-click puts it back."); anchor-h: parent.height; }
                 }
                 map-pane := MapPane { horizontal-stretch: 1; base: root.page.map.base; targets: root.page.map.targets; legend: root.page.map.legend; chart-lines: root.page.map.chart-lines; key-lines: root.page.map.key-lines; grid-labels: root.page.map.j.grid-labels; scale-text: root.page.map.scale-text;
-                    scale-frac: root.page.map.scale-frac; attribution: root.page.map.attribution; zoom-in-enabled: root.page.map.zoom-in; zoom-out-enabled: root.page.map.zoom-out;
+                    scale-frac: root.page.map.scale-frac; attribution: root.page.map.attribution; tiles-note: root.page.map.tiles-note; zoom-in-enabled: root.page.map.zoom-in; zoom-out-enabled: root.page.map.zoom-out;
                     pick-armed: root.page.map.pick-armed; hover-text: root.page.map.hover-text;
                     target-clicked(i) => { root.map-target-clicked(root.index, i); } target-double-clicked(i) => { root.map-target-double-clicked(root.index, i); }
                     hovered(i) => { root.map-hovered(root.index, i); } panned(dx, dy) => { root.map-panned(root.index, dx, dy); } zoomed(n, fx, fy) => { root.map-zoomed(root.index, n, fx, fy); }

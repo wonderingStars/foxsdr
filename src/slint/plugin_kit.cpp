@@ -3,6 +3,7 @@
 #include "plugin_kit.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -57,6 +58,7 @@ void BasemapClient::detach() {
     slot_ = nullptr;
     attribution_.clear();
     partial_.clear();
+    lastFailure_ = BasemapFailure{};
 }
 
 std::int32_t BasemapClient::rawTile(std::uint32_t z, std::uint32_t x, std::uint32_t y, std::vector<std::uint8_t>& rgb) {
@@ -78,7 +80,15 @@ std::int32_t BasemapClient::rawTile(std::uint32_t z, std::uint32_t x, std::uint3
         if (!copied) { rgb.clear(); }
     }
     cascade::core::calls::releaseTile(slot_, api_, handle_, &t);
+    if (copied) { lastFailure_ = BasemapFailure{}; }   // a picture arrived: whatever failed before is no longer the story
     return copied ? CASCADE_TILE_READY : CASCADE_TILE_MISSING;
+}
+
+void BasemapClient::noteLine(const std::string& line, std::int64_t nowMs) {
+    const BasemapFailure f = classifyBasemapLine(line);
+    if (f.kind == BasemapFault::None) { return; }
+    lastFailure_ = f;
+    if (failureLog_.allow(nowMs)) { cascade::core::diagLogf("map: tile fetches are failing (%s)", basemapFailureLogWords(f).c_str()); }
 }
 
 std::vector<std::string> BasemapClient::drainText() {
@@ -96,6 +106,8 @@ std::vector<std::string> BasemapClient::drainText() {
         }
         if (partial_.size() > 4096) { out.push_back(partial_); partial_.clear(); }
     }
+    const std::int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    for (const std::string& line : out) { noteLine(line, nowMs); }
     return out;
 }
 

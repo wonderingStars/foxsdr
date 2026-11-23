@@ -186,6 +186,21 @@ void theNeededLibrariesTextIsForPeople() {
     CHECK(files == 3);
 }
 
+// USER BUG B (2026-11-23): while a basemap plugin was attached the host switched the built-in coastline OFF for good, so tiles that never came (no network, a refused request) left a blank map and nothing
+// said why. The compositor already draws the coastline only while no tile is painted, so the host must leave the layer on; the note is a property the map page binds, with its words.
+void theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing() {
+    const std::string kp = slurp(repoRoot() / "src" / "slint" / "kit_publish.cpp");
+    CHECK(has(kp, "s.comp.setLayers(true, true);"));
+    CHECK(!has(kp, "s.comp.setLayers(!tiles, true);"));
+    CHECK(has(kp, "mapTilesNote(tiles, tileRep.drawn, tileRep.missing, tileRep.pending, bm.lastFailure())"));
+    const std::string pk = slurp(repoRoot() / "src" / "slint" / "plugin_kit.cpp");
+    CHECK(has(pk, "failureLog_.allow(nowMs)") && has(pk, "map: tile fetches are failing (%s)"));
+    const std::string ms = slurp(repoRoot() / "src" / "slint" / "ui" / "map.slint");
+    CHECK(has(ms, "in property <string> tiles-note;") && has(ms, "if root.tiles-note != \"\" : HaloText"));
+    const std::string pg = slurp(repoRoot() / "src" / "slint" / "ui" / "pages.slint");
+    CHECK(has(pg, "tiles-note: root.page.map.tiles-note;"));
+}
+
 // WINDOW STRIP LANE (look review B1): the receiver strip and the spectrum toolbar FOLD to a second row instead of being cut off, so the smallest window the drag edges allow
 // is 1024 x 640. OLD expectation: kMinWindowW = 1480.0f, kMinWindowH = 560.0f (a window cannot be dragged smaller than a screen it does not fit). NEW: 1024.0f and 640.0f.
 void theSmallestWindowIsTheMeasuredOne() {
@@ -290,6 +305,7 @@ int main() {
     theCatReachableTickIsNotOffered();
     theNeededLibrariesTextIsForPeople();
     theSmallestWindowIsTheMeasuredOne();
+    theMapKeepsItsCoastlineAndSaysWhyTilesAreMissing();
     theEmptyCommunityRowIsNotDrawn();
     theDropDownGrabsFocusWithoutATimer();
     theWindowSaysNothingOfWhatIsNotThere();
