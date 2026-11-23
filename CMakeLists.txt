@@ -865,6 +865,19 @@ endif()
 add_executable(nb_real_noise EXCLUDE_FROM_ALL tools/nb_real_noise/main.cpp)
 target_link_libraries(nb_real_noise PRIVATE cascade_engine)
 
+# bench_demod_chain - where the demod phase's time goes, per sub-step and per mode (D:/foxsdr-build/prep/PERF-demod-2026-11-23.md section 6): the receive
+# chain on in-memory samples with scoped cycle-counter timers (src/dsp/dsp_substep.hpp) inside the VFO, the stereo decoder, the RDS decoder and the
+# demodulator. The timers exist only in this target: it compiles those dsp sources ITSELF with CASCADE_BENCH_SUBSTEPS defined (the linker takes these
+# objects before the same-named ones in cascade_engine), so the shipped objects are byte-for-byte what they were. A measuring tool, not a test: not
+# registered with ctest, not part of the default build (build it by name). x86 only (the cycle counter).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64|X86|x86")
+    add_executable(bench_demod_chain EXCLUDE_FROM_ALL tools/bench_demod_chain/main.cpp
+        src/dsp/fir.cpp src/dsp/nco.cpp src/dsp/vfo.cpp src/dsp/demod.cpp src/dsp/stereo_fm.cpp src/dsp/rds.cpp)
+    target_compile_definitions(bench_demod_chain PRIVATE CASCADE_BENCH_SUBSTEPS)
+    target_link_libraries(bench_demod_chain PRIVATE cascade_engine)
+    target_include_directories(bench_demod_chain PRIVATE "${CMAKE_SOURCE_DIR}/tests" "${CMAKE_SOURCE_DIR}/src")
+endif()
+
 # ---------------------------------------------------------------------------
 # foxsdr-engine - the receiver with no window (engine extraction stage 7b)
 # ---------------------------------------------------------------------------

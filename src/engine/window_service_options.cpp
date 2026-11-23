@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <string>
 
+#include "core/pipeline.hpp"
+
 namespace cascade::engine {
 
 namespace {
@@ -80,6 +82,17 @@ ServiceOptions windowServiceOptions(const WindowServiceRun& run) {
     // FOXSDR_HOLD_AUDIO_LOCK (0.99.68): the audio mutex held for this long inside the first control request's stop. The engine is the host's to start, and it answers
     // a browser before the window exists, so the seam is in force from the start and not submitted by the window once its frames are running.
     o.holdAudioLockMs = stallFromEnvironment("FOXSDR_HOLD_AUDIO_LOCK");
+    // FOXSDR_TEST_DSP_PHASE_LOAD="<phase>=<microseconds>" (2026-11-23, bounded runs only): the DSP thread burns that much processor in that phase of
+    // every block (core::Pipeline::setDspPhaseLoadForTest) - what a slow machine costs a stage - so a real run can show where the time goes.
+    // Phases: the words of the DSP minute's phase_ms (spectrum, demod, ...). Process-wide; never read in a real session.
+    if (const char* const load = std::getenv("FOXSDR_TEST_DSP_PHASE_LOAD"); load != nullptr && *load != '\0') {
+        const std::string spec(load);
+        const std::size_t eq = spec.find('=');
+        if (eq != std::string::npos && eq > 0) {
+            const int us = std::atoi(spec.c_str() + eq + 1);
+            if (us > 0) { cascade::core::Pipeline::setDspPhaseLoadForTest(spec.substr(0, eq).c_str(), us); }
+        }
+    }
     return o;
 }
 

@@ -1150,6 +1150,10 @@ if(TEST test_engine_api_plugin_smoke_radio)
     message(STATUS "test_engine_api_plugin_smoke_radio: ${_smoke_n} plugin module(s) in '${_smoke_dir}', timeout ${_smoke_timeout} s")
 endif()
 set_tests_properties(test_decode_db test_alert_rules test_dsp_benchmark PROPERTIES TIMEOUT 300)
+# test_dsp_equivalence (the demod performance pass's bit-identity checks) runs 28 ten-second chain runs and about 2.3 billion oscillator samples:
+# measured 68 s alone and 99 s inside `ctest -j4` on the owner's desk (2026-11-23), so the inherited 120 s bound left no room; the limit is at least
+# four times the slower figure, for a slower or loaded machine. A timeout is not what the test is about.
+set_tests_properties(test_dsp_equivalence PROPERTIES TIMEOUT 600)
 # The disk-work tests (stub campaign B19) are made of fixed waits - a 2.5 s "slow disk" a dozen times over - and run 50 - 95 s on the owner's desk, so the
 # inherited 120 s bound leaves a shared runner no room; a timeout is not what they are about.
 set_tests_properties(test_gui_file_jobs test_failure_files PROPERTIES TIMEOUT 300)

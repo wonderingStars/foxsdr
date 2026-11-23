@@ -338,7 +338,7 @@ public:
     //   dspCpuNs           the DSP thread's OWN processor time, sampled every 256 blocks and at the thread's end; dspCpuKnown() is false where the
     //                      platform cannot say. Busy near a minute with CPU far below it means the thread was descheduled or waited on a lock.
     //   dspBlocks          blocks done
-    //   takeDspGapLongest  the longest time between two successive ring reads, and the phase word (the heartbeat's: ring, spectrum, audio-lock,
+    //   takeDspGapLongest  the longest time between two successive ring reads, and the phase word (the heartbeat's: ring, iq-corr, spectrum, audio-lock,
     //                      taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink) the thread spent the most of that gap in. "ring" is the
     //                      idle sleep: on a Windows process that has not asked for a finer timer it is up to 15.6 ms and says nothing is wrong.
     //   takeSrcGapLongestNs  the source thread's longest time between two ring writes
@@ -352,6 +352,20 @@ public:
     std::uint64_t takeSrcGapLongestNs() { return srcGapLongestNs_.exchange(0, std::memory_order_relaxed); }
     std::uint64_t genResyncs() const { return genResyncs_.load(std::memory_order_relaxed); }
     std::uint64_t genSkippedNs() const { return genSkippedNs_.load(std::memory_order_relaxed); }
+    // WHERE THE TIME GOES (2026-11-23): the wall time the DSP thread has spent in each phase of its loop since the pipeline began, cumulative and
+    // never reset (measured by difference, like the counters above). The phases are the heartbeat's words, in this order: ring, iq-corr,
+    // spectrum, audio-lock, taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink. "ring" is the read of the ring and the idle sleep
+    // when it is empty, so it is NOT work; the other eleven are. Taken from the timestamps the heartbeat already reads: no extra clock read.
+    static constexpr unsigned kDspPhases = 12;
+    static const char* dspPhaseName(unsigned index);   // "" for an index past the last
+    void dspPhaseTotalsNs(std::uint64_t* out) const;   // kDspPhases values
+    // The samples in one block (the FFT size the thread was built with): a block is that many samples at the input rate, so its duration is the
+    // budget the thread has for it. 0 until the thread has started once.
+    std::size_t dspBlockSamples() const { return dspBlockSamples_.load(std::memory_order_relaxed); }
+    // TEST SEAM (never set by the application): burn `microseconds` of processor inside the named phase (one of dspPhaseName's words) of every
+    // block - what a slow core costs a stage - on the DSP thread only.
+    // 0 clears it; an unknown word is ignored. Process-wide.
+    static void setDspPhaseLoadForTest(const char* phase, int microseconds);
     // TEST SEAM (never set by the application): the DSP thread sleeps this long after every block, which makes a loss minute on demand. Process-wide.
     static void setDspBlockDelayForTest(int ms);
     // TEST SEAM (never set by the application): inside every block's own span the DSP thread BURNS processor for burnMs (a busy loop) and
@@ -402,6 +416,18 @@ public:
     bool faulted() const;
     std::string faultMessage() const;             // empty unless faulted()
     bool getLatestFrame(SpectrumFrame& out);      // true iff a frame newer than out.seq was copied into out
+    // The longest hold of the frame lock by getLatestFrame since the last reset, in ns (the DSP thread's legacy publish waits at most this long; a test seam).
+    std::uint64_t frameLockHoldMaxNs() const { return frameLockHoldMaxNs_.load(std::memory_order_relaxed); }
+    // ...and their mean (a rare preemption of the thread holding the lock moves the maximum, hardly the mean).
+    std::uint64_t frameLockHoldMeanNs() const {
+        const std::uint64_t n = frameLockHoldCount_.load(std::memory_order_relaxed);
+        return n == 0 ? 0 : frameLockHoldSumNs_.load(std::memory_order_relaxed) / n;
+    }
+    void resetFrameLockHoldMax() {
+        frameLockHoldMaxNs_.store(0, std::memory_order_relaxed);
+        frameLockHoldSumNs_.store(0, std::memory_order_relaxed);
+        frameLockHoldCount_.store(0, std::memory_order_relaxed);
+    }
 
     // --- Source selection ----------------------------------------------------
     // Replaces the IQ source feeding the ring; a null pointer restores the
@@ -1279,6 +1305,21 @@ private:
     // "nothing published yet".
     mutable std::mutex frameMutex_;
     SpectrumFrame latest_;
+    // true while latest_.dbBins holds the averaged LINEAR POWER of the legacy estimator and not yet dB (the demod performance pass): the logarithm is
+    // taken in getLatestFrame, on the thread that pulls the frame, so the DSP thread no longer takes a thousand of them every block. Under frameMutex_.
+    bool latestIsPower_ = false;
+    // with latestIsPower_: the power is the SPECTRUM BLOCK's (floor 1e-20 by std::max, then the legacy tone offset added in dB) and not the legacy estimator's.
+    // The block's frames are converted after the frame lock is released, like the legacy ones. Under frameMutex_.
+    bool latestIsBlockPower_ = false;
+    // The longest time getLatestFrame has held frameMutex_ (ns) since the last reset: what the DSP thread's legacy publish can be made to wait for
+    // (a measurement seam for the test; two clock reads per pull).
+    std::atomic<std::uint64_t> frameLockHoldMaxNs_{0};
+    std::atomic<std::uint64_t> frameLockHoldSumNs_{0};
+    std::atomic<std::uint64_t> frameLockHoldCount_{0};
+    // The last frame converted to dB, so that a second consumer of the same frame does not convert it again (its own mutex: never held with frameMutex_).
+    std::mutex dbCacheMutex_;
+    std::uint64_t dbCacheSeq_ = 0;
+    std::vector<float> dbCache_;
 
     // Worker-thread fault state. faulted() latches until the next start(),
     // which is what lets the GUI say "the device went away" instead of
@@ -1426,6 +1467,8 @@ private:
     int specWindow_ = 3;
     double specFps_ = 0.0;
     std::vector<float> specScratch_;   // getLatestFrame's read buffer
+    void convertPowerFrameToDb(SpectrumFrame& out, bool blockPower);   // see getLatestFrame
+    void noteFrameLockHold(std::chrono::steady_clock::time_point lockedAt, bool tookFrame);   // getLatestFrame's hold of frameMutex_, into frameLockHoldMaxNs_
     void rebuildSpectrumBlock();   // the choice -> the block (any control thread; takes frameMutex_ for the hand-over only)
     std::unique_ptr<cascade::dsp::NoiseSquelch> noiseSq_;
     bool noiseSqOn_ = false;
@@ -1716,6 +1759,8 @@ private:
     std::atomic<bool> dspCpuKnown_{false};
     std::atomic<std::uint64_t> dspBlocks_{0};
     std::atomic<std::uint64_t> dspGapLongestPacked_{0};
+    std::atomic<std::uint64_t> dspPhaseNs_[kDspPhases] = {};   // see dspPhaseTotalsNs; written only by the DSP thread
+    std::atomic<std::size_t> dspBlockSamples_{0};
     std::atomic<std::uint64_t> srcGapLongestNs_{0};
     std::atomic<std::int64_t> srcLastWriteNs_{0};   // the previous write's steady-clock ns; 0 = none yet in this generation
     std::atomic<std::uint64_t> genResyncs_{0};

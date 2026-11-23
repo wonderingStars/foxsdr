@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/rds.hpp"
 
+#include "dsp/dsp_substep.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -274,12 +276,21 @@ std::size_t RdsDecoder::process(const float* mpx, std::size_t n) {
         for (std::size_t i = 0; i < m; ++i) {
             mixBuf_[i] = std::complex<float>(mpx[done + i], 0.0f);
         }
-        mixer_.mix(mixBuf_.data(), mixBuf_.data(), m);
+        {
+            DSP_SUBSTEP("rds.mix");
+            mixer_.mix(mixBuf_.data(), mixBuf_.data(), m);
+        }
 
         bbBuf_.resize(lowpass_.outputCapacity(m));
-        const std::size_t produced =
-            lowpass_.process(mixBuf_.data(), m, bbBuf_.data());
-        for (std::size_t j = 0; j < produced; ++j) { processBaseband(bbBuf_[j]); }
+        std::size_t produced = 0;
+        {
+            DSP_SUBSTEP("rds.filter");
+            produced = lowpass_.process(mixBuf_.data(), m, bbBuf_.data());
+        }
+        {
+            DSP_SUBSTEP("rds.baseband");
+            for (std::size_t j = 0; j < produced; ++j) { processBaseband(bbBuf_[j]); }
+        }
         done += m;
     }
     return n;

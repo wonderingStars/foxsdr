@@ -2571,10 +2571,10 @@ are several radios; every figure is capped at ten digits; tests hold each at its
 | `len_ms` | the minute's real length, so `busy_ms` and `cpu_ms` can be read against it (a late pass makes a minute longer than 60 s, and a block that began in the previous minute lands in this one) |
 | `ring_high_pct` | the ring's high-water mark as a share of its capacity |
 | `events` | `rate|switch|plugins|audio`, or `none`: context only |
-| `busy_ms` | the DSP thread's wall time inside blocks (the `noteDspBlock` span: includes a wait for `audioMutex_`, every plugin call, the audio write; excludes the ring read and the I/Q corrector) |
+| `busy_ms` | the DSP thread's wall time inside blocks (the `noteDspBlock` span: includes the I/Q corrector, a wait for `audioMutex_`, every plugin call, the audio write; excludes the ring read) |
 | `cpu_ms` | the DSP thread's OWN processor time (`GetThreadTimes`; `CLOCK_THREAD_CPUTIME_ID` on Linux and Android; `unknown` elsewhere), sampled every 256 blocks and when the thread ends. It can exceed `busy_ms` slightly: it also covers the ring read and the corrector |
 | `blocks` | blocks done (a block is 1024 samples: 128 microseconds of an 8 MS/s stream, which is why "longest block 1 ms" settles nothing) |
-| `longest_gap_ms`, `gap_phase` | the longest time between two ring reads, and the beat word the thread spent the most of it in: `ring` (the idle sleep: up to 15.6 ms on a process that has not asked for a finer timer, and says nothing is wrong), `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio` (the call into the plugins' audio taps ONLY), `host-audio` (the host's own AGC, squelch, resampler, notch, noise reduction and equaliser), `plugin-chain`, `sink`. The word is the last beat passed, not an exclusive span; the I/Q corrector is charged to `ring` |
+| `longest_gap_ms`, `gap_phase` | the longest time between two ring reads, and the beat word the thread spent the most of it in: `ring` (the idle sleep: up to 15.6 ms on a process that has not asked for a finer timer, and says nothing is wrong), `iq-corr` (the I/Q corrector, which is inside the busy time), `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio` (the call into the plugins' audio taps ONLY), `host-audio` (the host's own AGC, squelch, resampler, notch, noise reduction and equaliser), `plugin-chain`, `sink`. The word is the last beat passed, not an exclusive span |
 | `src_longest_gap_ms` | the source thread's longest time between two ring writes |
 | `gen_resyncs`, `gen_skipped_ms` | the free-running generator's "resync after a long stall" events (it fell more than 250 ms behind its own pacing) and the time they skipped |
 | `absent_discards` | the samples counted as absent in this minute (above) |
@@ -2619,12 +2619,124 @@ input no radio delivers; exact silence (a closed squelch) measured 1.1 to 1.2 ti
 the cause of the bulk of the reports. `tests/test_dsp_denormal_cost.cpp` asserts the bits (read on the DSP thread
 through a seam) and prints the timing, which it never asserts; on ARM64 it passes trivially.
 
+**Where the time goes (2026-11-23).** The three lines above say how long the DSP thread was busy; they did not say IN WHAT.
+A thread at half speed has no long gap and no phase to name. Every phase of the DSP loop (the heartbeat's words: `ring`,
+`iq-corr`, `spectrum`, `audio-lock`, `taps`, `plugin-iq`, `patch`, `demod`, `plugin-audio`, `host-audio`, `plugin-chain`, `sink`) now
+adds the time it took to a per-phase total, from the two timestamps `dspBeat` already holds (no extra clock read; one relaxed
+load and store per beat; nothing allocates or locks, `tests/test_engine_publish_alloc.cpp` is green). `ring` is the ring read
+and the idle sleep, so it is not work and is never listed. A loss minute writes ONE more line beside the other three:
+
+    dsp minute: phase_ms=demod:2987
+
+only the phases over 1% of the minute's work, largest first, as many as fit the log's line. A fifth line, in the same loss
+minutes, says how the PROCESS fared in memory (a machine that is paging shows thousands of faults and a high load):
+
+    dsp minute: page_faults=1204 working_set_mb=212 mem_load=47
+
+`page_faults` is the process's page-fault count in that minute (a difference; `GetProcessMemoryInfo`, reached as
+`K32GetProcessMemoryInfo` from kernel32), `working_set_mb` its working set, `mem_load` the system's memory load in percent
+(`GlobalMemoryStatusEx`); each reads `unknown` when the query fails.
+
+**The baseline: how much margin this machine has, in every session.** Once, 15 s after the first drain, and again 15 s after
+the input rate changes, with or without any loss:
+
+    dsp baseline: rate=2000000 block=1024 budget_us=512 cost_us=276.0 headroom=1.9 top=demod:97,spectrum:2
+
+`block` is the samples in one block (the FFT size), `budget_us` how long a block lasts at that rate, `cost_us` the mean time a
+block kept the DSP thread busy over the last 5 s (the marks are taken at 10 s and the line said at 15 s), `headroom` the
+budget over the cost to one decimal - BELOW 1 THE THREAD CANNOT KEEP UP, and the line is written all the same - and `top` the
+two largest phases as a percentage of the work. The line is said again, once per session, in the first loss minute whose cost
+per block is more than double the first baseline's (from that minute's own figures), so a machine that degrades during a
+session shows it. That repeat is marked, so it is not mistaken for the first: `dsp baseline (again, cost doubled): rate=...`, and
+its figures are the whole loss minute's, not the 5 s window's. `rate=` carries no letters of a frequency unit, so the upload scrub leaves it alone.
+
+**Shedding display work, and the "not keeping up" note: removed (review of 2026-11-23).** An earlier version of this
+branch skipped the spectrum for seven blocks in eight, and the zoom, while the ring held more than half its capacity, and
+raised a note after two lossy minutes. An independent review found that on the spectrum-block path (any FFT size, window or
+frame rate other than the default) the survivors were fed to the estimator as if they were contiguous, so every frame was
+wrong (carriers displaced by up to fs/2048 with comb images, read by tune-to-peak, the FFT scan, the band stitcher and the
+mask monitor), that on the default path the saving was about 7% of a block, and that the note's trigger, placement, wording
+and translation were wrong. Neither ships in this release. The design that was removed, and what it would need to be
+correct, are described in the review (`D:/foxsdr-build/prep/REVIEW-ringdrop-shed-2026-11-23.md`, sections 1, 2, 3 and 8) for
+a later release. The spectrum path is as it was before the measurement was added; only the accounting touches it.
+
+**The demod performance pass (2026-11-23): what changed in the DSP and what did not.** The receive chain's per-block cost fell by
+making four things cheaper; three of them give the same bits as before and one does not.
+
+- *The filter kernel* (`FirDecimator`, `src/dsp/fir.cpp`) computes several outputs at once with SSE2 (the compiler's default
+  instruction set; no flag changed). It does the same IEEE operations in the same order as the loop it replaced (floats widened to
+  double, multiplied in double, added tap by tap, rounded to float at the end), so its output is **bit-identical** to before for
+  every tap set, block length and decimation phase. `tests/test_dsp_equivalence.cpp` (E1k) compares it with a verbatim copy of the
+  old loop.
+- *The spectrum's decibel conversion* is taken where a frame is pulled (`Pipeline::getLatestFrame`), after the frame lock is
+  released, instead of for every block on the DSP thread. The same logarithm with the same floor is taken on the same floats, so
+  every frame a consumer receives is **bit-identical** to before, on the default path and on the spectrum-block path (E3a, E3b, E3c).
+- *The stereo decoder's 38 kHz carrier* is not generated while its gate is shut (no pilot, or forced mono). What it skipped only
+  multiplied a zero, so left, right and the decoder tap are **bit-identical** to before (E4).
+- *The receive oscillator* (`FastNco`, `src/dsp/nco_fast.hpp`, used by the VFO's mixer and the signal generator's tones) calls the
+  maths library once every 32 samples and builds the samples between by one complex multiply in double. **It is the one change that
+  alters received sample values**: against the previous oscillator a sample differs by at most one float unit in the last place
+  of full scale, in about one component in 20 million (the author counted at most 11 in 241 million); taken over the channel
+  filter and the demodulator the difference is more than 200 dB below the signal (signal-to-difference better than 200 dB), far
+  under the float's own rounding and under any receiver noise.
+
+**No transmit path changed.** The transmit modulator, resampler, transmitter and their sources are byte-identical to the previous
+release; the modulator keeps its own phase accumulator and uses neither `Nco` nor `FastNco`, and nothing on a transmit path includes
+`nco_fast.hpp` or uses `FirDecimator`. A benchmark, `bench_demod_chain` (built by name, not shipped), measures each step.
+
+**The machine line gains the clock and the memory.** `clock_pct=N` is the processor's clock now as a whole percentage of its maximum clock (100 = at its maximum, 25 = held at a quarter of it, above 100 = boosting past the stated maximum, `unknown` where the query fails or either figure is 0). It is a percentage and NEVER MHz, by the owner's decision of 2026-11-23: the privacy text says the processor model is sent "without its clock speed", and a clock figure in MHz would be one. The figures come from `CallNtPowerInformation(ProcessorInformation)` from powrprof.dll, loaded once and kept, from the Windows system folder only - `LOAD_LIBRARY_SEARCH_SYSTEM32` - so a DLL planted beside the program is never loaded; read-only. Now is the highest current clock over all logical processors and max the highest maximum; the MHz values are used for the division and then dropped, never logged, never in a report, never in the change key. IT IS NOT A MEASURED CLOCK: Microsoft defines `CurrentMhz` as the maximum clock times the current throttle, a nominal figure from the operating system's own state. A core slowed by firmware or by the processor itself (thermal, power limit) still reads 100, so `clock_pct=100` does NOT rule out throttling, and taking the highest over all cores hides a mix of fast and limited ones. The direct measure of a slow core is `cost_us` itself. (The key is `clock_pct=`, with no "hz" in it: the upload scrub reads "hz" as a frequency and masks every number on the line.) `mem_load=` is the system memory
+load in percent, `mem_avail_mb=` the available physical memory, `commit_mb=USED/LIMIT` the commit charge against the commit limit
+(`GlobalMemoryStatusEx`); each `unknown` on a failed query. These words do not fit the line the steady words already fill, so they are
+the `machine: clock_pct=... mem_load=... mem_avail_mb=... commit_mb=...` line that follows it (inline when they fit). The steady words decide
+whether the first line is "changed". The second line is said at the first call (the first drain) and after that only when a value in it
+CHANGED since it was last said - the clock percentage in steps of ten points, or the memory load in steps of ten percent (the available-memory and commit figures move
+on every read and are not part of the test) - not in every loss minute: the diagnostics ring holds 256 lines and a loss minute already
+writes about ten.
+
+    machine: clock_pct=100 mem_load=47 mem_avail_mb=17080 commit_mb=40911/55199
+
+The I/Q corrector's time is counted: it has a phase of its own, `iq-corr`, and is inside `busy_ms` and `cost_us` (it used to be charged
+to `ring`, which is not work, so a session losing samples to it read as an idle thread).
+
+**The audio watchdog's re-open no longer holds the pass (item 7 of the diagnosis).** A dead output's re-open used
+`AudioOpen::request`, which waits up to 1.5 s for the worker; a device whose open always outlasted that held the engine's pass
+thread (commands, publishes, the digests) for 1.5 s in every cycle. It uses `AudioOpen::requestNoWait` now - the worker starts,
+the call returns, `poll()` takes the answer on a later pass - and the retry backs off (`core/audio_probe_backoff.hpp`): 1, 2, 4 and
+then 5 s between attempts while the output stays dead (the ceiling was 30 s, which left a device that came back silent for up to
+30 s; it is 5 s), and back to 1 s THE MOMENT A RE-OPEN SUCCEEDS (`Engine::applyAudioOpenResult`) as well as when a probe finds the
+stream alive - it used to be reset only inside the gated probe, which runs once per interval, so after a long outage the next
+death waited up to 30 s to be noticed. The watchdog's own re-open no longer writes "audio device busy - still opening" on every
+attempt (the row used to alternate between that and "could not be reopened"); a user's own pick still does.
+(`tests/test_audio_open.cpp`: the call returns in well under the 700 ms the open takes; a second request is queued, never raced.
+`tests/test_audio_probe_backoff.cpp`: the schedule step by step, and that the engine uses it - read off its source, since a real
+dying device cannot be staged in a unit test.)
+
+**What the baseline measured on the bench PC (2026-11-23; i9-14900K, 32 logical processors, the real programs on the generator at
+2 MS/s, volume 0, hidden desktop).** Cost per 1024-sample block, budget 512 microseconds:
+
+| run | cost_us | headroom | split |
+|---|---|---|---|
+| Legacy window, default spectrum | 75.3 | 6.8 | demod 89%, spectrum 8% |
+| Slint window, default spectrum | 74.6 | 6.9 | demod 89%, spectrum 8% |
+| Legacy window, 131072-point FFT at 120 Hz | 169.7 | 3.0 | spectrum 50%, demod 48% |
+| Slint window, 131072-point FFT at 120 Hz | 126.6 | 4.0 | demod 52%, spectrum 47% |
+
+So the largest FFT at the fastest refresh adds 50 to 95 microseconds a block - the spectrum is a stage a slow PC pays for. The idle
+generator's chain (the pipeline alone, `tests/test_dsp_phase_time.cpp` section g): 71.6 microseconds a block
+at 2 MS/s (budget 512, headroom 7.2), 101.9 at 1 MS/s (budget 1024, headroom 10.0), 219.3 at 500 kS/s (budget 2048, headroom 9.3):
+the work per block grows as the block lasts longer (probably the audio stages, which run per output frame; not separated here), so halving the generator's rate buys
+about 1.4 times the headroom, not 2.
+
+**Test seam.** `Pipeline::setDspPhaseLoadForTest(phase, microseconds)` burns that much processor in one named phase of every
+block. For a bounded run (`--frames`) `FOXSDR_TEST_DSP_PHASE_LOAD=<phase>=<microseconds>` arms it (`windowServiceOptions`); a
+real session never reads it.
+
 **Tests:** `tests/test_ringdrop_measure.cpp` (the events' names, absent samples and the 2 s bound, the machine line,
 the DSP accounting under a held mutex, `cpu_ms` both ways, the host-audio word, the source gap, the generator resync,
 the widest lines WITH the log's stamp through the upload scrub), `tests/test_dsp_drop_minute_app.cpp` (the order, an
 event minute IS filed, arming, the ten-second arm, a 5 s late DSP thread files a ringdrop),
 `tests/test_audio_lead_app.cpp` (no new excuses on the audio minute), `tests/test_radio_reports_engine.cpp` (the
-first stream window's rate), `tests/test_dsp_denormal_cost.cpp`.
+first stream window's rate), `tests/test_dsp_denormal_cost.cpp`, `tests/test_dsp_phase_time.cpp` (the baseline text, the per-phase time against a real-time source, the idle generator's cost at three rates), `tests/test_dsp_phase_time_app.cpp` (the engine's loss-minute lines, the baseline, the machine and memory lines, the widest forms), `tests/test_audio_open.cpp` (the no-wait re-open), `tests/test_audio_probe_backoff.cpp` (the retry schedule and its use).
 
 ### What a "no audio" report carries (0.99.61)
 

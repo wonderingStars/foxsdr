@@ -32,6 +32,7 @@
 
 #include "core/airspy_settings.hpp"
 #include "core/audio_open.hpp"
+#include "core/audio_probe_backoff.hpp"
 #include "core/bias_tee.hpp"
 #include "core/minute_events.hpp"
 #include "core/noise_floor_tracker.hpp"
@@ -578,6 +579,22 @@ struct Receiver {
     std::uint64_t dspBlocksAtMinute_ = 0;
     std::uint64_t genResyncsAtMinute_ = 0;
     std::uint64_t genSkippedAtMinute_ = 0;
+    // WHERE THE TIME GOES (2026-11-23, core/dsp_baseline.hpp): the per-phase totals (Pipeline::dspPhaseTotalsNs) as the minute opened, and the baseline line's small state machine: 0 = not armed, 1 = waiting to take the marks, 2 = marks taken, waiting to
+    // say the line, 3 = said (for this rate). baselineRate_ is the input rate the line was armed for; a different rate arms it again.
+    std::uint64_t dspPhaseAtMinute_[cascade::core::Pipeline::kDspPhases] = {};
+    unsigned long long pageFaultsAtMinute_ = 0;
+    // THE AUDIO WATCHDOG'S BACK-OFF (item 7): seconds between re-open attempts while the output stays dead: 1, 2, 4, 5 (the ceiling); back to 1 when it
+    // lives and when a re-open succeeds (core/audio_probe_backoff.hpp).
+    cascade::core::AudioProbeBackoff audioProbeBackoff_;
+    double firstBaselineCostUs_ = 0.0;     // the first baseline line's cost per block (0 = none said yet)
+    bool baselineRelogged_ = false;        // the baseline has been said again in a loss minute (once per session)
+    int baselineStage_ = 0;
+    double baselineRate_ = 0.0;
+    double baselineMarkAtS_ = 0.0;
+    double baselineDueS_ = 0.0;
+    std::uint64_t baselineBusyMark_ = 0;
+    std::uint64_t baselineBlocksMark_ = 0;
+    std::uint64_t baselinePhaseMark_[cascade::core::Pipeline::kDspPhases] = {};
     // ---- the slot's own life (multi-radio stage 4) ----
     // Which radio this is, from 1 (slot + 1); set once when the slot is built.
     std::uint32_t radioNumber_ = 1;

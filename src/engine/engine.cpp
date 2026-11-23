@@ -53,6 +53,8 @@
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/machine_state.hpp"
+#include "core/audio_probe_backoff.hpp"
+#include "core/dsp_baseline.hpp"
 #include "core/issue_report.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -540,7 +542,6 @@ constexpr double kScanUserTuneEpsHz = 0.5;
 // The note is stored TRANSLATED (the Sinks panel draws audioHealthNote_ as it
 // stands), so it is written and compared through tr() in both places.
 const char* const kAudioBusyNote = FOX_TR_NOOP("audio device busy - still opening");
-
 // Monotonic milliseconds for the retune coalescer — steady_clock, because a
 // wall-clock step (NTP, DST) must never stall or flood the tune pacing.
 double steadyNowMs() {
@@ -1030,6 +1031,7 @@ void Engine::pollDspMinute() {
     // EVERY ABSENT DISCARD IS SAID, whether or not the minute clock has armed (review of 70d16f00, finding 1).
     reportAbsentDiscards();
     const double now = clockS();
+    pollDspBaseline(now);
     if (!rx().dspMinuteArmed_) {
         // THE FIRST MINUTE STARTS WITH THE STREAM: nothing is judged before the DSP thread has read the ring (or ten seconds after the receiver
         // was started, whichever is first), and the marks are taken HERE. What follows is a full minute, judged like any other: there is no
@@ -1047,6 +1049,11 @@ void Engine::pollDspMinute() {
         rx().dspBlocksAtMinute_ = rx().pipeline_.dspBlocks();
         rx().genResyncsAtMinute_ = rx().pipeline_.genResyncs();
         rx().genSkippedAtMinute_ = rx().pipeline_.genSkippedNs();
+        rx().pipeline_.dspPhaseTotalsNs(rx().dspPhaseAtMinute_);
+        {
+            unsigned long long faults = 0, ws = 0;
+            if (cascade::core::processMemoryNow(&faults, &ws)) { rx().pageFaultsAtMinute_ = faults; }
+        }
         (void)rx().pipeline_.takeDspGapLongest(nullptr);
         (void)rx().pipeline_.takeSrcGapLongestNs();
         rx().dspEventMark_ = minuteEventCounts();
@@ -1059,6 +1066,60 @@ void Engine::pollDspMinute() {
         rx().lastDspLogSec_ = now;
         closeDspMinute();
     }
+}
+
+// THE BASELINE (2026-11-23, core/dsp_baseline.hpp, docs/DIAGNOSTICS.md "Where the time goes"): once per session, 15 s after the first drain, and again
+// 15 s after the input rate changes, one line saying how much margin this machine has at this rate - the mean time a block took over the last
+// 5 s against the time the block lasts, and where it went - whether or not the session ever drops. The marks are taken at 10 s, so the figures
+// are the 5 s between. Nothing is written when the DSP thread did no block in the window (the receiver was stopped): the window is taken again.
+void Engine::pollDspBaseline(double now) {
+    if (rx().firstDrainSeenS_ < 0.0) { return; }
+    constexpr double kMarkAfterS = 10.0;
+    constexpr double kSayAfterS = 15.0;
+    const double rate = rx().pipeline_.inputRateHz();
+    if (rx().baselineStage_ == 0) {
+        rx().baselineRate_ = rate;
+        rx().baselineStage_ = 1;
+        rx().baselineMarkAtS_ = rx().firstDrainSeenS_ + kMarkAfterS;
+        rx().baselineDueS_ = rx().firstDrainSeenS_ + kSayAfterS;
+    } else if (std::fabs(rate - rx().baselineRate_) > 0.5) {
+        rx().baselineRate_ = rate;
+        rx().baselineStage_ = 1;
+        rx().baselineMarkAtS_ = now + kMarkAfterS;
+        rx().baselineDueS_ = now + kSayAfterS;
+    }
+    if (rx().baselineStage_ == 1 && now >= rx().baselineMarkAtS_) {
+        rx().baselineBusyMark_ = rx().pipeline_.dspBusyNs();
+        rx().baselineBlocksMark_ = rx().pipeline_.dspBlocks();
+        rx().pipeline_.dspPhaseTotalsNs(rx().baselinePhaseMark_);
+        rx().baselineStage_ = 2;
+        return;
+    }
+    if (rx().baselineStage_ != 2 || now < rx().baselineDueS_) { return; }
+    const std::uint64_t busyNow = rx().pipeline_.dspBusyNs();
+    const std::uint64_t blocksNow = rx().pipeline_.dspBlocks();
+    std::uint64_t phaseNow[cascade::core::Pipeline::kDspPhases];
+    rx().pipeline_.dspPhaseTotalsNs(phaseNow);
+    const std::uint64_t blocks = blocksNow >= rx().baselineBlocksMark_ ? blocksNow - rx().baselineBlocksMark_ : 0;
+    if (blocks == 0) {   // no block ran in the window: try again over the next five seconds
+        rx().baselineMarkAtS_ = now;
+        rx().baselineDueS_ = now + (kSayAfterS - kMarkAfterS);
+        rx().baselineStage_ = 1;
+        return;
+    }
+    const std::uint64_t busy = busyNow >= rx().baselineBusyMark_ ? busyNow - rx().baselineBusyMark_ : 0;
+    std::uint64_t phaseNs[cascade::core::Pipeline::kDspPhases];
+    const char* names[cascade::core::Pipeline::kDspPhases];
+    for (unsigned i = 0; i < cascade::core::Pipeline::kDspPhases; ++i) {
+        phaseNs[i] = phaseNow[i] >= rx().baselinePhaseMark_[i] ? phaseNow[i] - rx().baselinePhaseMark_[i] : 0;
+        names[i] = cascade::core::Pipeline::dspPhaseName(i);
+    }
+    rx().baselineStage_ = 3;
+    if (rx().firstBaselineCostUs_ <= 0.0 && busy > 0) { rx().firstBaselineCostUs_ = static_cast<double>(busy) / 1000.0 / static_cast<double>(blocks); }
+    const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+    const std::string text = cascade::core::dspBaselineText(rate, rx().pipeline_.dspBlockSamples(), blocks, busy,
+                                                           cascade::core::dspTopPhasesText(phaseNs, names, cascade::core::Pipeline::kDspPhases));
+    cascade::core::diagLogf("%s%s", text.c_str(), radioTag.c_str());
 }
 
 bool Engine::digestClockStarted(double now) {
@@ -1175,6 +1236,28 @@ void Engine::closeDspMinute() {
     const char* gapPhase = "ring";
     const std::uint64_t gapNs = rx().pipeline_.takeDspGapLongest(&gapPhase);
     const std::uint64_t srcGapNs = rx().pipeline_.takeSrcGapLongestNs();
+    // WHERE THE MINUTE'S TIME WENT, per phase (the totals are cumulative: a difference).
+    constexpr unsigned kPhases = cascade::core::Pipeline::kDspPhases;
+    std::uint64_t phaseNow[kPhases];
+    std::uint64_t phaseNs[kPhases];
+    const char* phaseNames[kPhases];
+    rx().pipeline_.dspPhaseTotalsNs(phaseNow);
+    for (unsigned i = 0; i < kPhases; ++i) {
+        phaseNs[i] = phaseNow[i] >= rx().dspPhaseAtMinute_[i] ? phaseNow[i] - rx().dspPhaseAtMinute_[i] : 0;
+        rx().dspPhaseAtMinute_[i] = phaseNow[i];
+        phaseNames[i] = cascade::core::Pipeline::dspPhaseName(i);
+    }
+    // THE PROCESS'S PAGE FAULTS THIS MINUTE (a difference) for the loss minute's memory line below; the mark moves every minute.
+    unsigned long long faultsMinute = 0, workingSetMb = 0;
+    bool memoryKnown = false;
+    {
+        unsigned long long faultsNow = 0;
+        if (cascade::core::processMemoryNow(&faultsNow, &workingSetMb)) {
+            memoryKnown = true;
+            faultsMinute = faultsNow >= rx().pageFaultsAtMinute_ ? faultsNow - rx().pageFaultsAtMinute_ : 0ull;
+            rx().pageFaultsAtMinute_ = faultsNow;
+        }
+    }
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it - and now also when the audio minute beside it starved a raise's worth
     // of callbacks (that digest closes after this one, so its numbers are read as they stand): the lines below are what an audiolead report
     // needs to carry. The text of every line fits the log's line with its 18-character stamp and level in front (DiagLog::kLineBytes: a cut
@@ -1209,8 +1292,36 @@ void Engine::closeDspMinute() {
                             cap(blocks), cap(gapNs / 1000000u), gapPhase, radioTag.c_str());
     cascade::core::diagLogf("dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu%s", cap(srcGapNs / 1000000u),
                             cap(resyncs), cap(skippedNs / 1000000u), cap(absent), radioTag.c_str());
+    // AND WHERE THE BUSY TIME WENT: the phases over 1% of it, in milliseconds, the largest first (the minute's other lines say how long it was).
+    {
+        const std::string phases = cascade::core::dspPhaseMsText(phaseNs, phaseNames, kPhases,
+                                                                 cascade::core::kDspLineTextBudget - 21u - cascade::core::kDspRadioTagBudget);
+        cascade::core::diagLogf("dsp minute: phase_ms=%s%s", phases.empty() ? "none" : phases.c_str(), radioTag.c_str());
+    }
+    // THE PROCESS'S MEMORY in the minute: page faults (a machine that is paging shows thousands), its working set in MB and the system's load.
+    {
+        char faultsText[24] = "unknown", wsText[24] = "unknown", loadText[16] = "unknown";
+        if (memoryKnown) {
+            std::snprintf(faultsText, sizeof(faultsText), "%llu", cap(faultsMinute));
+            std::snprintf(wsText, sizeof(wsText), "%llu", cap(workingSetMb));
+        }
+        if (const int load = cascade::core::systemMemoryLoadPercent(); load >= 0) { std::snprintf(loadText, sizeof(loadText), "%d", load); }
+        cascade::core::diagLogf("dsp minute: page_faults=%s working_set_mb=%s mem_load=%s%s", faultsText, wsText, loadText, radioTag.c_str());
+    }
+    // A MACHINE THAT DEGRADES DURING A SESSION: the first loss minute whose cost per block is more than double the first baseline's says the
+    // baseline again, from the minute's own figures (once per session).
+    if (!rx().baselineRelogged_ && rx().firstBaselineCostUs_ > 0.0 && blocks > 0 && busyNs > 0 &&
+        static_cast<double>(busyNs) / 1000.0 / static_cast<double>(blocks) > 2.0 * rx().firstBaselineCostUs_) {
+        rx().baselineRelogged_ = true;
+        const char* topNames[kPhases];
+        for (unsigned i = 0; i < kPhases; ++i) { topNames[i] = cascade::core::Pipeline::dspPhaseName(i); }
+        const std::string text = cascade::core::dspBaselineText(rx().pipeline_.inputRateHz(), rx().pipeline_.dspBlockSamples(), blocks, busyNs,
+                                                               cascade::core::dspTopPhasesText(phaseNs, topNames, kPhases),
+                                                               cascade::core::kDspBaselineAgainLabel);
+        cascade::core::diagLogf("%s%s", text.c_str(), radioTag.c_str());
+    }
     // THE MACHINE, AGAIN WHEN IT CHANGED since the last time it was said (power source, throttling, window, display, priorities).
-    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), false);
+    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), false);   // (the clock and memory line follows only when a value in it changed since it was said)
     if (dropped == 0) { return; }   // (only the application's own pause cost samples, or the audio minute beside this one is bad: said, never filed)
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the
@@ -1330,7 +1441,7 @@ void Engine::pollAudioHealth() {
     // slow enough that a genuinely absent device is not hammered with open
     // attempts. ImGui's clock is the frame clock, which is what "once per
     // second of running UI" should mean here.
-    if (now - rx().lastAudioProbeSec_ < 1.0) { return; }
+    if (now - rx().lastAudioProbeSec_ < rx().audioProbeBackoff_.intervalS) { return; }
     rx().lastAudioProbeSec_ = now;
 
     // AN OPEN IN FLIGHT ALREADY OWNS THE SINK. Asking a sink that a worker is
@@ -1340,7 +1451,14 @@ void Engine::pollAudioHealth() {
     // frame after the open completes asks the question again.
     if (rx().audioOpen_.inFlight()) { return; }
 
-    if (out.streamAlive()) { return; }
+    if (out.streamAlive()) {
+        rx().audioProbeBackoff_.onAlive();   // alive: the next death is noticed within a second again
+        return;
+    }
+    // BACK OFF BETWEEN ATTEMPTS (2026-11-23, the ringdrop diagnosis, item 7): a device that keeps refusing was asked once a second for ever; each
+    // failed attempt doubles the wait, to a ceiling of FIVE seconds (core/audio_probe_backoff.hpp; it was 30 s, which left a returned device silent for
+    // up to 30 s). A re-open that SUCCEEDS puts it back to one second at once, in applyAudioOpenResult.
+    rx().audioProbeBackoff_.onProbeDead();
 
     // The stream is dead. Re-enumerate before choosing a target: the device
     // list is how recoveryDeviceIndex() resolves the remembered NAME to a
@@ -1357,18 +1475,22 @@ void Engine::pollAudioHealth() {
     // as the condition lasted. requestAudioOpen answers false when the device
     // has not replied inside the bound; the result lands in pollAudioOpen when
     // it does, and this tick goes back to rendering.
-    (void)requestAudioOpen(target, true);
+    // (The watchdog's re-open does not WAIT for the answer at all, so the pass is never held for the 1.5 s bound: item 7.)
+    (void)requestAudioOpen(target, true, /*wait=*/false);
 }
 
-bool Engine::requestAudioOpen(int deviceIndex, bool recovery) {
-    const cascade::gui::AudioOpen::Outcome outcome = rx().audioOpen_.request(
-        deviceIndex, recovery ? kAudioOpenByWatchdog : kAudioOpenByUser);
+bool Engine::requestAudioOpen(int deviceIndex, bool recovery, bool wait) {
+    const int tag = recovery ? kAudioOpenByWatchdog : kAudioOpenByUser;
+    const cascade::gui::AudioOpen::Outcome outcome = wait ? rx().audioOpen_.request(deviceIndex, tag) : rx().audioOpen_.requestNoWait(deviceIndex, tag);
     if (outcome != cascade::gui::AudioOpen::Outcome::Finished) {
         // Still inside the driver. Said in the panel rather than left to look
         // like nothing happened — "I picked the device and nothing changed" is
         // how a silent wait reads, and it is the reading that sends the next
         // report to the wrong end of the chain.
-        rx().audioHealthNote_ = tr(kAudioBusyNote);
+        // NOT for the watchdog's own no-wait re-open: it is retried every few seconds while a device is gone, and the row used to alternate between
+        // this line and "could not be reopened" on every attempt (review of the ringdrop branch, section 5). The watchdog's note stays as its last
+        // outcome set it.
+        if (wait || !recovery) { rx().audioHealthNote_ = tr(kAudioBusyNote); }
         return false;
     }
     applyAudioOpenResult();
@@ -1410,6 +1532,9 @@ void Engine::applyAudioOpenResult() {
         deviceIndex_ = cascade::sink::clampDeviceRow(deviceIndex_, devices_);
         return;
     }
+    // THE RE-OPEN WORKED: the retry schedule starts over, so the next death is noticed within a second and not after a leftover long wait (it was
+    // reset only inside the gated probe, which runs once per interval: after a long outage the next death waited up to 30 s).
+    rx().audioProbeBackoff_.onAlive();
 
     // Keep the Sinks combo honest about what is actually open. Without this
     // the panel would name the old device while audio came out of another.

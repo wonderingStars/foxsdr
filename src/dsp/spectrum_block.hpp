@@ -173,12 +173,15 @@ public:
         std::size_t memoryBytes() const {
             return n_ * (sizeof(std::complex<float>) * 3 + sizeof(float) * 3) + outCols_ * sizeof(float) * 4 + n_ * 16;
         }
+        // CONTROL THREAD (the thread that calls SpectrumBlock::latest). A TEST SEAM, read-only: the reduced linear power of the frame latest() handed out last
+        // (the slot's contents; latest() takes the logarithm of exactly these floats), so a test can compute the old expression itself and compare.
+        const std::vector<float>& lastReadPower() const { return slot_[static_cast<std::size_t>(rd_)].db; }
 
     private:
         friend class SpectrumBlock;
         struct Slot {
             std::uint64_t seq = 0;
-            std::vector<float> db;
+            std::vector<float> db;   // the reduced LINEAR POWER of the frame (named for what latest() hands out: dB)
         };
 
         void setModeFlags(SpecMode m, float alpha, float decay) {
@@ -265,7 +268,10 @@ public:
             } else {
                 specReduceMax(out, n_, red_.data(), outCols_);
             }
-            for (std::size_t c = 0; c < outCols_; ++c) { s.db[c] = 10.0f * std::log10(std::max(red_[c], 1e-20f)); }
+            // THE SLOT HOLDS THE REDUCED LINEAR POWER, not dB (the demod performance pass): latest() takes the logarithm on the thread that pulls the frame, so
+            // this thread no longer takes one per column per frame (at 524288 columns and tens of frames a second that was millions a second), and a frame nobody
+            // pulls costs none. The same expression on the same float, so the values pulled are bit-for-bit what they were.
+            for (std::size_t c = 0; c < outCols_; ++c) { s.db[c] = red_[c]; }
             s.seq = ++seq_;
             const int old = ready_.exchange(wr_ | kNew, std::memory_order_acq_rel);
             wr_ = old & 3;
@@ -345,6 +351,17 @@ public:
 
     // CONTROL THREAD. Copies the newest frame not yet read into out (cap floats); returns the columns written, 0 if nothing new.
     std::size_t latest(float* out, std::size_t cap, std::uint64_t* seq = nullptr) {
+        const std::size_t c = latestPower(out, cap, seq);
+        powerToDb(out, out, c);
+        return c;
+    }
+    // The block's decibel conversion (what latest() applies): 10 log10 of the power, floored at 1e-20. In place is allowed (power == outDb).
+    static void powerToDb(const float* power, float* outDb, std::size_t n) {
+        for (std::size_t i = 0; i < n; ++i) { outDb[i] = 10.0f * std::log10(std::max(power[i], 1e-20f)); }
+    }
+    // CONTROL THREAD. latest() without the logarithm: copies the newest frame not yet read as LINEAR POWER (a memcpy), so a caller that holds a lock
+    // while it pulls can take the logarithms (powerToDb) after releasing it.
+    std::size_t latestPower(float* out, std::size_t cap, std::uint64_t* seq = nullptr) {
         Engine* e = forReader_.load(std::memory_order_acquire);
         if ((e->ready_.load(std::memory_order_acquire) & Engine::kNew) != 0) {
             const int old = e->ready_.exchange(e->rd_, std::memory_order_acq_rel);
@@ -353,7 +370,7 @@ public:
         const Engine::Slot& s = e->slot_[static_cast<std::size_t>(e->rd_)];
         if (s.seq == 0 || s.seq == e->readSeq_) { return 0; }
         const std::size_t c = std::min(cap, e->outCols_);
-        std::memcpy(out, s.db.data(), c * sizeof(float));
+        std::memcpy(out, s.db.data(), c * sizeof(float));   // (s.db is the power: see frame())
         e->readSeq_ = s.seq;
         if (seq != nullptr) { *seq = s.seq; }
         return c;

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/vfo.hpp"
+
+#include "dsp/dsp_substep.hpp"
 #include "dsp/cw_filter.hpp"
 
 #include <algorithm>
@@ -276,7 +278,10 @@ std::size_t Vfo::process(const std::complex<float>* in, std::size_t n,
         // Mix into a scratch buffer rather than in-place: the caller's input
         // is const, and Vfo must not mutate it.
         mixBuf_.resize(m);
-        nco_.mix(in + pos, mixBuf_.data(), m);
+        {
+            DSP_SUBSTEP("vfo.mix");
+            nco_.mix(in + pos, mixBuf_.data(), m);
+        }
 
         // Filter+decimate through every stage into scratch sized for the
         // worst case, then copy out what fits. Every stage always consumes
@@ -288,7 +293,10 @@ std::size_t Vfo::process(const std::complex<float>* in, std::size_t n,
         for (std::size_t s = 0; s < stages_.size(); ++s) {
             std::vector<std::complex<float>>& buf = stageBufs_[s];
             buf.resize(stages_[s].outputCapacity(stageN));
-            stageN = stages_[s].process(stageIn, stageN, buf.data());
+            {
+                DSP_SUBSTEP("vfo.filter");
+                stageN = stages_[s].process(stageIn, stageN, buf.data());
+            }
             // The blanker, in place, on the channel filter's own output.
             if (s == nbStage_ && nb_.enabled()) { nb_.process(buf.data(), buf.data(), stageN); }
             stageIn = buf.data();

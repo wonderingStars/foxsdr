@@ -520,7 +520,7 @@ private:
     // immediately when the device answered inside the bound. `recovery` marks
     // a request the audio watchdog made rather than the user, so only those
     // are counted as recoveries. Returns true when the open completed here.
-    bool requestAudioOpen(int deviceIndex, bool recovery);
+    bool requestAudioOpen(int deviceIndex, bool recovery, bool wait = true);   // wait=false: start the worker and return at once (the watchdog's re-open)
     // The GUI-thread half of an open, wherever it completed: republishes the
     // channel layout for the DSP thread, re-enumerates, and puts the Sinks
     // combo back on the device that is actually playing.
@@ -1305,6 +1305,8 @@ private:
     // here in the 0.99.90 merge because the pipeline is the engine's): the pass's poll, beside pollAudioHealth and on a clock of its
     // own - the audio watchdog returns early on a machine where no sound output has opened, and a ring overflows there just the same.
     void pollDspMinute();
+    // THE BASELINE LINE (once per session 15 s after the first drain, and again after an input-rate change): see Engine::pollDspBaseline.
+    void pollDspBaseline(double now);
     // A MINUTE OF THE PIPELINE'S RING HAS CLOSED: one log line if the source thread read samples the ring had no room for in the
     // minute just ended - `dsp: 412000 samples dropped between the source and the DSP in the last minute (0.17%)`, the share being of
     // the minute's input - and nothing for a minute that lost none. Takes no clock, so a test closes minutes at will. Since master's 0.99.101 /

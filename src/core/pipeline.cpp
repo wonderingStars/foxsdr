@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
 #include <xmmintrin.h>   // _mm_setcsr: the flush-to-zero test seam
 #endif
@@ -80,11 +81,11 @@ thread_local cascade::core::beats::Registration* t_dspBeat = nullptr;
 // THE BEAT WORDS, as an index (2026-11-23): the same words the heartbeat has always carried, now also the phases the minute's gap accounting
 // attributes time to. A phase is the span from one dspBeat call to the next.
 enum DspPhase : unsigned {
-    kPhRing, kPhSpectrum, kPhAudioLock, kPhTaps, kPhPluginIq, kPhPatch, kPhDemod, kPhPluginAudio, kPhHostAudio, kPhPluginChain, kPhSink, kPhCount
+    kPhRing, kPhIqCorr, kPhSpectrum, kPhAudioLock, kPhTaps, kPhPluginIq, kPhPatch, kPhDemod, kPhPluginAudio, kPhHostAudio, kPhPluginChain, kPhSink, kPhCount
 };
 // "plugin-audio" is ONLY the call into the plugins' audio taps; "host-audio" is the host's own audio chain after it (AGC, squelch, resampler,
 // notch, noise reduction, equaliser): the review of 70d16f00 found the one word covering both.
-constexpr const char* kDspPhaseNames[kPhCount] = {"ring",      "spectrum",     "audio-lock",   "taps",         "plugin-iq",
+constexpr const char* kDspPhaseNames[kPhCount] = {"ring",      "iq-corr",      "spectrum",     "audio-lock",   "taps",         "plugin-iq",
                                                   "patch",     "demod",        "plugin-audio", "host-audio",   "plugin-chain", "sink"};
 static_assert(kPhCount <= 16, "the gap mark packs the phase index in four bits");
 
@@ -99,6 +100,21 @@ struct DspGapTrack {
 };
 thread_local DspGapTrack t_gap;
 thread_local std::atomic<std::uint64_t>* t_gapMark = nullptr;   // Pipeline::dspGapLongestPacked_, set by dspThreadMain
+// THE TIME EACH PHASE TOOK, SUMMED OVER THE SESSION (2026-11-23, "where the time goes"): the same spans the gap accounting above measures, added to
+// the pipeline's per-phase totals (Pipeline::dspPhaseNs), so the minute can say "demod 31000 ms, spectrum 9000 ms" and not only the phase of its
+// longest gap. No extra clock read: the span is the difference of the two timestamps dspBeat already holds. Single writer (this thread), so a
+// relaxed load and store - no locked instruction.
+thread_local std::atomic<std::uint64_t>* t_phaseTotals = nullptr;   // Pipeline::dspPhaseNs_[kPhCount], set by dspThreadMain
+
+// TEST SEAM (never set by the application): extra processor time, in microseconds, burned inside one phase of every block; see
+// Pipeline::setDspPhaseLoadForTest. g_dspBlockSeam (below, refreshBlockSeam) is non-zero while this or any other per-block seam is armed.
+std::atomic<int> g_dspPhaseBurnUs[kPhCount] = {};
+std::atomic<int> g_dspPhaseBurnAny{0};
+void burnMicroseconds(int us) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(us);
+    volatile double sink = 1.0;
+    while (std::chrono::steady_clock::now() < until) { sink = sink * 1.0000001 + 1e-9; }
+}
 
 inline void dspBeat(DspPhase p) {
     if (t_dspBeat == nullptr) { return; }
@@ -106,7 +122,12 @@ inline void dspBeat(DspPhase p) {
     t_dspBeat->beat(kDspPhaseNames[p], now);   // (the same timestamp: the heartbeat used to read the clock again)
     DspGapTrack& g = t_gap;
     if (g.have) {
-        g.ns[g.phase] += static_cast<std::uint64_t>(std::max<long long>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(now - g.phaseSince).count()));
+        const std::uint64_t spanNs = static_cast<std::uint64_t>(std::max<long long>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(now - g.phaseSince).count()));
+        g.ns[g.phase] += spanNs;
+        if (t_phaseTotals != nullptr) {
+            std::atomic<std::uint64_t>& total = t_phaseTotals[g.phase];
+            total.store(total.load(std::memory_order_relaxed) + spanNs, std::memory_order_relaxed);
+        }
         if (p == kPhRing) {
             // A GAP CLOSES: from the previous ring read to this one.
             const std::uint64_t total = static_cast<std::uint64_t>(std::max<long long>(0, std::chrono::duration_cast<std::chrono::nanoseconds>(now - g.lastRead).count()));
@@ -130,6 +151,10 @@ inline void dspBeat(DspPhase p) {
     }
     g.phase = p;
     g.phaseSince = now;
+    // (test seam: the load is burned AFTER the phase began, so the span above - and the minute's accounting - charges it to this phase.)
+    if (g_dspPhaseBurnAny.load(std::memory_order_relaxed) != 0) {
+        if (const int us = g_dspPhaseBurnUs[p].load(std::memory_order_relaxed); us > 0) { burnMicroseconds(us); }
+    }
 }
 
 // THE RING'S DEPTH, IN TIME: at least kRingSeconds of the SOURCE's rate, at
@@ -843,6 +868,22 @@ void Pipeline::setDspBlockLoadForTest(int burnMs, int sleepMs) {
     g_dspSleepInSpanMs.store(sleepMs, std::memory_order_relaxed);
     refreshBlockSeam();
 }
+static_assert(Pipeline::kDspPhases == kPhCount, "the public phase count is the phase enum's");
+const char* Pipeline::dspPhaseName(unsigned index) { return index < kPhCount ? kDspPhaseNames[index] : ""; }
+void Pipeline::dspPhaseTotalsNs(std::uint64_t* out) const {
+    for (unsigned i = 0; i < kPhCount; ++i) { out[i] = dspPhaseNs_[i].load(std::memory_order_relaxed); }
+}
+void Pipeline::setDspPhaseLoadForTest(const char* phase, int microseconds) {
+    if (phase == nullptr) { return; }
+    for (unsigned i = 0; i < kPhCount; ++i) {
+        if (std::strcmp(phase, kDspPhaseNames[i]) != 0) { continue; }
+        g_dspPhaseBurnUs[i].store(microseconds > 0 ? microseconds : 0, std::memory_order_relaxed);
+        int any = 0;
+        for (unsigned k = 0; k < kPhCount; ++k) { any |= g_dspPhaseBurnUs[k].load(std::memory_order_relaxed) > 0 ? 1 : 0; }
+        g_dspPhaseBurnAny.store(any, std::memory_order_relaxed);
+        return;
+    }
+}
 void Pipeline::setDspHostAudioDelayForTest(int ms) {
     g_dspHostAudioDelayMs.store(ms, std::memory_order_relaxed);
     refreshBlockSeam();
@@ -1274,7 +1315,8 @@ bool Pipeline::running() const {
 }
 
 bool Pipeline::getLatestFrame(SpectrumFrame& out) {
-    std::lock_guard<std::mutex> lk(frameMutex_);
+    std::unique_lock<std::mutex> lk(frameMutex_);
+    const std::chrono::steady_clock::time_point lockedAt = std::chrono::steady_clock::now();
     if (specOn_.load(std::memory_order_acquire)) {
         // THE SPECTRUM BLOCK PATH (setSpectrum): the newest block frame, if one is newer than the last pulled, becomes the latest frame. The legacy estimator's tone level is
         // uncompensated for the window (a full-scale tone under Blackman-Harris reads 20 log10(0.35875) = -8.9 dB), and the block's is compensated: lowering by the same figure keeps every
@@ -1283,16 +1325,57 @@ bool Pipeline::getLatestFrame(SpectrumFrame& out) {
         const std::size_t cols = blk.columns();
         if (specScratch_.size() < cols) { specScratch_.resize(cols); }
         std::uint64_t blockSeq = 0;
-        const std::size_t got = blk.latest(specScratch_.data(), specScratch_.size(), &blockSeq);
+        const std::size_t got = blk.latestPower(specScratch_.data(), specScratch_.size(), &blockSeq);
         if (got > 0) {
-            latest_.dbBins.resize(got);
-            for (std::size_t i = 0; i < got; ++i) { latest_.dbBins[i] = specScratch_[i] + kLegacyToneOffsetDb; }
+            // the block's frames are handed over as LINEAR POWER (SpectrumBlock::latestPower, a memcpy) and converted below, after the frame lock is released,
+            // exactly like the legacy estimator's: the logarithms of a 131,072-bin frame must not be taken while the DSP thread could be waiting for this lock.
+            latest_.dbBins.assign(specScratch_.begin(), specScratch_.begin() + static_cast<std::ptrdiff_t>(got));
+            latestIsPower_ = true;
+            latestIsBlockPower_ = true;
             latest_.seq += 1;
         }
     }
-    if (latest_.seq <= out.seq) { return false; }
+    if (latest_.seq <= out.seq) {
+        noteFrameLockHold(lockedAt, false);
+        return false;
+    }
     out = latest_;
+    const bool power = latestIsPower_;
+    const bool blockPower = latestIsBlockPower_;
+    noteFrameLockHold(lockedAt, true);
+    lk.unlock();   // (the logarithms below are taken without the frame lock: the DSP thread publishes under it)
+    if (power) { convertPowerFrameToDb(out, blockPower); }
     return true;
+}
+
+void Pipeline::noteFrameLockHold(std::chrono::steady_clock::time_point lockedAt, bool tookFrame) {
+    const std::uint64_t ns = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - lockedAt).count());
+    if (tookFrame) {   // (the mean is over the pulls that took a frame: the others hold the lock for a few instructions)
+        frameLockHoldSumNs_.fetch_add(ns, std::memory_order_relaxed);
+        frameLockHoldCount_.fetch_add(1, std::memory_order_relaxed);
+    }
+    std::uint64_t seen = frameLockHoldMaxNs_.load(std::memory_order_relaxed);
+    while (ns > seen && !frameLockHoldMaxNs_.compare_exchange_weak(seen, ns, std::memory_order_relaxed)) {}
+}
+
+// THE LEGACY ESTIMATOR'S FRAME, POWER -> dB, ONCE PER FRAME. out.dbBins holds the averaged linear power of frame out.seq; this replaces it with exactly what
+// SpectrumEstimator::process would have written (the same logarithm with the same floor on the same floats). Every consumer of the frame pulls it
+// through getLatestFrame, so every consumer gets dB; the first one to pull a given frame converts it and the others copy that (a one-entry cache under
+// its own mutex, never held with the frame lock), so a frame is converted once however many windows, scanners and plugins read it.
+void Pipeline::convertPowerFrameToDb(SpectrumFrame& out, bool blockPower) {
+    std::lock_guard<std::mutex> lk(dbCacheMutex_);
+    if (dbCacheSeq_ != out.seq || dbCache_.size() != out.dbBins.size()) {
+        dbCache_.resize(out.dbBins.size());
+        if (blockPower) {
+            // the block's conversion (its own floor) and then the level the application shows (see getLatestFrame): the two steps the lock-held code took
+            cascade::dsp::SpectrumBlock::powerToDb(out.dbBins.data(), dbCache_.data(), out.dbBins.size());
+            for (float& v : dbCache_) { v += kLegacyToneOffsetDb; }
+        } else {
+            cascade::dsp::SpectrumEstimator::powerToDb(out.dbBins.data(), dbCache_.data(), out.dbBins.size());
+        }
+        dbCacheSeq_ = out.seq;
+    }
+    out.dbBins = dbCache_;
 }
 
 void Pipeline::setDeemphasisUs(double us) {
@@ -2557,8 +2640,9 @@ void Pipeline::dspThreadMain() {
     cascade::core::beats::Registration beat(cascade::core::beats::kThreadDsp);
     t_dspBeat = &beat;
     t_gapMark = &dspGapLongestPacked_;
+    t_phaseTotals = dspPhaseNs_;
     struct ClearBeat {
-        ~ClearBeat() { t_dspBeat = nullptr; t_gapMark = nullptr; }
+        ~ClearBeat() { t_dspBeat = nullptr; t_gapMark = nullptr; t_phaseTotals = nullptr; }
     } clearBeat;
     try {
         dspThreadBody();
@@ -2773,6 +2857,7 @@ void Pipeline::dspThreadBody() {
 #if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
     if (g_dspFlushDenormals.load(std::memory_order_relaxed)) { _mm_setcsr(_mm_getcsr() | 0x8040u); }   // FTZ (bit 15) and DAZ (bit 6)
 #endif
+    dspBlockSamples_.store(n, std::memory_order_relaxed);
     // FROM HERE THE DSP THREAD READS THE RING: what the source cannot write from now on is a consumer that fell behind.
     dspAbsentSinceNs_.store(0, std::memory_order_relaxed);
     // THE FIRST DRAIN, once per pipeline: the engine's digest minutes start from here (never 0: 0 means "not yet").
@@ -2798,21 +2883,27 @@ void Pipeline::dspThreadBody() {
             continue;
         }
         filled = 0;
-        iqCorr_->process(acc.data(), n);   // F16: the I/Q correction (nothing at all while its mask is 0)
-        dspBeat(kPhSpectrum);
+        // THE BUSY SPAN STARTS HERE, with the I/Q correction (F16; nothing at all while its mask is 0) in its own phase: it is a per-sample cost at the
+        // INPUT rate, and charged to the ring read (as it was) it was invisible to the minute's accounting and to `cost_us` (review of the ringdrop branch).
         const auto blockBegan = std::chrono::steady_clock::now();
+        dspBeat(kPhIqCorr);
+        iqCorr_->process(acc.data(), n);
+        dspBeat(kPhSpectrum);
         if (specOn_.load(std::memory_order_acquire)) {
             // The spectrum block (setSpectrum): frames come at its own rate from these same samples and are pulled by getLatestFrame.
             specBlock_->process(acc.data(), n);
         } else {
             // wire-b begin: the GPU spectrum (pipeline_gpufft.cpp), OFF by default: 0 = not engaged, the CPU estimator runs; 1 = a GPU frame is in db; 2 = none ready this block
             const int gpuState = gpuFrame(acc.data(), n, db.data());
-            if (gpuState == 0) { estimator_.process(acc.data(), db.data()); }
+            // The CPU estimator's output is the averaged POWER: the logarithm is taken where a frame is pulled (Pipeline::getLatestFrame), not here.
+            if (gpuState == 0) { estimator_.processPower(acc.data(), db.data()); }
             // wire-b end
 
             if (gpuState != 2) {
                 std::lock_guard<std::mutex> lk(frameMutex_);
                 latest_.dbBins = db;  // vector assignment reuses capacity after the first frame
+                latestIsPower_ = (gpuState == 0);   // (a GPU frame is dB already)
+                latestIsBlockPower_ = false;
                 latest_.seq += 1;     // strictly increasing; never reset (see header)
             }
         }
