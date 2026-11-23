@@ -961,7 +961,7 @@ void testScanStates() {
         const std::vector<Hit> top = sweepSection(a);
         Access::holdPass(a);
         const Access::Sent sent = clickSent(a, top.size() > 1 ? top[1].x : 0.0f, top.size() > 1 ? top[1].y : 0.0f);
-        CHECK_EQ(sentText(sent), std::vector<std::string>{expect("SCAN_DEVICES")});  // Refresh is live again
+        CHECK_EQ(sentText(sent), std::vector<std::string>{expect("SCAN_DEVICES", 1, 0, "")});  // Refresh is live again (ival[0] = 1: the user's own Refresh, cmd::makeUserRefresh)
         Access::dropQueued(a);
         Access::releasePass(a);
     }
@@ -1396,7 +1396,8 @@ bool sameCommands(const std::vector<std::string>& got, std::vector<std::string> 
 // The four that every state of the section has at the top: the combo's opening, Refresh, the network box and - since 0.99.56 - the crystal
 // correction's switch (the Source section's "Frequency correction": a click turns it ON, with the stored value of the open radio).
 const std::vector<std::string>& topKeys() {
-    static const std::vector<std::string> keys = {expect("APP_SCAN_DEVICES_ON_OPEN"), expect("SCAN_DEVICES"),
+    // Refresh sends SCAN_DEVICES with ival[0] = 1 since integrate/0.99.113 (cmd::makeUserRefresh): the user's own Refresh is the only scan that spends a crashed driver's re-ask tries.
+    static const std::vector<std::string> keys = {expect("APP_SCAN_DEVICES_ON_OPEN"), expect("SCAN_DEVICES", 1, 0, ""),
                                                   expect("APP_SET_NETWORK_USRP_SCAN", 1, 0, ""),
                                                   expect("APP_SET_PPM", 1, 0, "")};
     return keys;
