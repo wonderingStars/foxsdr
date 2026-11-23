@@ -703,7 +703,7 @@ int main() {
         // CODE, NOT A PROMISE: a successful open() is what counts, and the mark is taken at the end of initialise.
         std::string audioSrc = stripComments(
             readFile(fs::path(CASCADE_SOURCE_DIR) / "src" / "sink" / "audio_out.cpp"));
-        audioSrc.erase(std::remove(audioSrc.begin(), audioSrc.end(), ''), audioSrc.end());
+        audioSrc.erase(std::remove(audioSrc.begin(), audioSrc.end(), '\r'), audioSrc.end());
         CHECK(audioSrc.find("if (ok) { opens_.fetch_add(1, std::memory_order_relaxed); }") != std::string::npos);
     }
 

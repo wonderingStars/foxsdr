@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 #include <thread>
 

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <complex>
 #include <cstdio>
 #include <cstdlib>
