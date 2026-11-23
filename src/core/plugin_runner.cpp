@@ -210,15 +210,24 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
         const std::string key = pluginKey(lp);
         // (A plugin with no path has the empty key, which is every path-less plugin's: it cannot be told apart, so it is not deduplicated.)
         if (!key.empty() && std::find(starting_.begin(), starting_.end(), key) != starting_.end()) { continue; }
-        markStartingLocked(lp);
+        try {
+            markStartingLocked(lp);
+        } catch (...) {
+            unmarkStartingLocked(wanted);   // (an allocation failed part-way: the marks already made come off)
+            throw;
+        }
         wanted.push_back(&lp);
     }
     if (wanted.empty()) { return; }
     // THE CREATES RUN WITH THE LOCK DROPPED (buildAndPublishLocked). The runner is empty meanwhile, which the code already calls "the truth" during destroy(), and
     // the stream clock stands still: nothing is being fed, and an instance is promised that the count is what it has received.
-    rebuilding_ = true;
+    // (A scope guard: a throw out of the build must not leave the flag set, or the stream clock never advances again. The lock is held again whenever the guard runs.)
+    struct RebuildingScope {
+        bool& flag;
+        explicit RebuildingScope(bool& f) : flag(f) { flag = true; }
+        ~RebuildingScope() { flag = false; }
+    } rebuildingScope(rebuilding_);
     buildAndPublishLocked(std::move(wanted), lock);
-    rebuilding_ = false;
 }
 
 bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
@@ -277,7 +286,14 @@ void PluginRunner::stopPlugin(const std::string& pluginKey) {
     removePluginLocked(pluginKey, lock);
 }
 
+namespace {
+std::atomic<void (*)(const LoadedPlugin&)> g_buildHook{nullptr};
+}  // namespace
+
+void PluginRunner::setBuildHookForTest(void (*hook)(const LoadedPlugin&)) { g_buildHook.store(hook, std::memory_order_relaxed); }
+
 void PluginRunner::buildPlugin(const LoadedPlugin& lp, Stage& s) {
+    if (void (*hook)(const LoadedPlugin&) = g_buildHook.load(std::memory_order_relaxed)) { hook(lp); }
     // NO LOCK IS HELD HERE AND NONE IS TAKEN, and no member of the runner is touched (freeze diagnosis P1/P6): everything lands in `s`, which nobody else can see
     // until publishLocked() appends it. A create() that takes ten seconds therefore holds up nothing but the thread that called it.
     //
@@ -603,6 +619,14 @@ void PluginRunner::markStartingLocked(const LoadedPlugin& lp) {
     statusGen_.fetch_add(1, std::memory_order_release);
 }
 
+void PluginRunner::unmarkStartingLocked(const std::vector<const LoadedPlugin*>& plugins) {
+    for (const LoadedPlugin* lp : plugins) {
+        const std::string key = pluginKey(*lp);
+        dropStartingRowLocked(key);
+        starting_.erase(std::remove(starting_.begin(), starting_.end(), key), starting_.end());
+    }
+}
+
 void PluginRunner::dropStartingRowLocked(const std::string& key) {
     // The "starting" row goes, and the rows after it move up: an instance reports through the index it was created with, so the survivors follow (as in
     // removePluginLocked).
@@ -709,7 +733,17 @@ void PluginRunner::buildAndPublishLocked(std::vector<const LoadedPlugin*> wanted
             s.key = pluginKey(*wanted[k]);
         }
         lock.unlock();
-        for (std::size_t k = 0; k < wanted.size(); ++k) { buildPlugin(*wanted[k], stages[k]); }
+        try {
+            for (std::size_t k = 0; k < wanted.size(); ++k) { buildPlugin(*wanted[k], stages[k]); }
+        } catch (...) {
+            // A throw out of the build (an allocation, the companion check): what was built so far is destroyed (a handle is never dropped without destroy()), the marks of every
+            // plugin of this round come off - a start that is still "starting" for ever is refused for ever - and the exception goes on to the caller, with the lock held again
+            // (review of fix/freezes, finding 7).
+            for (Stage& built : stages) { discardStage(built); }
+            lock.lock();
+            unmarkStartingLocked(wanted);
+            throw;
+        }
         lock.lock();
 
         std::vector<const LoadedPlugin*> again;
@@ -1778,6 +1812,10 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
     // frame.
     std::unique_lock<stall::TaggedMutex> lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) { return; }
+    // A REBUILD IS IN PROGRESS (review of fix/freezes, finding 6): its creates run with the lock dropped and the runner is empty meanwhile, so the walk below would find no image
+    // instances, take that for "every plugin has gone" and blank the pictures the window holds - for as long as the slowest create(). The pictures stand until the new set
+    // is published; the entries are then matched by name as for any change of the set.
+    if (rebuilding_) { return; }
 
     // Re-seed `out` whenever the instance set changed under it - a rescan, a
     // source switch, a plugin woken or put to sleep. Comparing the NAMES rather
@@ -1892,9 +1930,11 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
 bool PluginRunner::imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y) {
     const CurrentRadioScope radioScope(radio());
     const stall::SiteScope lockSite("press");   // (what a freeze report says this thread held the runner's lock for)
-    // TRY, NEVER WAIT, as pollImages: a press the lock is too busy for is dropped (the caller sees false) and the person presses again.
-    std::unique_lock<stall::TaggedMutex> lock(mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) { return false; }
+    // THE LOCK IS TAKEN, NOT TRIED (review of fix/freezes, finding 2). This runs on the control thread, as the engine's command for a click on a plugin's picture, and a
+    // press that found the lock busy was dropped with nothing to retry it - the person clicked and nothing happened, and the DSP thread is inside the lock nearly all of the
+    // time on a loaded PC. The control thread waits for this same lock in a dozen getters every pass; since no create() runs under it any more, it is only ever held for a block
+    // or a poll. (pollImages, called by the window every frame, keeps its try: a late picture is shown next frame.)
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     for (const ImageInstance& image : imageInstances_) {
         if (image.name == plugin && !image.failed && image.input != nullptr &&
             x < image.width && y < image.height) {

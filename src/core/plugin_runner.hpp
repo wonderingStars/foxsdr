@@ -9,7 +9,7 @@
 //   rebuild()/clear()   control thread. Creates and destroys instances.
 //   startPlugin()/stopPlugin()
 //                       control thread. Create or destroy ONE plugin's instances
-//                       under the same lock, leaving every other plugin's state and
+//                       (a create() runs with the lock DROPPED and is published under it), leaving every other plugin's state and
 //                       the stream epoch as they are (0.99.73, see below).
 //   processAudio()      DSP thread, real-time. Must not block or allocate.
 //   pullPluginAudio()   DSP thread, real-time, the same thread and the same
@@ -293,10 +293,10 @@ public:
     // against a centre older than the last tune.
     //
     // What does NOT change: the lock is still non-recursive and a plugin must still
-    // not call the host's tune service from inside create() or process() (that
-    // re-enters this lock on the thread that owns it, as it always did). Calls from
-    // destroy() are fine and unaffected: destroyInstances() drops the lock before it
-    // runs them.
+    // not call the host's tune service from inside process() (that re-enters this lock
+    // on the thread that owns it, as it always did). A call from create() or destroy()
+    // is fine: no create() runs under the lock any more (the stage is private until it is
+    // published), and destroyInstances() drops the lock before it runs destroy().
     void retune(double centreHz);
 
     // ----- The stream clock (host API level 1, CascadeStreamInfo) -----------
@@ -385,6 +385,9 @@ public:
     // here, and the status column's PLUGIN_PLAYING / audioPlayingPlugin / gap
     // figures have to be drivable. Never called by the application.
     void setPlayingForTest(const std::string& name, std::uint64_t gaps = 0, std::uint64_t gapFrames = 0);
+    // TESTS ONLY (tests/test_plugin_runner_review.cpp scans that nothing under src/ calls it): a function buildPlugin() calls first, with the plugin about to be built, so a
+    // test can make a build THROW (an allocation failing, the companion check) and show the runner is left clean. nullptr takes it away.
+    static void setBuildHookForTest(void (*hook)(const LoadedPlugin&));
 
     // ----- The plugin TRANSMIT path (CASCADE_CAP_TX_AUDIO, host API level 2) -----
     //
@@ -484,8 +487,8 @@ public:
     // and only a plugin with no entry yet starts empty.
     void pollImages(std::vector<HostImage>& out);
 
-    // GUI thread. Delivers native-pixel input only to a live image instance
-    // with a valid picture; serialized with its lifecycle and DSP callbacks.
+    // Control thread (the engine's command for a click on a plugin's picture). Delivers native-pixel input only to a live image instance
+    // with a valid picture; serialized with its lifecycle and DSP callbacks. TAKES THE LOCK (waits for it): a press is never lost to a busy lock.
     bool imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y);
 
     // GUI thread. What each loaded decoder is doing, or why it is not.
@@ -726,12 +729,14 @@ private:
     void retuneStageLocked(Stage& s);
     // NO LOCK HELD. Destroys a stage's instances that will never be published, with the plugin-call discipline destroyInstances uses.
     static void discardStage(Stage& s);
-    // Lock held. Whether a stage built for `lp` may still be published: not stopped, not dormant, not switched off, and built against the rates now in force.
+    // Lock held. Whether a stage built for `lp` may still be published: the same clear() as it was built under, not stopped, not dormant. (The rates are decided by the caller through buildEpoch_, and a plugin switched off meanwhile is the engine's pass to act on: neither is checked here.)
     bool stageStillWantedLocked(const LoadedPlugin& lp, const Stage& s) const;
     // Lock held. Removes the "starting" row of `key`, if any.
     void dropStartingRowLocked(const std::string& key);
     // Lock held. Marks `key` as starting: a row, and the key in starting_.
     void markStartingLocked(const LoadedPlugin& lp);
+    // Lock held. Takes the starting mark (row and key) off every plugin in the list.
+    void unmarkStartingLocked(const std::vector<const LoadedPlugin*>& plugins);
     // Lock held on entry and on return; DROPPED while the creates run. Every plugin in `wanted` has been marked starting. Builds each into a Stage with the lock
     // dropped, then publishes the ones still wanted (or builds again against the new rates when a rebuild() came meanwhile; discards when stopped, switched off or
     // cleared) and takes the marks off. The body rebuild() and startPlugin() share.
@@ -803,7 +808,7 @@ private:
     // The keys whose create() is running right now, outside the lock (see Stage). Under mutex_. A key here is not started a second time and is not built by a
     // rebuild(); the thread that builds it publishes it, or builds it again when the rates changed meanwhile.
     std::vector<std::string> starting_;
-    // Moves with every rebuild() and clear(): a stage built against an older one is stale.
+    // Moves with every rebuild(): a stage built against an older one is stale. (clear() does not move it: it has clearEpoch_.)
     std::uint64_t buildEpoch_ = 0;
     // Moves with every clear() (the modules are about to be unloaded): a stage built before it is destroyed, never rebuilt.
     std::uint64_t clearEpoch_ = 0;

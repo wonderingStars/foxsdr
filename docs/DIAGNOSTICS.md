@@ -5758,7 +5758,8 @@ that still says `pending` is not uploaded yet (the sweep leaves it for the next 
 **What the site does with them (read from `foxsdr-site` `crash.go`, read-only).** The decoder is `json.Unmarshal` into `CrashReport` with no `DisallowUnknownFields`; `Context` is a
 `map[string]any`; `storedFromReport` keeps at most `crashMaxContextKeys = 24` of them, SORTED BY NAME, each key clipped to 48 characters and each value to 200. Unknown context
 keys are therefore ACCEPTED AND STORED, and shown in the report page's context table; nothing refuses them. The limit is the one to watch: the application now sends 22
-context keys. A 25th would silently drop the alphabetically last (`watchdog`, then `updateChannel`...). The site reads a freeze `reason` strictly against the frame sentence
+context keys, so TWO more fit. The site keeps the first 24 by name, so the alphabetically LAST keys are the ones lost: a 25th key drops `watchdog`, a 26th drops `uptimeSec`, a 27th
+drops `updateChannel` (and a new key that itself sorts after `watchdog` is the one dropped). (Corrected in the review of fix/freezes: this paragraph named the wrong order.) The site reads a freeze `reason` strictly against the frame sentence
 (`freezeScopeOf`, `sentinel.go`): the control sentence is not recognised there and shows no frame scope, which is correct for it. What the site could add (not needed for the
 application to send these): show `watchdog`, `passPhase`, `lockWait` and `blamedPluginHow` on the report page, group by them, and recognise `freeze: the engine pass was in <phase>`.
 

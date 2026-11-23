@@ -103,6 +103,18 @@ inline bool inWordList(const char* w, const char* const* list, std::size_t n) no
 inline bool isLockName(const char* w) noexcept { return inWordList(w, kLockNames, sizeof(kLockNames) / sizeof(kLockNames[0])); }
 inline bool isLockSite(const char* w) noexcept { return inWordList(w, kLockSites, sizeof(kLockSites) / sizeof(kLockSites[0])); }
 
+// Takes a thread's entry out of the table (the thread ended, or its id is about to be reused).
+inline void forgetThreadRole(unsigned long tid) noexcept {
+    if (tid == 0) { return; }
+    for (auto& s : detail::roleTable()) {
+        unsigned long expected = tid;
+        if (s.tid.compare_exchange_strong(expected, 0, std::memory_order_relaxed)) {
+            s.role.store(0, std::memory_order_relaxed);
+            return;
+        }
+    }
+}
+
 // Called once by a thread, as it starts (or by the code that knows what a thread is). A thread already in the table has its role replaced. Full table: ignored (the
 // thread then reads as `other`).
 inline void registerThreadRole(Role role, unsigned long tid) noexcept {
@@ -121,7 +133,21 @@ inline void registerThreadRole(Role role, unsigned long tid) noexcept {
         }
     }
 }
-inline void registerThreadRole(Role role) noexcept { registerThreadRole(role, currentTid()); }
+// THE CALLING THREAD'S ENTRY GOES WHEN THE THREAD DOES (review of fix/freezes, finding 7). Every DSP thread start used to add a thread id that nothing ever removed: a long session
+// filled the 48 slots, and Windows reuses thread ids, so a thread that never registered inherited a dead thread's role (a report called some helper thread `dsp`). The
+// thread_local below clears the slot when the thread ends, so no caller has to remember to.
+namespace detail {
+struct RoleCleanup {
+    unsigned long tid = 0;
+    ~RoleCleanup() { forgetThreadRole(tid); }
+};
+}  // namespace detail
+inline void registerThreadRole(Role role) noexcept {
+    const unsigned long tid = currentTid();
+    registerThreadRole(role, tid);
+    thread_local detail::RoleCleanup cleanup;
+    cleanup.tid = tid;
+}
 
 inline Role roleOfThread(unsigned long tid) noexcept {
     if (tid == 0) { return Role::Other; }
@@ -238,7 +264,10 @@ struct LockReading {
 };
 
 namespace detail {
-constexpr std::size_t kMaxTagged = 8;
+// ROOM FOR EVERY TAGGED LOCK THE PRODUCT HAS (review of fix/freezes, finding 7: it was 8 against up to ten, and the last two were silently unregistered, so a freeze that waited
+// for them named no lock): one plugin runner per radio (the engine holds a static_assert, engine/receiver.hpp, that this is at least kMaxReceivers + 2), the radio
+// reporter's lock and the diagnostics log's.
+constexpr std::size_t kMaxTagged = 16;
 inline std::array<std::atomic<const TaggedMutex*>, kMaxTagged>& taggedTable() {
     static std::array<std::atomic<const TaggedMutex*>, kMaxTagged> t;
     return t;

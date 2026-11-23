@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -254,10 +255,62 @@ void testTaggedMutex() {
     m.unlock();
 }
 
+// ---------------------------------------------------------------- F (review of fix/freezes, finding 7)
+void testRoleTableIsPruned() {
+    std::printf("F: a thread's role entry goes when the thread ends; the table does not fill over a long session\n");
+    stall::resetRolesForTest();
+    // 200 DSP-thread starts, one after another, as a long session's source switches make them: the table has 48 slots.
+    unsigned long lastTid = 0;
+    for (int i = 0; i < 200; ++i) {
+        std::thread t([&] { stall::registerThreadRole(stall::Role::Dsp); lastTid = stall::currentTid(); });
+        t.join();
+    }
+    CHECK(stall::roleOfThread(lastTid) == stall::Role::Other);   // the ended thread's id is not still called `dsp` (a reused id would inherit it)
+    // ...and a thread that starts now still gets its role (the table is not full of dead ones).
+    stall::Role seen = stall::Role::Other;
+    std::thread late([&] { stall::registerThreadRole(stall::Role::Window); seen = stall::roleOfThread(stall::currentTid()); });
+    late.join();
+    CHECK(seen == stall::Role::Window);
+    // forty live threads at once, all gone again: the next one still registers
+    std::atomic<bool> go{false};
+    std::atomic<int> registered{0};
+    std::vector<std::thread> live;
+    for (int i = 0; i < 40; ++i) {
+        live.emplace_back([&] { stall::registerThreadRole(stall::Role::Source); ++registered; while (!go.load()) { sleepMs(1); } });
+    }
+    CHECK(waitFor([&] { return registered.load() == 40; }, 3000));
+    go = true;
+    for (std::thread& t : live) { t.join(); }
+    std::thread after([&] { stall::registerThreadRole(stall::Role::Dsp); seen = stall::roleOfThread(stall::currentTid()); });
+    after.join();
+    CHECK(seen == stall::Role::Dsp);
+}
+
+// The tagged-lock table holds every lock the product makes: one runner per radio, the reporter and the log.
+void testTaggedTableHoldsEveryLock() {
+    std::printf("G: sixteen-odd tagged locks are all registered, and a thread waiting for the last is named\n");
+    std::vector<std::unique_ptr<stall::TaggedMutex>> locks;
+    for (std::size_t i = 0; i < 8 + 2; ++i) { locks.push_back(std::make_unique<stall::TaggedMutex>("plugin-runner")); }
+    stall::TaggedMutex& last = *locks.back();
+    std::atomic<bool> got{false}, go{false};
+    std::thread holder([&] { std::lock_guard<stall::TaggedMutex> lk(last); got = true; while (!go.load()) { sleepMs(2); } });
+    CHECK(waitFor([&] { return got.load(); }, 2000));
+    std::atomic<unsigned long> waiterTid{0};
+    std::thread waiter([&] { waiterTid = stall::currentTid(); std::lock_guard<stall::TaggedMutex> lk(last); });
+    CHECK(waitFor([&] { return waiterTid.load() != 0 && last.read(waiterTid.load()).waiterFound; }, 2000));
+    stall::LockReading seen;
+    CHECK(stall::lockWaitedBy(waiterTid.load(), seen));   // found among ten live locks: the table is not full at eight
+    go = true;
+    holder.join();
+    waiter.join();
+}
+
 }  // namespace
 
 int main() {
     std::printf("test_stall_context\n");
+    testRoleTableIsPruned();
+    testTaggedTableHoldsEveryLock();
     testTaggedMutex();
     testControlWatchdog();
     testInCallBlame();
