@@ -502,9 +502,10 @@ std::mutex& heldSerialsMutex() {
 }
 // (API table, lower-cased serial) -> the object that selected it. Keyed by table
 // so a test's fake is its own world.
+// Allocated and never freed, like the other process tables of this file: a source destroyed during exit must still find it.
 std::map<std::pair<const void*, std::string>, const void*>& heldSerials() {
-    static std::map<std::pair<const void*, std::string>, const void*> m;
-    return m;
+    static auto* const m = new std::map<std::pair<const void*, std::string>, const void*>();
+    return *m;
 }
 // True when `serial` is free or already this owner's; claims it.
 bool heldSerialClaim(const abi::Api& api, const std::string& serial, const void* owner) {
@@ -542,6 +543,12 @@ bool sessionAcquire(const abi::Api& api, std::string& error, std::string* servic
     if (serviceAdvice != nullptr) { serviceAdvice->clear(); }
     if (!api.resolved) {
         error = sdrPlayApiAdvice(false, 0.0f);
+        return false;
+    }
+    // THE LOCK-FREE LATCH BEFORE THE MUTEX: a bounded Close that was abandoned is parked inside the vendor DLL
+    // HOLDING sessionMutex for good, and an open must be REFUSED, not queue behind it (review of 885ebd7e, item 2).
+    if (api.sessionLostFlag.load(std::memory_order_acquire)) {
+        error = sdrPlaySessionLostSentence();
         return false;
     }
     std::unique_lock<std::mutex> lk(api.sessionMutex);
@@ -597,8 +604,15 @@ bool sessionAcquire(const abi::Api& api, std::string& error, std::string* servic
     return true;
 }
 
+std::unique_lock<std::mutex> tryLockSession(const abi::Api& api, std::chrono::milliseconds bound);
+
 void sessionRelease(const abi::Api& api) {
-    std::lock_guard<std::mutex> lk(api.sessionMutex);
+    // In a lost session the mutex may be held for good by an abandoned worker (inside Close): wait a bounded time and
+    // leave the reference orphaned rather than hang another radio's close behind it.
+    std::unique_lock<std::mutex> lk = api.sessionLostFlag.load(std::memory_order_acquire)
+                                          ? tryLockSession(api, std::chrono::milliseconds(100))
+                                          : std::unique_lock<std::mutex>(api.sessionMutex);
+    if (!lk.owns_lock()) { return; }
     if (api.sessions <= 0) { return; }
     --api.sessions;
     if (api.sessions == 0 && api.Close != nullptr) {
@@ -626,12 +640,12 @@ void markSessionLost(const abi::Api& api, const char* why) {
     // refusal reads it without the session mutex, and it must hold from this
     // instant even if taking that mutex below has to wait behind a worker
     // parked inside sdrplay_api_Open.
-    api.sessionLostFlag.store(true, std::memory_order_release);
-    bool first = false;
+    const bool first = !api.sessionLostFlag.exchange(true, std::memory_order_acq_rel);
     {
-        std::lock_guard<std::mutex> lk(api.sessionMutex);
-        first = !api.sessionLost;
-        api.sessionLost = true;
+        // BOUNDED: an abandoned Close worker holds this mutex for good (item 2 of the review); the lock-free latch above is what
+        // every reader consults first, so the bool is only a mirror.
+        std::unique_lock<std::mutex> lk = tryLockSession(api, std::chrono::milliseconds(100));
+        if (lk.owns_lock()) { api.sessionLost = true; }
     }
     api.serviceTrouble.store(static_cast<int>(SdrPlayServiceTrouble::SessionLost),
                              std::memory_order_release);
@@ -1001,8 +1015,11 @@ const char* sdrPlayStreamStalledSentence() {
     // above.
     static_assert(SdrPlaySource::kStreamStallLimit == std::chrono::milliseconds(5000),
                   "the sentence below quotes five seconds");
+    // NotInitialised is "Device has not been selected" (API specification 3.15, sections 3.15 and 3.16), so START may fail where a fresh
+    // pick works; the order is what costs the user least. Whether the restart of FoxSDR can be skipped after a service restart is UNVERIFIED.
     return "the SDRplay service stopped delivering samples (nothing for 5 s) - press START to "
-           "try again; if it stops again, restart the SDRplay API service";
+           "try again; if that fails pick the radio again; if it still fails restart the SDRplay "
+           "API service, then FoxSDR";
 }
 
 const char* sdrPlaySessionLostSentence() {
@@ -1298,7 +1315,7 @@ bool SdrPlaySource::teardownMustSkipVendorLocked() const {
 }
 
 bool SdrPlaySource::teardownIsSuspectLocked() const {
-    return streamStalled_.load(std::memory_order_acquire);
+    return stalledThisOpen_.load(std::memory_order_acquire);
 }
 
 bool SdrPlaySource::refuseIfVendorUnreachableLocked(const char* what) {
@@ -1980,8 +1997,9 @@ bool SdrPlaySource::selectByArgsLocked(const std::string& args) {
         const std::string serial = lowerCopy(std::string(device_.SerNo, len));
         if (!heldSerialClaim(a, serial, this)) {
             a.UnlockDeviceApi();
-            setError("this SDRplay RSP is already open in another radio of this FoxSDR - close "
-                     "that radio first");
+            // Two radios sharing one RSP (RSPduo master/slave, API specification 3.15 section 1) is not supported today.
+            setError("this SDRplay RSP is already open in another radio of this FoxSDR (two radios "
+                     "cannot share one RSP) - close that radio first, or restart FoxSDR if none is open");
             return false;
         }
         heldSerial_ = serial;
@@ -2099,6 +2117,7 @@ bool SdrPlaySource::open(const std::string& args) {
     controlAbandoned_ = false;
     serviceGone_ = false;
     streamStalled_.store(false, std::memory_order_release);
+    stalledThisOpen_.store(false, std::memory_order_release);
 
     std::string error;
     std::string serviceAdvice;
@@ -2175,11 +2194,13 @@ void SdrPlaySource::closeDevice() {
     // The wider question (0.99.44): a session another radio lost is as
     // finished for this one's ReleaseDevice and Close as its own would be.
     bool unreachable = teardownMustSkipVendorLocked();
-    // THE SOFT CASE (fault B/C): the service answered ServiceNotResponding, or the
-    // stream went quiet. Release and Close are TRIED on bounded workers instead of
-    // skipped; only a call that does not return within kControlWait makes this
-    // the hard case. Skipping them left the radio selected in the service, which
+    // THE SOFT CASE (fault B/C): the stream went quiet. Release and Close are TRIED
+    // on bounded workers instead of skipped (ServiceNotResponding is the HARD case:
+    // it stays skipped); only a call that does not return within kControlWait makes
+    // this the hard case. Skipping them left the radio selected in the service, which
     // then answered "no SDRplay device is connected" to every later open.
+    // THE SOFT CASE IS "THIS OPEN HAS STALLED" (stalledThisOpen_, cleared only by open()), NOT streamStalled_, which a clean Uninit
+    // lowers before this line runs (review of 885ebd7e, item 1): a stalled radio's ReleaseDevice and Close are never made unbounded.
     const bool suspect = !unreachable && teardownIsSuspectLocked();
     if (selected_) {
         const abi::Api& a = api();
@@ -2218,8 +2239,11 @@ void SdrPlaySource::closeDevice() {
     }
     deviceParams_ = nullptr;
     device_ = abi::DeviceT{};
-    heldSerialRelease(api(), heldSerial_, this);
-    heldSerial_.clear();
+    // (not for a source that was never opened: api() would load the vendor DLL just to find nothing to release)
+    if (!heldSerial_.empty()) {
+        heldSerialRelease(api(), heldSerial_, this);
+        heldSerial_.clear();
+    }
     if (unreachable) {
         // THE SESSION IS ORPHANED, NOT RELEASED. Letting go of the last
         // reference is what calls sdrplay_api_Close, which is the third
@@ -2627,6 +2651,14 @@ bool SdrPlaySource::start() {
     // AlreadyInitialised (9)" where the one thing that helps is restarting the
     // service. The radio stays dead (faulted, so the pipeline says so) and
     // the sentence it gives is the one that says what to do.
+    // A STALL THE LAST STOP DID NOT END CLEANLY (its Uninit answered Fail): the service still holds the old stream, and Init
+    // would run with every control refused and the stall watchdog off (review of 885ebd7e, item 3). A clean Uninit lowered the flag.
+    if (streamStalled_.load(std::memory_order_acquire)) {
+        setError("the SDRplay stream stalled and could not be stopped cleanly - pick the radio again; "
+                 "if that fails, restart the SDRplay API service, then FoxSDR");
+        core::diagWarnf("source: SDRplay start refused - the stalled stream was not stopped cleanly; pick the radio again");
+        return false;
+    }
     if (vendorUnreachableLocked() || sessionIsLost(api())) {
         {
             std::lock_guard<std::mutex> ek(link_->errorMutex);
@@ -3586,10 +3618,19 @@ bool SdrPlaySource::reselectTunerLocked(abi::TunerSelectT tuner) {
         if (ch != nullptr) { savedCh = *ch; }
     }
 
+    // API specification 3.15, section 3.4: LockDeviceApi "may also be used prior to calling sdrplay_api_ReleaseDevice() if it is
+    // necessary to reselect the same device" - so the lock is taken BEFORE the release and held through SelectDevice, which leaves no
+    // window for another application to take the RSPduo in between. Unlocked on every exit.
+    const abi::ErrT lerr = a.LockDeviceApi();
+    if (lerr != abi::Success) {
+        setError("SDRplay LockDeviceApi failed: " + errText(a, lerr));
+        return false;
+    }
     const abi::ErrT rerr = a.ReleaseDevice(&device_);
     selected_ = false;
     deviceParams_ = nullptr;
     if (rerr != abi::Success) {
+        a.UnlockDeviceApi();
         rre::noteVendorCallFault(this, "sdrplay", "release", "ReleaseDevice failed: " + errText(a, rerr), false);
         setError("SDRplay ReleaseDevice failed: " + errText(a, rerr));
         return false;
@@ -3597,13 +3638,6 @@ bool SdrPlaySource::reselectTunerLocked(abi::TunerSelectT tuner) {
 
     device_.tuner = tuner;
     device_.rspDuoMode = abi::RspDuoMode_Single_Tuner;
-    // SelectDevice is bracketed by LockDeviceApi/UnlockDeviceApi everywhere else
-    // (selectByArgsLocked); this re-select did it bare (fault A, ordering).
-    const abi::ErrT lerr = a.LockDeviceApi();
-    if (lerr != abi::Success) {
-        setError("SDRplay LockDeviceApi failed: " + errText(a, lerr));
-        return false;
-    }
     const abi::ErrT serr = a.SelectDevice(&device_);
     a.UnlockDeviceApi();
     if (serr != abi::Success) {
@@ -4067,11 +4101,11 @@ void SdrPlaySource::checkForStallFromRead() {
     const std::int64_t since = (last > start) ? last : start;
     if (now - since < limit) { return; }
     if (streamStalled_.exchange(true, std::memory_order_acq_rel)) { return; }
+    stalledThisOpen_.store(true, std::memory_order_release);
 
-    // THE SAME TREATMENT AS A SERVICE THAT ANSWERED (14). Nothing of ours
-    // enters the vendor DLL for this device again (vendorUnreachableLocked),
-    // and the process's session is finished (markSessionLost): the 0.97.0
-    // RSPdx hang report is a teardown walking into exactly this service.
+    // (Until 0.99.112 a stall was treated like a service that answered 14: the
+    // session was latched and nothing of ours entered the vendor DLL again - the
+    // 0.97.0 RSPdx hang report is a teardown walking into a wedged service.)
     // FAULT B: a quiet stream is NOT proof the service is gone (the RSP1A of
     // 22 Nov answered NotInitialised to its next two controls, so it was alive).
     // The session is no longer declared lost here: the pipeline stops, the
@@ -4079,8 +4113,8 @@ void SdrPlaySource::checkForStallFromRead() {
     // lets the user's next START run Init again. Only a call that really does not
     // answer (or ServiceNotResponding) latches the session, as before.
     noteFaultOn(*link_, "stream", sdrPlayStreamStalledSentence(), /*endsWithStream=*/true);
-    core::diagWarnf("source: SDRplay stream stalled - no callback for %lld ms; the radio is "
-                    "stopped and released, press START to try again",
+    core::diagWarnf("source: SDRplay stream stalled - no callback for %lld ms; the stream is "
+                    "stopped, the radio is released on STOP or when another is picked",
                     static_cast<long long>((now - since) / 1000000));
     rre::noteStreamTrouble(this, "sdrplay", {static_cast<double>((now - since) / 1000000000), 0, 0, 0, 0, static_cast<long long>((now - since) / 1000000)});
 }

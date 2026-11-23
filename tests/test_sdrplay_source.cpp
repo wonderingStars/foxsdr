@@ -628,9 +628,9 @@ int everySetterAccepted(SdrPlaySource& src, FakeSdrPlayApi& fake, double blockHz
     CHECK(src.dabNotch() == dab);
     CHECK(src.antenna() == ant);
     // ...and what the user is shown still says what to do about it.
-    // (a stalled stream says "press START" - fault B - the other two still say restart FoxSDR)
+    // (the stalled stream's sentence is its own, and still ends "then FoxSDR"; the other two say "restart FoxSDR")
     CHECK(std::string(src.lastError()).find("restart FoxSDR") != std::string::npos ||
-          std::string(src.lastError()).find("press START") != std::string::npos);
+          std::string(src.lastError()).find(cascade::source::sdrPlayStreamStalledSentence()) != std::string::npos);
     CHECK(src.deviceDead());
     return accepted;
 }
@@ -1267,9 +1267,10 @@ void testAntennasPerModel() {
         fake.calls.clear();
         CHECK(src.setAntenna("Tuner 2"));
         CHECK(src.antenna() == "Tuner 2");
-        CHECK(fake.indexOf("ReleaseDevice") == 0);
-        // The re-select is bracketed by the API lock like every other SelectDevice (fault A ordering).
-        CHECK(fake.indexOf("LockDeviceApi") == 1);
+        // API specification 3.15 section 3.4: LockDeviceApi "may also be used prior to calling sdrplay_api_ReleaseDevice() if it is
+        // necessary to reselect the same device": Lock, Release, Select, Unlock.
+        CHECK(fake.indexOf("LockDeviceApi") == 0);
+        CHECK(fake.indexOf("ReleaseDevice") == 1);
         CHECK(fake.indexStarting("SelectDevice(tuner=2,mode=1)") == 2);
         CHECK(fake.indexOf("UnlockDeviceApi") == 3);
         CHECK(fake.indexOf("GetDeviceParams") > 2);

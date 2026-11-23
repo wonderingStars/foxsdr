@@ -269,7 +269,12 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     // that is open while the receiver is STOPPED is not delivering anything, by the user's own choice, and the
     // source thread's 5 s stall watchdog (which runs only on reads) rightly says nothing. Those minutes were counted
     // as silent streams. A stopped receiver says no stream window; the clock moves on so the next running window is its own.
-    if (samplesRead == 0 && !rx().pipeline_.running()) {
+    // (review of 885ebd7e: "running" is the seconds the pass saw the pipeline running in this minute, not the state at the close, so a silent
+    // stream the user stopped inside the minute is still said)
+    RadioRun& run = (*radioRun_)[scopedSlot()];
+    const double ranSec = run.runningSec;
+    run.runningSec = 0.0;
+    if (samplesRead == 0 && ranSec < 0.5 * std::max(1.0, now - j.lastMinuteS)) {
         j.lastMinuteS = now;
         return;
     }
@@ -449,6 +454,12 @@ void Engine::radioReportsPass() {
             rr::registerSource(rx().device_, rid);
         }
         if (hw && j.open) {
+            {
+                RadioRun& run = (*radioRun_)[scopedSlot()];
+                const double sincePass = run.lastPassS > 0.0 ? std::min(now - run.lastPassS, 5.0) : 0.0;
+                run.lastPassS = now;
+                if (rx().pipeline_.running()) { run.runningSec += std::max(0.0, sincePass); }
+            }
             if (!j.faulted && rx().pipeline_.faulted()) {
                 j.faulted = true;
                 j.faultReason = rx().pipeline_.faultMessage();

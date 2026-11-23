@@ -117,17 +117,18 @@ public:
 
     // --- what the tests configure ----------------------------------------
 
-    // THE VENDOR'S ORDERING RULES, ENFORCED (fault A/C lane, 2026-11-23). Off by
-    // default so every older test keeps its fake; when on, a call that breaks the
-    // rules answers sdrplay_api_Fail and is recorded in orderingViolations:
-    //   - SelectDevice only between LockDeviceApi and UnlockDeviceApi;
-    //   - SelectDevice of an RSP this process has already selected and not yet
-    //     released fails (the 21 Nov RSPduo log);
-    //   - ReleaseDevice of an RSP that is still Init-ed fails (Uninit first);
-    //   - Init of an RSP that is not selected fails.
-    // (Stated from SoapySDRPlay-style call order and the repo's notes on the 3.15
-    // specification; the specification PDF itself could not be fetched here.)
+    // THE VENDOR'S RULES, ENFORCED - ONLY THOSE THE SDRplay API SPECIFICATION 3.15 STATES (2026-11-23). Off by default so every older
+    // test keeps its fake; when on, a violation is recorded in orderingViolations:
+    //   - section 3.7 (SelectDevice): a selected device "is no longer available for other applications", so selecting an RSP this
+    //     process has already selected and not yet released answers sdrplay_api_Fail ("Command failed"; the 21 Nov RSPduo log);
+    //   - section 3.15 (Init): a device that has not been selected answers sdrplay_api_NotInitialised ("Device has not been selected");
+    //     section 3.16 (Uninit) says the same;
+    //   - section 3.4 (LockDeviceApi): the lock is "typically" taken before GetDevices/SelectDevice (NOT required: not enforced), and
+    //     "may also be used prior to calling sdrplay_api_ReleaseDevice() if it is necessary to reselect the same device": the fake
+    //     RECORDS whether each ReleaseDevice ran under the lock (releasedWhileLocked) so the re-select test can pin that order.
+    // Not in the specification, so not enforced: "ReleaseDevice without Uninit fails".
     bool enforceOrdering = false;
+    std::vector<bool> releasedWhileLocked;
     std::vector<std::string> orderingViolations;
     float version = 3.15f;
     abi::ErrT openResult = abi::Success;
@@ -281,6 +282,11 @@ public:
     // rather than reusing either. Modelled exactly like hangInGetDevices:
     // polled, so a caller released later can still leave, and observed
     // through flags so a test can say WHO went in.
+    // A CLOSE THAT NEVER RETURNS (review of 885ebd7e, item 2): the driver calls Close while holding the session mutex, so a hang here is
+    // the one that must not deadlock a later caller. Polled, like the others.
+    std::atomic<bool> hangInClose{false};
+    std::atomic<bool> releaseCloseHang{false};
+    std::atomic<bool> insideClose{false};
     std::atomic<bool> hangInReleaseDevice{false};
     std::atomic<bool> releaseReleaseDeviceHang{false};
     std::atomic<bool> insideReleaseDevice{false};
@@ -681,6 +687,10 @@ private:
         if (f == nullptr) { return abi::Fail; }
         f->note("Close");
         ++f->closeCount;
+        if (f->hangInClose.load()) {
+            f->insideClose.store(true);
+            while (!f->releaseCloseHang.load()) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        }
         return abi::Success;
     }
 
@@ -745,10 +755,6 @@ private:
         ++f->selectCount;
         if (f->enforceOrdering) {
             const std::string serial(d->SerNo, strnlen(d->SerNo, sizeof(d->SerNo)));
-            if (!f->apiLocked_) {
-                f->orderingViolations.push_back("SelectDevice without LockDeviceApi");
-                return abi::Fail;
-            }
             if (std::find(f->selectedSerials_.begin(), f->selectedSerials_.end(), serial) !=
                 f->selectedSerials_.end()) {
                 f->orderingViolations.push_back("SelectDevice of an RSP already selected");
@@ -777,10 +783,7 @@ private:
             f->leftReleaseDevice.store(true);
         }
         if (f->enforceOrdering) {
-            if (f->initialised) {
-                f->orderingViolations.push_back("ReleaseDevice while Init-ed (no Uninit)");
-                return abi::Fail;
-            }
+            f->releasedWhileLocked.push_back(f->apiLocked_);
             const std::string serial(d->SerNo, strnlen(d->SerNo, sizeof(d->SerNo)));
             const auto it = std::find(f->selectedSerials_.begin(), f->selectedSerials_.end(), serial);
             if (it != f->selectedSerials_.end()) { f->selectedSerials_.erase(it); }
@@ -797,6 +800,7 @@ private:
             case abi::HwVerError: return "HwVerError";
             case abi::ServiceNotResponding: return "ServiceNotResponding";
             case abi::AlreadyInitialised: return "AlreadyInitialised";
+            case abi::NotInitialised: return "NotInitialised";
             default: break;
         }
         return "Error";
@@ -824,7 +828,7 @@ private:
         f->note("Init");
         if (f->enforceOrdering && f->selectedSerials_.empty()) {
             f->orderingViolations.push_back("Init of an RSP that is not selected");
-            return abi::Fail;
+            return abi::NotInitialised;
         }
         if (f->initDelayMs.load() > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(f->initDelayMs.load()));

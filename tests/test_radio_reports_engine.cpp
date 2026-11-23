@@ -302,6 +302,8 @@ struct AppWindowTestAccess {
     static void takeQueued(AppWindow& a, bool on) { passseam::on(th::engine(a), [&] { th::engine(a).rx().iqStartQueued_ = on; }); }
     static std::string sourceError(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).rx().sourceError_; }); }
     static void startReceiver(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).startReceiver(); }); }
+    static double accSec(AppWindow& a) { double v = -1.0; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].accSec; }); return v; }
+    static void setRunningSec(AppWindow& a, double s) { passseam::on(th::engine(a), [&] { (*th::engine(a).radioRun_)[0].runningSec = s; }); }
     static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) { passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 100); }); }
 };
 
@@ -1009,6 +1011,13 @@ int main(int argc, char** argv) {
         // and is not said; the minute that follows is its own window
         Access::ageOpenRadio(app, 60.0);
         Access::minute(app, 0, 0);
+        // ...but a minute in which the receiver RAN for most of it and read nothing is a silent stream and IS counted (a user who stopped it
+        // inside the minute does not hide it); a stopped one adds nothing to the window
+        Access::minute(app, 0, 0);
+        CHECK(Access::accSec(app) == 0.0);
+        Access::setRunningSec(app, 50.0);
+        Access::minute(app, 0, 0);
+        CHECK(Access::accSec(app) >= 1.0);
         Access::ageOpenRadio(app, 60.0);
         Access::minute(app, 144000000, 0);   // a minute's samples at 2.4 MS/s
         Access::selectGenerator(app);

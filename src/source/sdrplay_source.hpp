@@ -1343,11 +1343,18 @@ private:
     bool serviceGone_ = false;
 
     // TRUE ONCE THE STREAM HAS GONE kStreamStallLimit WITHOUT A CALLBACK
-    // (0.99.36). The third half of vendorUnreachableLocked(), and ATOMIC where
-    // the other two are plain bools: it is raised by read() on the pipeline's
-    // source thread, which does not hold devMutex_ and must not wait for it.
-    // Cleared by open(), like the other two.
+    // (0.99.36). ATOMIC where the other two are plain bools: it is raised by
+    // read() on the pipeline's source thread, which does not hold devMutex_ and
+    // must not wait for it. Since fault B it is NOT part of
+    // vendorUnreachableLocked(): it refuses the controls, and a CLEAN Uninit lowers
+    // it so the next START may run (a refused Uninit leaves it up, and START is then
+    // refused). Cleared by open(), like the other two.
     std::atomic<bool> streamStalled_{false};
+    // TRUE FROM A STALL UNTIL THE NEXT open(): the teardown of THIS open makes every
+    // vendor call (Uninit, ReleaseDevice, Close) through a bounded worker. Separate
+    // from streamStalled_ because the clean Uninit lowers that one before
+    // closeDevice() decides how to release (review of 885ebd7e, item 1).
+    std::atomic<bool> stalledThisOpen_{false};
 
     // Lock-free mirrors, so per-frame GUI readouts never wait behind an API
     // call in flight.

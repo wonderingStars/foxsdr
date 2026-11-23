@@ -2094,6 +2094,10 @@ private:
         std::size_t accHigh = 0;
     };
     std::array<RadioJournalSlot, kMaxReceivers> radioJournal_;
+    // Seconds the pipeline was RUNNING in this minute (sampled by the pass), so a silent stream the user stopped inside the minute still counts.
+    // On the heap: the Engine sits on a test's stack, and growing it by this much overflowed test_radio_reports_engine (0xC00000FD).
+    struct RadioRun { double runningSec = 0.0, lastPassS = 0.0; };
+    std::unique_ptr<std::array<RadioRun, kMaxReceivers>> radioRun_ = std::make_unique<std::array<RadioRun, kMaxReceivers>>();
     bool radioEnvSent_ = false;
     std::future<cascade::core::SessionEnv> radioEnvFuture_;   // the machine is read on a worker, once
     bool radioEnvPending_ = false;

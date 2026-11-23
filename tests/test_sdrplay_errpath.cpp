@@ -145,6 +145,9 @@ void testTheTunerReselectIsBracketedByTheApiLock() {
     src.setApiForTest(&fake.table);
     CHECK(src.open(""));
     CHECK(src.setAntenna("Tuner 2"));
+    // Specification 3.4: the re-select takes the lock BEFORE ReleaseDevice (not after) and holds it through SelectDevice.
+    CHECK(fake.releasedWhileLocked.size() == 1 && fake.releasedWhileLocked[0]);
+    CHECK(fake.countStarting("UnlockDeviceApi") == fake.countStarting("LockDeviceApi"));
     std::printf("tuner re-select: violations: %s\n", violations(fake).c_str());
     CHECK(fake.orderingViolations.empty());
     CHECK(src.antenna() == "Tuner 2");
@@ -281,6 +284,219 @@ void testANumberingThatGoesBackwardsIsNotFourBillionMissingSamples() {
     src.closeDevice();
 }
 
+// --- review of 885ebd7e: every vendor call after a stall is bounded --------------------------------------------------------------------------
+
+// Runs `f` on a thread; true if it returned within `ms`. When it did not, `unhang` frees whatever it is parked in so the thread can be joined
+// (a test must never hang).
+bool finishesWithin(const std::function<void()>& f, int ms, const std::function<void()>& unhang) {
+    std::atomic<bool> done{false};
+    std::thread th([&] { f(); done.store(true); });
+    const bool ok = waitFor([&] { return done.load(); }, ms);
+    if (!ok) { unhang(); }
+    th.join();
+    return ok;
+}
+
+// Opens `a` (first RSP) and `b` (second RSP) on one fake, starts `a` and lets it stall (no service thread: nothing is ever delivered).
+struct StallRig {
+    FakeSdrPlayApi fake;
+    SdrPlaySource a, b;
+    StallRig() {
+        cascade::core::DiagLog::instance().resetForTest();
+        fake.enforceOrdering = true;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        fake.addDevice("1811003EFC", abi::kRsp1B);
+        a.setApiForTest(&fake.table);
+        b.setApiForTest(&fake.table);
+        CHECK(a.open("serial=1811003EFB"));
+        CHECK(b.open("serial=1811003EFC"));
+        a.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+        CHECK(a.start());
+        Reader reader(a);
+        CHECK(waitFor([&] { return a.faulted(); }, 3000));
+        reader.stopReading();
+    }
+};
+
+// The sentence a refused open gives for a lost session.
+void checkOpenRefusedAsLost(FakeSdrPlayApi& fake) {
+    SdrPlaySource again;
+    again.setApiForTest(&fake.table);
+    bool opened = true;
+    CHECK(finishesWithin([&] { opened = again.open(""); }, 2000, [] {}));   // refused, never queued behind a parked worker
+    CHECK(!opened);
+    CHECK(std::string(again.lastError()) == std::string(cascade::source::sdrPlaySessionLostSentence()));
+}
+
+// ITEM 1: the stall Uninit answers (clean), then ReleaseDevice hangs. The close must still return (bounded), latch the session, and not
+// block another radio close. Before the fix the clean Uninit lowered the stall flag and the release ran unbounded.
+void testAStallThenAHungReleaseDeviceIsBounded() {
+    StallRig r;
+    r.fake.hangInReleaseDevice.store(true);
+    r.a.stop();
+    CHECK(r.fake.countStarting("Uninit") == 1);
+    const bool returned = finishesWithin([&] { r.a.closeDevice(); }, 4000, [&] { r.fake.releaseReleaseDeviceHang.store(true); });
+    CHECK(returned);
+    CHECK(r.fake.table.sessionLostFlag.load());
+    CHECK(ringHas("closed without ReleaseDevice"));
+    CHECK(finishesWithin([&] { r.b.closeDevice(); }, 2000, [&] { r.fake.releaseReleaseDeviceHang.store(true); }));
+    checkOpenRefusedAsLost(r.fake);
+    r.fake.releaseReleaseDeviceHang.store(true);
+    waitFor([&] { return r.fake.leftReleaseDevice.load(); }, 2000);
+}
+
+// The stall Uninit itself hangs: abandoned (already bounded), session latched, nothing else blocks.
+void testAStallThenAHungUninitIsBounded() {
+    StallRig r;
+    r.fake.hangInUninit.store(true);
+    const bool returned = finishesWithin([&] { r.a.stop(); r.a.closeDevice(); }, 6000, [&] { r.fake.releaseUninitHang.store(true); });
+    CHECK(returned);
+    CHECK(r.fake.table.sessionLostFlag.load());
+    CHECK(r.fake.countStarting("ReleaseDevice") == 0);
+    CHECK(finishesWithin([&] { r.b.closeDevice(); }, 2000, [&] { r.fake.releaseUninitHang.store(true); }));
+    checkOpenRefusedAsLost(r.fake);
+    r.fake.releaseUninitHang.store(true);
+    waitFor([&] { return r.fake.leftUninit.load(); }, 2000);
+}
+
+// ITEM 2: the last radio closes after a stall and the session Close never returns. The worker holds the session mutex for good: the close
+// must still return, and the next open must be REFUSED with the session-lost sentence, not queue behind the mutex.
+void testAStallThenAHungCloseIsBoundedAndTheNextOpenIsRefused() {
+    FakeSdrPlayApi fake;
+    cascade::core::DiagLog::instance().resetForTest();
+    fake.enforceOrdering = true;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource a;
+    a.setApiForTest(&fake.table);
+    CHECK(a.open(""));
+    a.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    CHECK(a.start());
+    {
+        Reader reader(a);
+        CHECK(waitFor([&] { return a.faulted(); }, 3000));
+        reader.stopReading();
+    }
+    fake.hangInClose.store(true);
+    a.stop();
+    const bool returned = finishesWithin([&] { a.closeDevice(); }, 4000, [&] { fake.releaseCloseHang.store(true); });
+    CHECK(returned);
+    CHECK(fake.insideClose.load());
+    CHECK(fake.releaseCount == 1);
+    CHECK(fake.table.sessionLostFlag.load());
+    checkOpenRefusedAsLost(fake);
+    // a scan is refused too, without a vendor call and without waiting for the mutex
+    std::size_t listed = 1;
+    CHECK(finishesWithin([&] { listed = cascade::source::enumerateSdrPlayWith(fake.table).size(); }, 2000, [] {}));
+    CHECK(listed == 0);
+    fake.releaseCloseHang.store(true);
+}
+
+// ITEM 3: the stall Uninit was REFUSED (Fail): START must not run Init on a stream the service still holds. (A clean Uninit lets START run:
+// testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns.)
+void testStartAfterAStallWhoseUninitFailedIsRefused() {
+    StallRig r;
+    r.fake.uninitResult = abi::Fail;
+    r.a.stop();
+    CHECK(r.fake.countStarting("Uninit") == 1);
+    const int initsBefore = r.fake.countStarting("Init");
+    CHECK(!r.a.start());
+    CHECK(r.fake.countStarting("Init") == initsBefore);
+    CHECK(std::string(r.a.lastError()).find("pick the radio again") != std::string::npos);
+    // closing still works and releases the radio (bounded: this open stalled)
+    r.fake.uninitResult = abi::Success;
+    r.a.closeDevice();
+    CHECK(r.fake.releaseCount >= 1);
+    r.b.closeDevice();
+}
+
+// The 22 Nov shape: after the stall the service answers NotInitialised ("Device has not been selected", specification 3.16) to Uninit: that is
+// a clean stop, and the following START Init answers NotInitialised too - said, not hung, and the radio can then be closed and picked again.
+void testANotInitialisedStallIsStoppedAndStartSaysSo() {
+    StallRig r;
+    r.fake.uninitResult = abi::NotInitialised;
+    r.a.stop();
+    r.fake.initResult = abi::NotInitialised;
+    CHECK(!r.a.start());
+    CHECK(std::string(r.a.lastError()).find("NotInitialised") != std::string::npos);
+    r.fake.initResult = abi::Success;
+    r.fake.uninitResult = abi::Success;
+    r.a.closeDevice();
+    SdrPlaySource again;
+    again.setApiForTest(&r.fake.table);
+    CHECK(again.open("serial=1811003EFB"));
+    again.closeDevice();
+    r.b.closeDevice();
+}
+
+// ITEM 7: two rows racing to open the same RSP from two threads: exactly one wins, and the loser failure path leaks no claim.
+void testTwoRowsRacingForOneRspExactlyOneWins() {
+    for (int round = 0; round < 40; ++round) {
+        FakeSdrPlayApi fake;
+        fake.enforceOrdering = true;
+        fake.addDevice("1811003EFB", abi::kRsp1A);
+        SdrPlaySource x, y;
+        x.setApiForTest(&fake.table);
+        y.setApiForTest(&fake.table);
+        std::atomic<bool> go{false};
+        std::atomic<int> ready{0};
+        bool rx = false, ry = false;
+        std::thread tx([&] { ++ready; while (!go.load()) {} rx = x.open(""); });
+        std::thread ty([&] { ++ready; while (!go.load()) {} ry = y.open(""); });
+        while (ready.load() < 2) {}
+        go.store(true);
+        tx.join();
+        ty.join();
+        CHECK(rx != ry);   // exactly one
+        CHECK(fake.orderingViolations.empty());
+        SdrPlaySource& winner = rx ? x : y;
+        SdrPlaySource& loser = rx ? y : x;
+        CHECK(std::string(loser.lastError()).find("already open in another radio") != std::string::npos);
+        loser.closeDevice();    // the loser close is harmless and must not release the winner claim
+        SdrPlaySource third;
+        third.setApiForTest(&fake.table);
+        CHECK(!third.open(""));  // still held by the winner
+        winner.closeDevice();
+        CHECK(loser.open(""));   // nothing leaked: the loser itself can now have it
+        loser.closeDevice();
+        CHECK(fake.orderingViolations.empty());
+    }
+}
+
+// ITEM 7: a hand-off while a stall teardown is in flight: the new owner is refused while the old one (slow, bounded) ReleaseDevice runs, and
+// gets the radio the moment it is done - never a SelectDevice before the release.
+void testAHandOffDuringAStallTeardownWaitsForTheRelease() {
+    FakeSdrPlayApi fake;
+    cascade::core::DiagLog::instance().resetForTest();
+    fake.enforceOrdering = true;
+    fake.addDevice("1811003EFB", abi::kRsp1A);
+    SdrPlaySource a, b;
+    a.setApiForTest(&fake.table);
+    b.setApiForTest(&fake.table);
+    CHECK(a.open(""));
+    a.setStreamStallLimitForTest(std::chrono::milliseconds(300));
+    CHECK(a.start());
+    {
+        Reader reader(a);
+        CHECK(waitFor([&] { return a.faulted(); }, 3000));
+        reader.stopReading();
+    }
+    a.stop();
+    fake.hangInReleaseDevice.store(true);                 // slow, not dead: freed after 300 ms, inside the 1 s bound
+    std::thread closer([&] { a.closeDevice(); });
+    CHECK(waitFor([&] { return fake.insideReleaseDevice.load(); }, 2000));
+    bool opened = false;
+    std::thread opener([&] { opened = waitFor([&] { return b.open(""); }, 4000); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(fake.selectCount == 1);                         // the new owner has not reached SelectDevice
+    fake.releaseReleaseDeviceHang.store(true);
+    closer.join();
+    opener.join();
+    CHECK(opened);
+    CHECK(fake.orderingViolations.empty());
+    CHECK(!fake.table.sessionLostFlag.load());
+    b.closeDevice();
+}
+
 }  // namespace
 
 int main() {
@@ -292,5 +508,13 @@ int main() {
     testAQuietStreamIsTornDownCleanlyAndTheNextStartRuns();
     testADeadServiceStillLatchesTheSession();
     testANumberingThatGoesBackwardsIsNotFourBillionMissingSamples();
+    testStartAfterAStallWhoseUninitFailedIsRefused();
+    testANotInitialisedStallIsStoppedAndStartSaysSo();
+    testTwoRowsRacingForOneRspExactlyOneWins();
+    testAHandOffDuringAStallTeardownWaitsForTheRelease();
+    // The three that abandon a worker inside their fake go last; each frees it before it returns.
+    testAStallThenAHungReleaseDeviceIsBounded();
+    testAStallThenAHungUninitIsBounded();
+    testAStallThenAHungCloseIsBoundedAndTheNextOpenIsRefused();
     return testSummary("test_sdrplay_errpath");
 }
