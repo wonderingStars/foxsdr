@@ -101,11 +101,27 @@ struct UsbDeviceInfo {
     std::string serial;
     std::string description;  // the bus-reported device description, may be empty
     // WHERE THE DEVICE SITS ON THE BUS: the hub-and-port location of its USB device node (SetupAPI's location path, "PCIROOT(0)#PCI(1400)#USB(5)#USB(2)"),
-    // or, when Windows gives none, "parent:" and the instance id of the node's parent. Read-only queries, nothing is opened. Empty when neither could be
-    // read. Together with the interface path and the serial it is what lets a driver know it found the SAME radio again after it dropped off the bus (two
-    // dongles can share a serial; they cannot share a port). Never printed, never reported.
+    // or, when Windows gives none, the location information ("port:Port_#0003.Hub_#0002"), or, when it gives that none either, the parent's instance id with the
+    // device's own address on it ("parent:<id>#port3"). Every form names the PORT, never only the hub (decision S11). Read-only queries, nothing is opened. Empty
+    // when none could be read. Together with the interface path and the serial it is what lets a driver know it found the SAME radio again after it dropped off the
+    // bus (two dongles can share a serial; they cannot share a port). Never printed, never reported.
     std::string location;
 };
+
+// THE COMPOSITION OF A LOCATION from what SetupAPI can say about a device node, in order of preference (one place, so a test can feed it fake property values):
+//   1. `locationPath`  - the first of the location paths ("PCIROOT(0)#PCI(1400)#USB(5)#USB(2)");
+//   2. `locationInfo`  - the location information a USB device node carries ("Port_#0003.Hub_#0002"), written "port:" + it;
+//   3. `parentInstanceId` plus `address` - the hub's instance id and the port the device's own address names ("parent:<id>#port3"); with no address the hub alone
+//      ("parent:<id>"), which is the weakest form and the only one that does not name a port.
+// `address` is negative when the device node has none. Empty when nothing is known.
+inline std::string composeUsbLocation(const std::string& locationPath, const std::string& locationInfo, const std::string& parentInstanceId, long long address) {
+    if (!locationPath.empty()) { return locationPath; }
+    if (!locationInfo.empty()) { return "port:" + locationInfo; }
+    if (!parentInstanceId.empty()) {
+        return "parent:" + parentInstanceId + (address >= 0 ? "#port" + std::to_string(address) : std::string());
+    }
+    return std::string();
+}
 
 // Lists devices bound to WinUSB whose VID/PID appear in `ids`, in a stable
 // order (by path). Never opens anything (rule 1). An unbound device (no

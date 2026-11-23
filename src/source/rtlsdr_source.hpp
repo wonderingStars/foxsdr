@@ -94,6 +94,10 @@ inline constexpr const char* kReopenWhichSentence = "the radio dropped off USB a
 inline constexpr const char* kReopenBusySentence = "the radio stopped answering and reopening it did not help (the driver was busy)";
 // What the re-open's finder answers (as the error text, with `present` true) when more than one listed radio could be this one and none is provably it.
 inline constexpr const char* kRadioAmbiguousError = "more than one connected radio could be this one";
+// HOW LONG ONE ATTEMPT OF THE RE-OPEN MAY TAKE to bring the chip up, put the settings back and restart the stream (decision S1 of the second review): a refused tuner
+// transfer costs about 200 ms and a bench run measured a 5.0 s bring-up, so a bound below that turns a recoverable drop into a fault. Generous on purpose: the liveness
+// beat keeps the stuck-reader check quiet whatever the length, and a stop() still ends the bring-up within the one transfer in flight.
+inline constexpr int kReopenBringUpMs = 10000;
 
 // WHICH PHYSICAL RADIO A SOURCE OPENED, remembered so a re-open never guesses (decision F4 of the review). `path` is the WinUSB interface path, `location` the
 // hub-and-port of its USB node, `serial` the serial the device reported (empty when it reported none), `serialUnique` whether it was the only listed radio
@@ -270,8 +274,16 @@ public:
     void setReopenForTest(ReopenFn fn, std::function<int()> listed = {});
     // Tests only: how long the re-open waits for the radio to come back, and how often it looks (the product's 5000 ms and 250 ms).
     // `forgiveMs` (the product's 60000) is how long samples must flow after a re-open before the window's count of them is forgiven.
-    // `bringUpMs` (the product's 4000) is the overall bound of the bring-up that follows (the transfers of the whole of it, settings included).
-    void setReopenBoundsForTest(int waitMs, int pollMs, int forgiveMs = 60000, int bringUpMs = 4000);
+    // `bringUpMs` (the product's kReopenBringUpMs) is the overall bound of the bring-up that follows (the transfers of the whole of it, settings included).
+    void setReopenBoundsForTest(int waitMs, int pollMs, int forgiveMs = 60000, int bringUpMs = kReopenBringUpMs);
+    // The bound as it stands now (the product's value unless a test changed it).
+    int reopenBringUpMsForTest() const { return link_->reopenBringUpMs.load(std::memory_order_relaxed); }
+    // Tests only: called by a setter that found the radio being reopened, just before it hands its change over (decision S7's test holds a setter there until the
+    // re-open has ended, which is the instant between its two looks). Empty in the product.
+    void setBeforeDeferForTest(std::function<void()> fn);
+    // Tests only: called on every try of retakeAfterReopen's wait for the device lock, with the number of control calls then announced in controlWaiters (decision S7's
+    // test asserts the wait announces itself, so the reader stands aside). Empty in the product.
+    void setRetakeProbeForTest(std::function<void(int)> fn);
     // Tests and the bench tool only: makes the transport's handle fail the way one does after a re-enumeration (every later call answers "invalid handle"),
     // without freeing anything a thread is inside. False when the transport cannot.
     bool invalidateTransportForTest();
@@ -321,7 +333,9 @@ public:
         std::atomic<int> reopenWaitMs{5000};
         std::atomic<int> reopenPollMs{250};
         std::atomic<int> reopenForgiveAfterMs{60000};
-        std::atomic<int> reopenBringUpMs{4000};
+        std::atomic<int> reopenBringUpMs{kReopenBringUpMs};
+        std::function<void()> beforeDeferForTest;   // (see setBeforeDeferForTest; set before the reader runs, read by setters)
+        std::function<void(int)> retakeProbeForTest;   // (see setRetakeProbeForTest)
         std::atomic<int> unlockedTunes{0};   // (moved here from the source: the re-open's retune counts into it too)
         std::atomic<bool> biasTee{false};    // (likewise: the re-open may leave the bias tee off, and the readout must say so)
         // What the user last asked of the radio, kept so a re-open can put it back. Written by each setter when it succeeds (or, while a re-open runs,
@@ -332,6 +346,11 @@ public:
             int ifBandwidthHz = 0;
             int directChoice = 0;
             int ppm = 0;
+            // "WAS SET" flags (decision S6): a value changed BACK to zero (no correction, automatic bandwidth, automatic direct sampling) is a change the re-open must put on,
+            // which a test for non-zero cannot see. Set by the setters, never by the open.
+            bool ppmSet = false;
+            bool ifBandwidthSet = false;
+            bool directChoiceSet = false;
             bool biasTee = false;
             bool autoGain = false;
             bool autoGainSet = false;   // the automatic-gain mode was asked for since the open

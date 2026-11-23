@@ -8,7 +8,7 @@
 //        open plus the same setters would have sent; nothing is raised until samples flow, then `usbreopen`;
 //   U2   the device is back after a delay: the wait polls until it is listed;
 //   U3   the device is gone for good: a fault inside the wait, worded "unplugged", cause `unplugged`, the polling bounded;
-//   U4   another program took the radio in the gap: a fault at once, cause `fault`, no polling;
+//   U4   another program took the radio in the gap and kept it: a fault at the END of the wait (decision S9: not at once), cause `fault`, the polling goes on to there;
 //   U5   the chip lost its registers (the handle is fine, the endpoint is silent): only the full bring-up on the new handle makes it deliver;
 //   U6   a radio that keeps dropping off: two re-opens per window, then a fault saying so; and twelve per open when the window is forgiven;
 //   U7   a stop() inside a re-open, in each of its five phases (the handle close, the wait, the open of the new handle, the bring-up, the stream restart): the
@@ -22,7 +22,17 @@
 //   U12  a restart that loses the race for the device lock to a control call is a retry, not a fault (defect D1);
 //   U13  the outcome words: nothing is raised before samples flow; streamback / usbreopen after; streamfail / usbreopenfail when it did not work;
 //   U14  Windows error 995 is restarted like 31;
-//   U15  the issue sentences are neutral (no radio family named for a word that is not limited to it).
+//   U15  the issue sentences are neutral (no radio family named for a word that is not limited to it);
+// and the second independent review's decisions (2026-11-23, S1 to S11):
+//   U27  (S1)  the bound of one attempt's bring-up, settings and stream restart is 10000 ms, and a short bound set through the hook still ends a bring-up;
+//   U28  (S9, S2) "in use by another program" keeps the wait going to its end: gone a moment later = the radio comes back; still the answer at the end = the fault;
+//        with two same-serial dongles listed, one of them in use, the re-open does not fault at once;
+//   U29  (S3)  a stop() that lands before the re-open's first step latches the fault (and so does a start() that fails on a dead handle); picking again streams;
+//   U30  (S4)  the Failed, Absent and Mismatch exits write nothing for an abandoned reader, and a stop() that raced them is the stopped sentence;
+//   U31  (S5)  an empty USB string at the re-open is read again and is not a different radio; two different non-empty strings are;
+//   U32  (S6)  a setting changed back to ZERO during the settings rounds is applied; after three unsettled rounds one last pass applies the newest wish;
+//   U33  (S7)  a setter held through the end of a re-open reaches the chip through retakeAfterReopen, the reader standing aside for it;
+//   U34  (S10) a user's stop during a reconnect is not journalled as a radio fault; a real fault still is.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <algorithm>
@@ -109,11 +119,13 @@ struct Pool {
     std::function<void(FakeUsbDevice&)> onHand;
     std::function<void()> beforeHand;    // run on the reader's thread inside the seam, after the device is chosen and before it is returned (a CreateFile that takes time)
     std::function<std::string()> ambiguous;   // when set and it returns text: every call answers "more than one radio could be this one" with that error
+    std::function<void()> beforeAnswer;       // run on the reader's thread at the top of every call, before the answer is chosen (a finder that takes time to say no)
 };
 
 RtlSdrSource::ReopenFn seamOf(const std::shared_ptr<Pool>& p) {
     return [p](std::string& error, bool& present) -> std::unique_ptr<cascade::usb::UsbDevice> {
         const int n = ++p->calls;
+        if (p->beforeAnswer) { p->beforeAnswer(); }
         std::unique_ptr<FakeUsbDevice> f;
         {
             std::lock_guard<std::mutex> lk(p->m);
@@ -259,6 +271,24 @@ std::unique_ptr<FakeUsbDevice> dongle(const std::shared_ptr<Wire>& wire, bool va
     return f;
 }
 
+// USB strings, as GET_DESCRIPTOR returns them (length, type 3, UTF-16LE), with the device descriptor naming their indexes: the identity the re-open compares.
+std::vector<std::uint8_t> strDescriptor(const std::string& s) {
+    std::vector<std::uint8_t> out;
+    out.push_back(static_cast<std::uint8_t>(2 + 2 * s.size()));
+    out.push_back(0x03);
+    for (const char c : s) {
+        out.push_back(static_cast<std::uint8_t>(c));
+        out.push_back(0x00);
+    }
+    return out;
+}
+void withStrings(FakeUsbDevice& f, const std::string& manufacturer, const std::string& product) {
+    f.answerIn(0x06, 0x0100, 0x0000, {0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0xDA, 0x0B, 0x38, 0x28, 0x00, 0x01, 0x01, 0x02, 0x03, 0x01});
+    f.answerIn(0x06, 0x0300, 0x0000, {0x04, 0x03, 0x09, 0x04});
+    f.answerIn(0x06, 0x0301, 0x0409, strDescriptor(manufacturer));
+    f.answerIn(0x06, 0x0302, 0x0409, strDescriptor(product));
+}
+
 }  // namespace
 
 int main() {
@@ -377,7 +407,9 @@ int main() {
         o.src.stop();
     }
 
-    // U4: another program took the radio in the gap. A fault at once, a fault (not an unplug), and no further polling.
+    // U4 (changed by decision S9 of the second review: it asserted "a fault at once, no further polling"): another program took the radio in the gap and KEEPS it. The wait
+    // goes on to its end, because the other holder may be gone a moment later; the fault is made only because that is still the answer when the wait ends - a fault (not
+    // an unplug), worded with the existing "already in use by another program" sentence.
     {
         auto pool = std::make_shared<Pool>();
         pool->inUse = true;
@@ -385,7 +417,7 @@ int main() {
         openOn(o, goodFake());
         o.live->bulkQueue.push_back(payload(2048));
         o.src.setReopenForTest(seamOf(pool));
-        o.src.setReopenBoundsForTest(5000, 50);
+        o.src.setReopenBoundsForTest(600, 50);
         CHECK(o.src.start());
         CHECK(drain(o.src, 1024, 3000) >= 1024);
         const auto t0 = Clock::now();
@@ -393,10 +425,11 @@ int main() {
         CHECK(waitFor([&] { return o.src.faulted(); }, 4000));
         const long long took = msSince(t0);
         const std::string said = o.src.lastError();
-        std::printf("  taken by another program: %lld ms, %d seam calls: %s\n", took, pool->calls.load(), said.c_str());
-        CHECK(took < 1500);
-        CHECK(pool->calls.load() == 1);
+        std::printf("  taken by another program, kept: %lld ms, %d seam calls: %s\n", took, pool->calls.load(), said.c_str());
+        CHECK(took >= 550 && took < 3000);       // the end of the 600 ms wait, not the first poll
+        CHECK(pool->calls.load() >= 5);          // polled every 50 ms meanwhile
         CHECK(said.find("another program") != std::string::npos);
+        CHECK(said.find("reopening it did not help") != std::string::npos);
         CHECK(cascade::core::radioreport::closeCauseFor(true, said) == "fault");
         o.src.stop();
     }
@@ -1409,6 +1442,501 @@ int main() {
         CHECK(again.start());
         CHECK(drain(again, 1024, 3000) >= 1024);
         again.stop();
+    }
+
+    // U27 (decision S1): the bound of one attempt's bring-up, settings and stream restart is 10000 ms in the product (a refused tuner transfer costs about 200 ms and a bench
+    // run logged a 5.0 s bring-up), and the hook still sets a short bound: a source whose bounds were never touched says 10000, and one given the hook's default says the
+    // same. (U24 above is the bound at work, with a short one set through the hook.)
+    {
+        RtlSdrSource fresh;
+        CHECK(fresh.reopenBringUpMsForTest() == 10000);
+        CHECK(cascade::source::kReopenBringUpMs == 10000);
+        Opened o;
+        openOn(o, goodFake());
+        CHECK(o.src.reopenBringUpMsForTest() == 10000);
+        o.src.setReopenBoundsForTest(3000, 20, 60000, 500);
+        CHECK(o.src.reopenBringUpMsForTest() == 500);
+        o.src.setReopenBoundsForTest(3000, 20);
+        CHECK(o.src.reopenBringUpMsForTest() == 10000);
+        std::printf("  bring-up bound: %d ms by default\n", o.src.reopenBringUpMsForTest());
+    }
+
+    // U28 (decisions S9 and S2): "in use by another program" during the wait is not an instant fault. Two same-serial dongles are listed and OURS (found by its path and
+    // its port) is held by another program for the first three polls: the wait goes on, the radio is opened on the fourth, and the stream comes back. Nothing is faulted.
+    {
+        health::clearRaisedRecoveredForTest();
+        cascade::source::RadioIdentity id;
+        id.path = "path-ours";
+        id.location = "port-1";
+        id.serial = "00000001";
+        id.serialUnique = false;
+        auto mk = [](const char* path, const char* loc) {
+            cascade::usb::UsbDeviceInfo d;
+            d.path = path;
+            d.location = loc;
+            d.serial = "00000001";
+            return d;
+        };
+        const std::vector<cascade::usb::UsbDeviceInfo> both = {mk("path-ours", "port-1"), mk("path-other", "port-2")};
+        auto polls = std::make_shared<std::atomic<int>>(0);
+        auto asked = std::make_shared<std::vector<std::string>>();
+        auto askedM = std::make_shared<std::mutex>();
+        auto fn = cascade::source::makeRadioReopenFn(
+            id, [both] { return both; },
+            [polls, asked, askedM](const std::string& path, std::string& error) -> std::unique_ptr<cascade::usb::UsbDevice> {
+                {
+                    std::lock_guard<std::mutex> lk(*askedM);
+                    asked->push_back(path);
+                }
+                if (polls->fetch_add(1) < 3) {
+                    error = cascade::usb::kInUseError;
+                    return nullptr;
+                }
+                return goodFake();
+            });
+        Opened o;
+        auto f0 = goodFake();
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        o.src.setReopenForTest(fn);
+        o.src.setReopenBoundsForTest(3000, 40);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        const auto t0 = Clock::now();
+        kill(*o.live);
+        const std::size_t got = drain(o.src, 4096, 5000);
+        std::printf("  in use for three polls, then free: %zu samples, %lld ms, faulted %d, opener asked %d times\n", got, msSince(t0), o.src.faulted() ? 1 : 0, polls->load());
+        CHECK(got >= 4096);
+        CHECK(!o.src.faulted());
+        CHECK(o.src.reopenCount() == 1);
+        CHECK(polls->load() == 4);
+        {
+            std::lock_guard<std::mutex> lk(*askedM);
+            for (const std::string& a : *asked) { CHECK(a == "path-ours"); }   // never the other dongle's path
+        }
+        CHECK(waitFor([] { return raised(health::Recovered::UsbReopen); }, 2000));
+        o.src.stop();
+    }
+
+    // U29 (decision S3): the fault of a stop that lands BEFORE the re-open's first step, and of a start() that fails on a dead handle.
+    // (a) the stream restart is failing (a control write is refused, the handle is dead) and a stop() lands inside it: the reader ends with the radio latched faulted with
+    //     the stopped sentence; a following start() is refused with those words; picking the radio again streams. (Before this the reader ended with the dead handle and no
+    //     fault, and a later start() failed for good without a word.)
+    {
+        health::clearRaisedRecoveredForTest();
+        auto pool = std::make_shared<Pool>();
+        pool->fakes.push_back(goodFake());
+        auto inside = std::make_shared<std::atomic<bool>>(false);
+        auto armed = std::make_shared<std::atomic<bool>>(false);
+        Opened o;
+        auto f0 = goodFake();
+        f0->bulkQueue.push_back(payload(2048));
+        const auto counted = f0->onEndBulk;
+        auto taken = std::make_shared<std::atomic<bool>>(false);
+        f0->onEndBulk = [inside, armed, taken, counted] {
+            if (counted) { counted(); }
+            if (armed->load() && !taken->exchange(true)) {
+                inside->store(true);
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+        };
+        openOn(o, std::move(f0));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(3000, 20);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        armed->store(true);
+        kill(*o.live);                      // not "gone": the reader first tries to restart the stream, whose end-of-stream call is where the stop lands
+        CHECK(waitFor([&] { return inside->load(); }, 4000));
+        const auto t0 = Clock::now();
+        o.src.stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const std::string said = o.src.lastError();
+        std::printf("  stop before the re-open's first step: %lld ms, faulted %d, dead %d, seam calls %d: %s\n", msSince(t0), o.src.faulted() ? 1 : 0, o.src.deviceDead() ? 1 : 0, pool->calls.load(), said.c_str());
+        CHECK(o.src.faulted());
+        CHECK(o.src.deviceDead());
+        CHECK(said == cascade::source::kReopenStoppedSentence);
+        CHECK(pool->calls.load() == 0);     // the re-open never began: the stop landed before it
+        CHECK(!o.src.start());
+        CHECK(std::string(o.src.lastError()) == cascade::source::kReopenStoppedSentence);
+        RtlSdrSource again;
+        auto f1 = goodFake();
+        f1->bulkQueue.push_back(payload(2048));
+        CHECK(again.openWithTransport(std::move(f1), "fake R820T dongle"));
+        CHECK(again.start());
+        CHECK(drain(again, 1024, 3000) >= 1024);
+        again.stop();
+    }
+    // (b) a start() that fails on a dead handle latches its fault: the words are the failing step's, the radio reads as faulted and dead (so the window shows them and the
+    //     engine's re-pick opens the radio afresh), and picking again streams.
+    {
+        Opened o;
+        openOn(o, goodFake());
+        o.live->failControlAfter = o.live->controlCalls;   // the handle is dead: every control write is refused
+        CHECK(!o.src.faulted());
+        CHECK(!o.src.start());
+        const std::string said = o.src.lastError();
+        std::printf("  start() on a dead handle: faulted %d, dead %d: %s\n", o.src.faulted() ? 1 : 0, o.src.deviceDead() ? 1 : 0, said.c_str());
+        CHECK(o.src.faulted());
+        CHECK(o.src.deviceDead());
+        CHECK(said.find("would not reset its endpoint") != std::string::npos);
+        CHECK(!o.src.start());
+        CHECK(std::string(o.src.lastError()) == said);     // the fault keeps its own words
+        RtlSdrSource again;
+        auto f1 = goodFake();
+        f1->bulkQueue.push_back(payload(2048));
+        CHECK(again.openWithTransport(std::move(f1), "fake R820T dongle"));
+        CHECK(again.start());
+        CHECK(drain(again, 1024, 3000) >= 1024);
+        again.stop();
+    }
+
+    // U30 (decision S4): the Failed, Absent and Mismatch exits look at the stop and abandon state before anything is written. The finder blocks for 1500 ms and then says
+    // no (in use / not on the bus / more than one radio could be this one); the wait is 100 ms, so its end has passed when the finder answers. A stop() abandons the
+    // reader after its 1000 ms bound; the reader, when it wakes, writes NOTHING: no fault sentence over the abandonment's, no `usbreopenfail`, no log line of a failure.
+    // The same three with a stop() that wins inside the bound: the radio is latched with the stopped sentence, not with the exit's.
+    for (int variant = 0; variant < 3; ++variant) {
+        health::clearRaisedRecoveredForTest();
+        auto pool = std::make_shared<Pool>();
+        if (variant == 0) { pool->inUse = true; }
+        if (variant == 1) { pool->absentFirst = 1000000; }
+        if (variant == 2) { pool->ambiguous = [] { return std::string(cascade::source::kRadioAmbiguousError); }; }
+        auto inside = std::make_shared<std::atomic<bool>>(false);
+        auto released = std::make_shared<std::atomic<bool>>(false);
+        pool->beforeAnswer = [inside, released] {
+            inside->store(true);
+            const auto until = Clock::now() + std::chrono::milliseconds(1500);
+            while (Clock::now() < until) { std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+            released->store(true);
+        };
+        const int failedBefore = logCount("failed while reading samples");
+        Opened o;
+        auto f0 = goodFake();
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(100, 50);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        killGone(*o.live);
+        CHECK(waitFor([&] { return inside->load(); }, 4000));
+        o.src.stop();                                                   // abandons the reader inside the finder
+        CHECK(raised(health::Recovered::ReaderLeak));
+        CHECK(!released->load());
+        CHECK(waitFor([&] { return released->load(); }, 4000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));    // the reader wakes, sees the deadline passed, and takes its exit
+        const std::string said = o.src.lastError();
+        std::printf("  abandoned reader, exit %d: words \"%s\", failure lines %d\n", variant, said.c_str(), logCount("failed while reading samples") - failedBefore);
+        CHECK(said.find("would not stop") != std::string::npos);        // the abandonment's own sentence is still the one
+        CHECK(said.find("did not help") == std::string::npos);
+        CHECK(said.find("USB bus") == std::string::npos);
+        CHECK(said != cascade::source::kReopenWhichSentence);
+        CHECK(!raised(health::Recovered::UsbReopenFail));
+        CHECK(logCount("failed while reading samples") == failedBefore);
+    }
+    for (int variant = 0; variant < 3; ++variant) {
+        health::clearRaisedRecoveredForTest();
+        auto pool = std::make_shared<Pool>();
+        if (variant == 0) { pool->inUse = true; }
+        if (variant == 1) { pool->absentFirst = 1000000; }
+        if (variant == 2) { pool->ambiguous = [] { return std::string(cascade::source::kRadioAmbiguousError); }; }
+        auto inside = std::make_shared<std::atomic<bool>>(false);
+        pool->beforeAnswer = [inside] {
+            inside->store(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        };
+        Opened o;
+        auto f0 = goodFake();
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(100, 50);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        killGone(*o.live);
+        CHECK(waitFor([&] { return inside->load(); }, 4000));
+        o.src.stop();                                                   // inside the bound: the reader finishes its exit and is joined
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const std::string said = o.src.lastError();
+        std::printf("  stop racing exit %d: %s\n", variant, said.c_str());
+        CHECK(said == cascade::source::kReopenStoppedSentence);
+        CHECK(o.src.faulted());
+        CHECK(!raised(health::Recovered::UsbReopenFail));
+    }
+
+    // U31 (decision S5): an empty USB string at the re-open is not a different radio. The open read "Realtek" / "RTL2832U".
+    //   (a) the new device answers no string at all (every descriptor read fails): each is read up to three times, 100 ms apart, and the radio comes back;
+    //   (b) the new device's strings are non-empty and DIFFERENT: a different radio, the fault says so, nothing is put onto it;
+    //   (c) the open had NO strings (an empty read) and the new device has them: nothing contradicts, the radio comes back.
+    for (int variant = 0; variant < 3; ++variant) {
+        health::clearRaisedRecoveredForTest();
+        auto pool = std::make_shared<Pool>();
+        auto fresh = goodFake();
+        if (variant == 1) { withStrings(*fresh, "Somebody Else", "Another Stick"); }
+        if (variant == 2) { withStrings(*fresh, "Realtek", "RTL2832U"); }
+        FakeUsbDevice* freshPtr = fresh.get();
+        pool->fakes.push_back(std::move(fresh));
+        Opened o;
+        auto f0 = goodFake();
+        if (variant != 2) { withStrings(*f0, "Realtek", "RTL2832U"); }
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(3000, 20);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        const auto t0 = Clock::now();
+        kill(*o.live);
+        if (variant == 1) {
+            CHECK(waitFor([&] { return o.src.faulted(); }, 6000));
+            std::printf("  strings differ: %s\n", o.src.lastError());
+            CHECK(std::string(o.src.lastError()) == cascade::source::kReopenWhichSentence);
+        } else {
+            const std::size_t got = drain(o.src, 2048, 6000);
+            std::printf("  strings %s: %zu samples in %lld ms, faulted %d\n", variant == 0 ? "empty at the re-open" : "empty at the open", got, msSince(t0), o.src.faulted() ? 1 : 0);
+            CHECK(got >= 2048);
+            CHECK(!o.src.faulted());
+            CHECK(o.src.reopenCount() == 1);
+        }
+        o.src.stop();
+        if (variant == 0) {
+            int reads = 0;   // device-descriptor reads: two per bring-up (manufacturer and product), two more for each read of the strings again
+            for (const cascade::usb::FakeControl& c : freshPtr->controls) {
+                if (!c.out && c.requestType == 0x80 && c.request == 0x06 && c.value == 0x0100) { ++reads; }
+            }
+            std::printf("  descriptor reads on the new device: %d\n", reads);
+            CHECK(reads == 6);                       // the bring-up's, then the second and the third read of both strings
+        }
+    }
+
+    // U32 (decision S6). (a) A setting changed back to ZERO while the rounds run is applied, not merely acknowledged: the user's correction is 7 ppm; the round that puts
+    // it back is interrupted by a setter that makes it 0 (the hook fires inside the write of 7); the next round must write the zero. The register of the correction is 0x3f
+    // of the demodulator (data 0x8B for 7 ppm, 0x00 for none): the LAST write of it on the new device is the zero.
+    {
+        auto pool = std::make_shared<Pool>();
+        auto d1 = goodFake();
+        Opened o;
+        RtlSdrSource* srcPtr = &o.src;
+        auto fired = std::make_shared<std::atomic<bool>>(false);
+        auto ppmWrites = std::make_shared<std::vector<int>>();
+        auto ppmM = std::make_shared<std::mutex>();
+        d1->onControlOut = [srcPtr, fired, ppmWrites, ppmM](const cascade::usb::FakeControl& c) {
+            if (!(c.out && c.request == 0 && c.value == 0x3f20 && c.index == 0x0011 && !c.data.empty())) { return; }
+            {
+                std::lock_guard<std::mutex> lk(*ppmM);
+                ppmWrites->push_back(c.data[0]);
+            }
+            if (c.data[0] == 0x8B && srcPtr->reopeningForTest() && !fired->exchange(true)) { srcPtr->setFreqCorrectionPpm(0); }
+        };
+        pool->fakes.push_back(std::move(d1));
+        auto f0 = goodFake();
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        CHECK(o.src.setFreqCorrectionPpm(7));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(3000, 20);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        kill(*o.live);
+        CHECK(drain(o.src, 2048, 6000) >= 2048);
+        o.src.stop();
+        std::vector<int> seen;
+        {
+            std::lock_guard<std::mutex> lk(*ppmM);
+            seen = *ppmWrites;
+        }
+        std::string line;
+        for (const int b : seen) { line += (line.empty() ? "" : " ") + std::to_string(b); }
+        std::printf("  correction register writes on the new device (data bytes): %s\n", line.c_str());
+        CHECK(fired->load());
+        CHECK(o.src.freqCorrectionPpm() == 0);
+        int last7 = -1;
+        int last0 = -1;
+        for (std::size_t i = 0; i < seen.size(); ++i) {
+            if (seen[i] == 0x8B) { last7 = static_cast<int>(i); }
+            if (seen[i] == 0x00) { last0 = static_cast<int>(i); }
+        }
+        CHECK(last7 >= 0);          // the 7 ppm was put back in the first round
+        CHECK(last0 > last7);       // and the zero after it: the chip ends with no correction
+    }
+    // (b) after three unsettled rounds the newest wish is applied by one last pass. The tee is the witness (it is on the wire as GPO bit 0): the user's wish is ON, and every
+    // write of the tee by the re-open is answered, from the reader's own thread, by the opposite wish, three times over. The wire must end on the LAST wish (OFF); a re-open
+    // that stopped after its third round would end on the third round's ON.
+    {
+        auto wireOld = std::make_shared<Wire>();
+        auto wireNew = std::make_shared<Wire>();
+        auto pool = std::make_shared<Pool>();
+        auto d1 = dongle(wireNew, false, false);
+        Opened o;
+        RtlSdrSource* srcPtr = &o.src;
+        const auto inner = d1->onControlOut;
+        auto fires = std::make_shared<std::atomic<int>>(0);
+        auto seenOn = std::make_shared<std::atomic<bool>>(false);
+        auto lastWish = std::make_shared<std::atomic<bool>>(true);
+        d1->onControlOut = [inner, srcPtr, fires, seenOn, lastWish](const cascade::usb::FakeControl& c) {
+            if (inner) { inner(c); }
+            if (!(c.out && c.request == 0 && c.index == kSysWrite && c.value == kGpo && !c.data.empty())) { return; }
+            const bool on = (c.data[0] & 0x01) != 0;
+            if (on) { seenOn->store(true); }
+            // the bring-up's own write is an OFF before any ON; only the settings' writes (from the first ON on) are answered
+            if (seenOn->load() && srcPtr->reopeningForTest() && fires->load() < 3) {
+                fires->fetch_add(1);
+                lastWish->store(!on);
+                srcPtr->setBiasT(!on);
+            }
+        };
+        pool->fakes.push_back(std::move(d1));
+        auto f0 = dongle(wireOld, false, false);
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        CHECK(o.src.setBiasT(true));
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(5000, 50);
+        const int saidBefore = logCount("the newest one was put on in a last pass");
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        kill(*o.live);
+        CHECK(drain(o.src, 2048, 6000) >= 2048);
+        std::printf("  three unsettled rounds: %d answers, last wish %s, new device ends %s, readback %s\n", fires->load(), lastWish->load() ? "ON" : "OFF", wireNew->lastOn() ? "ON" : "OFF", o.src.biasT() ? "ON" : "OFF");
+        CHECK(fires->load() == 3);
+        CHECK(!lastWish->load());
+        CHECK(!wireNew->lastOn());                 // the newest wish is on the wire
+        CHECK(!o.src.biasT());
+        CHECK(logCount("the newest one was put on in a last pass") == saidBefore + 1);
+        CHECK(!o.src.faulted());
+        o.src.stop();
+    }
+
+    // U33 (decision S7): the branch the first lane said was missing for this branch. A setter that saw `reopening` true is HELD (by the test seam) until the re-open has ended,
+    // so its second look finds the flag down and it goes through retakeAfterReopen. The reader is at that moment reading (each bulk read holds the device lock): the setter
+    // must still get the lock and reach the chip, because it announces itself in controlWaiters like any control call. The new device's writes are those of a reference:
+    // the same settings, the stream start, and then the tune.
+    {
+        auto pool = std::make_shared<Pool>();
+        auto d1 = goodFake();
+        auto log1 = std::make_shared<std::vector<std::string>>();
+        auto log1m = std::make_shared<std::mutex>();
+        auto late = std::make_shared<std::thread>();
+        auto setterOk = std::make_shared<std::atomic<int>>(-1);
+        auto started = std::make_shared<std::atomic<bool>>(false);
+        auto held = std::make_shared<std::atomic<bool>>(false);
+        Opened o;
+        RtlSdrSource* srcPtr = &o.src;
+        d1->onControlOut = [log1, log1m, late, setterOk, started, held, srcPtr](const cascade::usb::FakeControl& c) {
+            {
+                std::lock_guard<std::mutex> lk(*log1m);
+                log1->push_back(c.text());
+            }
+            if (srcPtr->reopeningForTest() && !started->exchange(true)) {
+                *late = std::thread([srcPtr, setterOk] { setterOk->store(srcPtr->setCenterFrequencyHz(98000000.0) ? 1 : 0); });
+                // the re-open goes no further until the setter is inside its hold (it has seen `reopening` and is about to hand its change over): the race is then not one
+                const auto until = Clock::now() + std::chrono::milliseconds(5000);
+                while (!held->load() && Clock::now() < until) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+            }
+        };
+        pool->fakes.push_back(std::move(d1));
+        auto f0 = goodFake();
+        f0->bulkQueue.push_back(payload(2048));
+        openOn(o, std::move(f0));
+        CHECK(o.src.setCenterFrequencyHz(433920000.0));
+        auto maxWaiters = std::make_shared<std::atomic<int>>(0);
+        o.src.setRetakeProbeForTest([maxWaiters](int waiters) {
+            int seen = maxWaiters->load();
+            while (waiters > seen && !maxWaiters->compare_exchange_weak(seen, waiters)) {}
+        });
+        o.src.setBeforeDeferForTest([srcPtr, held] {
+            held->store(true);
+            const auto until = Clock::now() + std::chrono::milliseconds(8000);
+            while (srcPtr->reopeningForTest() && Clock::now() < until) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        });
+        o.src.setReopenForTest(seamOf(pool));
+        o.src.setReopenBoundsForTest(3000, 20);
+        CHECK(o.src.start());
+        CHECK(drain(o.src, 1024, 3000) >= 1024);
+        kill(*o.live);
+        CHECK(waitFor([&] { return started->load(); }, 6000));
+        CHECK(waitFor([&] { return setterOk->load() >= 0; }, 8000));
+        late->join();
+        CHECK(drain(o.src, 1024, 4000) >= 1024);
+        std::printf("  setter held through the end of the re-open: held %d, answered %d, waiters announced %d, centre %.0f Hz, faulted %d\n", held->load() ? 1 : 0, setterOk->load(), maxWaiters->load(), o.src.centerFrequencyHz(), o.src.faulted() ? 1 : 0);
+        CHECK(held->load());
+        CHECK(maxWaiters->load() >= 1);         // the wait for the device lock announced itself, so the reader stood aside for it
+        CHECK(setterOk->load() == 1);
+        CHECK(o.src.centerFrequencyHz() == 98000000.0);
+        o.src.stop();
+        std::vector<std::string> have;
+        {
+            std::lock_guard<std::mutex> lk(*log1m);
+            have = *log1;
+        }
+        RtlSdrSource ref;
+        auto rf = std::make_unique<FakeUsbDevice>();
+        dressAsR820T(*rf);
+        FakeUsbDevice* refLive = rf.get();
+        CHECK(ref.openWithTransport(std::move(rf), "fake R820T dongle"));
+        CHECK(ref.setCenterFrequencyHz(433920000.0));
+        CHECK(ref.start());
+        CHECK(ref.setCenterFrequencyHz(98000000.0));
+        const std::vector<std::string> want = writeTexts(*refLive);
+        ref.stop();
+        CHECK(!want.empty());
+        CHECK(have.size() >= want.size());
+        for (std::size_t i = 0; i < want.size() && i < have.size(); ++i) {
+            if (want[i] != have[i]) { std::printf("  FIRST DIFFERENCE at write %zu: want %s, have %s\n", i, want[i].c_str(), have[i].c_str()); }
+            CHECK(want[i] == have[i]);
+            if (want[i] != have[i]) { break; }
+        }
+    }
+
+    // U34 (decision S10): a user's stop during a reconnect is not a radio fault in the journal. The radio is registered as the engine registers it; stop() lands in the wait.
+    // The driver says nothing to the journal (takeCloseReported stays false: the engine writes its own close event, with the cause of a user's stop) while the sentence on
+    // screen is the same. A radio that really gave up (it never comes back) still says its ending.
+    {
+        namespace rr = cascade::core::radioreport;
+        const rr::RadioIdentity rid = rr::identify("rtlsdr", "serial=00000001");
+        {
+            auto pool = std::make_shared<Pool>();
+            pool->absentFirst = 1000000;
+            Opened o;
+            auto f0 = goodFake();
+            f0->bulkQueue.push_back(payload(2048));
+            openOn(o, std::move(f0));
+            rr::registerSource(&o.src, rid);
+            o.src.setReopenForTest(seamOf(pool));
+            o.src.setReopenBoundsForTest(5000, 100);
+            CHECK(o.src.start());
+            CHECK(drain(o.src, 1024, 3000) >= 1024);
+            killGone(*o.live);
+            CHECK(waitFor([&] { return pool->calls.load() >= 1; }, 4000));
+            o.src.stop();
+            const bool said = rr::takeCloseReported(rid.key);
+            std::printf("  user stop in the reconnect: words \"%s\", driver said the close: %d\n", o.src.lastError(), said ? 1 : 0);
+            CHECK(std::string(o.src.lastError()) == cascade::source::kReopenStoppedSentence);
+            CHECK(o.src.faulted());
+            CHECK(!said);
+            rr::forgetRadio(rid.key);
+        }
+        {
+            auto pool = std::make_shared<Pool>();
+            pool->absentFirst = 1000000;
+            Opened o;
+            auto f0 = goodFake();
+            f0->bulkQueue.push_back(payload(2048));
+            openOn(o, std::move(f0));
+            rr::registerSource(&o.src, rid);
+            o.src.setReopenForTest(seamOf(pool));
+            o.src.setReopenBoundsForTest(300, 50);
+            CHECK(o.src.start());
+            CHECK(drain(o.src, 1024, 3000) >= 1024);
+            killGone(*o.live);
+            CHECK(waitFor([&] { return o.src.faulted(); }, 4000));
+            const bool said = waitFor([&] { return rr::takeCloseReported(rid.key); }, 2000);   // the fault is latched first, the journal's event a moment after
+            std::printf("  a radio that never came back: driver said the close: %d\n", said ? 1 : 0);
+            CHECK(said);
+            o.src.stop();
+            rr::forgetRadio(rid.key);
+        }
     }
 
     return testSummary("test_rtlsdr_reopen");

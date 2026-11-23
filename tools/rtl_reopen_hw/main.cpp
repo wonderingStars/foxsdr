@@ -56,6 +56,8 @@ int main() {
         std::printf("no RTL-SDR bound to WinUSB\n");
         return 2;
     }
+    // THE LOCATION the driver computes for each listed radio (decision S11: it must name the PORT, not only the hub). Read-only; it contains no serial, and is printed as is.
+    for (const cascade::usb::UsbDeviceInfo& d : cascade::usb::enumerateWinUsb(cascade::source::rtlSdrUsbIds())) { std::printf("location of a listed radio: \"%s\"\n", d.location.c_str()); }
     RtlSdrSource src;
     if (!src.open(found[0].args)) {
         std::printf("the radio would not open: %s\n", src.lastError());

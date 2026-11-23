@@ -14,7 +14,10 @@
 //   L5  nothing listed: absent;
 //   L6  another dongle (another serial) on our port: not ours;
 //   L7  a dongle with no serial that moved port: absent (its path is its only identity);
-//   L8  the interface path changed with a re-enumeration but the port is the same: found by location.
+//   L8  the interface path changed with a re-enumeration but the port is the same: found by location;
+//   L9  (decision S2 of the second review) two dongles that drop together and come back holding EACH OTHER's interface paths are not swapped: a path match whose
+//       location contradicts the remembered one is not accepted; an unknown location on either side lets the path stand;
+//   L10 (decision S11) the location is composed down to the PORT from what SetupAPI says, in order: location paths, location information, parent id plus address.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cctype>
@@ -184,6 +187,58 @@ int main() {
         where.clear();
         CHECK(locateRadio(found, ident(kPathA, kPort1, "00000001", false), where) == RadioLocate::Found);
         CHECK(where == kPathB);
+    }
+
+    // L9 (decision S2): the interface path of a dongle with a serial follows the SERIAL, not the port, and Windows lists two devices that say one serial as one
+    // serial-named instance and one generated one (an empty serial). After both drop together the serial-named instance may be on the OTHER dongle: the path A
+    // remembers now belongs to B's port. Each window must find its OWN dongle, by the location, and neither may take the other's.
+    {
+        const std::vector<UsbDeviceInfo> found = {dev(kPathA, kPort2, "00000001"), dev(kPathB, kPort1, "")};
+        where.clear();
+        CHECK(locateRadio(found, ident(kPathA, kPort1, "00000001", true), where) == RadioLocate::Found);   // A sat on port 1
+        CHECK(where == kPathB);
+        where.clear();
+        CHECK(locateRadio(found, ident(kPathB, kPort2, "", false), where) == RadioLocate::Found);          // B sat on port 2
+        CHECK(where == kPathA);
+        // the path alone is not enough when the location says it is the other dongle, and nothing else matches: not found by the path
+        const std::vector<UsbDeviceInfo> onlyOther = {dev(kPathA, kPort2, "00000001")};
+        where = "untouched";
+        CHECK(locateRadio(onlyOther, ident(kPathA, kPort1, "", false), where) == RadioLocate::Absent);
+        CHECK(where == "untouched");
+        // an unknown location on either side proves nothing: the path stands
+        where.clear();
+        CHECK(locateRadio(onlyOther, ident(kPathA, "", "", false), where) == RadioLocate::Found);
+        CHECK(where == kPathA);
+        const std::vector<UsbDeviceInfo> noLocation = {dev(kPathA, "", "")};
+        where.clear();
+        CHECK(locateRadio(noLocation, ident(kPathA, kPort1, "", false), where) == RadioLocate::Found);
+        CHECK(where == kPathA);
+        // a dongle with a unique serial the user moved to another port in the gap is still found, by the serial
+        const std::vector<UsbDeviceInfo> moved = {dev(kPathA, kPort3, "00000001")};
+        where.clear();
+        CHECK(locateRadio(moved, ident(kPathA, kPort1, "00000001", true), where) == RadioLocate::Found);
+        CHECK(where == kPathA);
+    }
+
+    // L10 (decision S11): the composition of a location, with fake property values.
+    {
+        using cascade::usb::composeUsbLocation;
+        // location paths win over everything
+        CHECK(composeUsbLocation("PCIROOT(0)#PCI(1400)#USB(5)#USB(2)", "Port_#0003.Hub_#0002", "USB/ROOT_HUB30/4&1&0", 3) == "PCIROOT(0)#PCI(1400)#USB(5)#USB(2)");
+        // else the location information, which names port and hub
+        CHECK(composeUsbLocation("", "Port_#0003.Hub_#0002", "USB/ROOT_HUB30/4&1&0", 3) == "port:Port_#0003.Hub_#0002");
+        // else the parent AND the address: two dongles on one hub get different locations (the old composition gave them one string)
+        const std::string one = composeUsbLocation("", "", "USB/VID_05E3&PID_0610/5&2A&0&2", 1);
+        const std::string two = composeUsbLocation("", "", "USB/VID_05E3&PID_0610/5&2A&0&2", 2);
+        CHECK(one == "parent:USB/VID_05E3&PID_0610/5&2A&0&2#port1");
+        CHECK(one != two);
+        // address zero is a port too
+        CHECK(composeUsbLocation("", "", "H", 0) == "parent:H#port0");
+        // with no address the hub alone is all there is (the weakest form)
+        CHECK(composeUsbLocation("", "", "H", -1) == "parent:H");
+        // nothing known: empty
+        CHECK(composeUsbLocation("", "", "", -1).empty());
+        CHECK(composeUsbLocation("", "", "", 5).empty());
     }
 
     return testSummary("test_rtlsdr_locate");

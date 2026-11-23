@@ -192,24 +192,48 @@ DEVINST usbDeviceNodeOf(DEVINST inst) {
     return inst;
 }
 
-// WHERE A USB DEVICE NODE SITS: its first SetupAPI location path (hub and port, from the root controller down), else the instance id of its parent. Both
-// are read-only queries on the configuration manager; nothing is opened and nothing needs elevation. Empty when neither can be read.
+// WHERE A USB DEVICE NODE SITS, named down to the PORT (decision S11): its first SetupAPI location path (hub and port, from the root controller down); else its
+// location information (SPDRP_LOCATION_INFORMATION, "Port_#0003.Hub_#0002"); else the instance id of its parent together with its own address (SPDRP_ADDRESS, the
+// port number on that hub). All read-only queries on the configuration manager; nothing is opened and nothing needs elevation. The composition itself is
+// composeUsbLocation (usb_device.hpp), which the tests feed fake values. Empty when nothing can be read.
 std::string usbLocationOf(DEVINST devNode) {
+    std::string path;
     DEVPROPTYPE type = 0;
     ULONG size = 0;
     if (::CM_Get_DevNode_PropertyW(devNode, &DEVPKEY_Device_LocationPaths, &type, nullptr, &size, 0) == CR_BUFFER_SMALL && size > 0) {
         std::vector<BYTE> buf(size + sizeof(wchar_t), 0);
         if (::CM_Get_DevNode_PropertyW(devNode, &DEVPKEY_Device_LocationPaths, &type, buf.data(), &size, 0) == CR_SUCCESS && type == DEVPROP_TYPE_STRING_LIST) {
             const auto* p = reinterpret_cast<const wchar_t*>(buf.data());
-            if (*p != L'\0') { return narrow(p); }
+            if (*p != L'\0') { path = narrow(p); }
         }
     }
+    if (!path.empty()) { return composeUsbLocation(path, std::string(), std::string(), -1); }
+    std::string info;
+    {
+        ULONG len = 0;
+        ULONG regType = 0;
+        if (::CM_Get_DevNode_Registry_PropertyW(devNode, CM_DRP_LOCATION_INFORMATION, &regType, nullptr, &len, 0) == CR_BUFFER_SMALL && len > 0) {
+            std::vector<BYTE> buf(len + sizeof(wchar_t), 0);
+            if (::CM_Get_DevNode_Registry_PropertyW(devNode, CM_DRP_LOCATION_INFORMATION, &regType, buf.data(), &len, 0) == CR_SUCCESS && regType == REG_SZ) {
+                info = narrow(reinterpret_cast<const wchar_t*>(buf.data()));
+            }
+        }
+    }
+    if (!info.empty()) { return composeUsbLocation(std::string(), info, std::string(), -1); }
+    long long address = -1;
+    {
+        DWORD value = 0;
+        ULONG len = sizeof(value);
+        ULONG regType = 0;
+        if (::CM_Get_DevNode_Registry_PropertyW(devNode, CM_DRP_ADDRESS, &regType, &value, &len, 0) == CR_SUCCESS && regType == REG_DWORD) { address = static_cast<long long>(value); }
+    }
+    std::string parentId;
     DEVINST parent = 0;
     if (::CM_Get_Parent(&parent, devNode, 0) == CR_SUCCESS) {
         const std::wstring id = instanceIdOf(parent);
-        if (!id.empty()) { return "parent:" + narrow(id.c_str()); }
+        if (!id.empty()) { parentId = narrow(id.c_str()); }
     }
-    return std::string();
+    return composeUsbLocation(std::string(), std::string(), parentId, address);
 }
 
 // The interface GUIDs this devnode's driver declared for itself, read from
