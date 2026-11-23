@@ -4897,8 +4897,13 @@ void Engine::applyPluginPreset(const cascade::core::LoadedPlugin& p,
     // the decoder will say so itself rather than the host guessing.
     if (ps.sampleRateHz > 0.0 && rx().device_ != nullptr &&
         rx().pipeline_.activeSource().sampleRateHz() != ps.sampleRateHz) {
-        const cascade::gui::RateSetOutcome set =
-            cascade::gui::applySourceRate(*rx().device_, ps.sampleRateHz, rx().sourceError_, /*explicitRequest=*/true);
+        // A RATE CHANGE ON A LIVE STREAM stops and restarts it (bounded driver steps: the lock wait and the vendor calls of kStopWaits), so it is judged in the Stop phase (must-fix 4b).
+        const cascade::gui::RateSetOutcome set = [&] {
+            const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
+            cascade::gui::RateSetOutcome o = cascade::gui::applySourceRate(*rx().device_, ps.sampleRateHz, rx().sourceError_, /*explicitRequest=*/true);
+            controlWatchdog_.heartbeat();
+            return o;
+        }();
         if (set.ok) {
             // A rate the driver COERCED is said (the refusal stays advisory,
             // as above).
@@ -6523,6 +6528,9 @@ void Engine::stopReceiver(const char* who) {
     // receiver starves nobody, and counting it would hide a real starved
     // callback. This is the pass's thread, the one that closes minutes.
     if (running) { ++rx().receiverStops_; }
+    // THE LAST THING THE STOP DOES, INSIDE THE PHASE: the control thread beats, so a watchdog poll that lands between the end of this scope (which puts the 5 s threshold back) and the next
+    // beat at the top of the loop sees a fresh heartbeat, not a pass that has been stopped for 10 s (review of fix/freezes, must-fix 4a).
+    controlWatchdog_.heartbeat();
 }
 
 void Engine::endTakesOnFault() {
@@ -6536,11 +6544,15 @@ void Engine::endTakesOnFault() {
 }
 
 void Engine::installSource(std::unique_ptr<cascade::source::IqSource> src) {
+    // A SOURCE SWITCH STOPS THE OLD SOURCE THE WAY A STOP DOES (Pipeline::setSource: the same bounded quiesce of the source thread, the old source's own stop): the same bounded waits, so the
+    // same phase and threshold as stopReceiver (core/stall_context.hpp kStopWaits), and a beat at the end (review of fix/freezes, must-fix 4b).
+    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
     // BEFORE the swap: setSource keeps the DSP thread running across it, so
     // a take ended afterwards would already hold the first blocks of the new
     // source.
     endTakes(true, false, "the source changed", false);
     rx().pipeline_.setSource(std::move(src));
+    controlWatchdog_.heartbeat();
 }
 
 bool Engine::startAudioRecording() {
@@ -8600,8 +8612,13 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // The refusal's reason, or a coercion's, lands on the line; the
             // Rate combo follows the READBACK.
             rre::RefusalWatch rateWatch;
-            const cascade::gui::RateSetOutcome set =
-                cascade::gui::applySourceRate(*rx().device_, c.num[0], rx().sourceError_);
+            // A RATE CHANGE ON A LIVE STREAM stops and restarts it (bounded driver steps: the lock wait and the vendor calls of kStopWaits), so it is judged in the Stop phase (must-fix 4b).
+            const cascade::gui::RateSetOutcome set = [&] {
+                const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
+                cascade::gui::RateSetOutcome o = cascade::gui::applySourceRate(*rx().device_, c.num[0], rx().sourceError_);
+                controlWatchdog_.heartbeat();
+                return o;
+            }();
             rx().sourceError_ = set.sourceError;
             rateWatch.noteRefusalIf(!set.ok, rx().device_, rx().sourceKind_.c_str(), rre::Control::Rate, set.sourceError);   // a refusal the driver did not say itself
             if (!set.ok) { return refuse(FOXAPI_FAILED, "the radio refused the rate"); }

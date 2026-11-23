@@ -186,7 +186,7 @@ enum class PassPhase : std::uint8_t {
     Macros,
     Wire,
     Smeter,
-    Stop,       // the pass is performing a receiver stop (a stop command, a source switch, a radio close, a rate change): a made of BOUNDED waits, judged by kStopThresholdMs
+    Stop,       // the pass is performing a receiver stop, a source switch, a sample-rate change on a live stream or a radio's removal (Engine::stopReceiver, installSource, the two applySourceRate calls on the pass, removeReceiverSlot): waits that are each BOUNDED, judged by kStopThresholdMs
     Count
 };
 
@@ -245,10 +245,34 @@ constexpr unsigned stopBoundedWaitsMs() {
     for (const StopWait& w : kStopWaits) { s += w.ms; }
     return s;
 }
+// One row's milliseconds by its constant's name (0 when there is no such row): the sums below are built from the NAMED rows, never typed, so a branch whose bound differs (kRestartGiveBack is 1500 on
+// integration/0.99.113 and 3000 here) changes the row and every figure below follows it.
+constexpr bool sameName(const char* a, const char* b) {
+    while (*a != '\0' && *a == *b) { ++a; ++b; }
+    return *a == *b;
+}
+constexpr unsigned stopWaitMs(const char* name) {
+    for (const StopWait& w : kStopWaits) {
+        if (sameName(w.name, name)) { return w.ms; }
+    }
+    return 0;
+}
+// WHAT RUNS IN THE STOP PHASE AND ITS WORST SUM OF THE ROWS (traced from the code, review of fix/freezes must-fix 4b; figures: this branch, then with kRestartGiveBack 1500):
+//   a stop (RUN 0)                  the four rows                                                                   9000 / 7500  (= stopBoundedWaitsMs())
+//   a source switch (installSource) the old source's stop and the source thread's join: the same four rows         9000 / 7500
+//   a sample-rate change, live      the device lock wait, the stream's deactivate and its activate (and a second activate after a rejected rate):
+//                                   kControlLockWait + 3 x kVendorCallWait                                          6000 / 6000  (inside the stop's sum, which is why it shares the row set)
+//   a radio's removal               the stop above, then the pipeline's destruction closes the device: kControlLockWait + kRestartGiveBack + kVendorCallWait
+//                                                                                                                  15000 / 12000
+// Every one of them, plus the reserve, must fit under kStopThresholdMs, and the compiler checks it for whatever the rows say.
+constexpr unsigned kRateChangeWorstMs() { return stopWaitMs("kControlLockWait") + 3u * stopWaitMs("kVendorCallWait"); }
+constexpr unsigned kRemovalWorstMs() { return stopBoundedWaitsMs() + stopWaitMs("kControlLockWait") + stopWaitMs("kRestartGiveBack") + stopWaitMs("kVendorCallWait"); }
 // What the rest of a stop costs: the DSP join, the recorders' flush, the driver's native close - milliseconds in a healthy run, none with a bound of its own named here.
 inline constexpr unsigned kStopReserveMs = 1000;
 // The control watchdog's threshold while the pass is in PassPhase::Stop: twice the worst legitimate stop. Outside that phase the threshold is the watchdog's own (5000 ms).
 inline constexpr unsigned kStopThresholdMs = 2u * (stopBoundedWaitsMs() + kStopReserveMs);
+static_assert(kRemovalWorstMs() + kStopReserveMs < kStopThresholdMs, "a radio's removal must fit under the Stop phase's threshold");
+static_assert(kRateChangeWorstMs() + kStopReserveMs < kStopThresholdMs, "a rate change must fit under the Stop phase's threshold");
 
 inline std::atomic<std::uint8_t>& passPhaseCell() noexcept {
     static std::atomic<std::uint8_t> cell{0};
