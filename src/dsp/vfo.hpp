@@ -137,7 +137,7 @@ private:
     unsigned decimFactor_;
     double bandwidth_;  // after clamping
     double offset_ = 0.0;
-    FastNco nco_;   // (the receive oscillator: dsp/nco_fast.hpp; Nco itself is the transmit side's and is unchanged)
+    FastNco nco_;   // (the receive oscillator: dsp/nco_fast.hpp. The transmit modulator does not use Nco at all (it keeps its own phase and calls the maths library itself) and nothing on a transmit path includes nco_fast.hpp; FastNco is limited to this VFO and the signal generator because that is where the per-sample cost was; Nco is unchanged)
     // The channel filter, first stage first. One entry is the classic single
     // windowed sinc at the input rate; several are a cascade whose decimations
     // multiply to decimFactor_ and whose LAST stage is the channel filter
