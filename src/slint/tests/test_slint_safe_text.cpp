@@ -88,7 +88,7 @@ unsigned long runRawCapturingStderr(const std::string& stderrFile, const char* b
 
 // A REAL Slint panic, end to end: the child's real stderr, through the real tail builder the crash report uses.
 void testRealPanicInReportTail() {
-    std::printf("  a real Slint panic: its message and location survive into the report's stderr tail, with no path or user name\n");
+    std::printf("  a real Slint panic: its message and line:column survive into the report's stderr tail, with no path or user name\n");
     namespace fs = std::filesystem;
     const char* tmp = std::getenv("TEMP");
     const fs::path dir = (tmp != nullptr && *tmp != '\0' ? fs::path(tmp) : fs::path(".")) / ("foxsdr-safe-text-panic-" + std::to_string(::GetCurrentProcessId()));
@@ -111,9 +111,10 @@ void testRealPanicInReportTail() {
         CHECK(code != 0);
         CHECK(!tail.empty() && tail.size() <= cascade::core::kStderrTailMaxLines);
         CHECK(all.find("panicked at") != std::string::npos);
-        const std::size_t loc = all.find("string.rs:");   // the location of Rust's str::from_utf8().unwrap() call inside this Slint build
+        const std::size_t loc = all.find("panicked at <path>:");   // the position of Rust's str::from_utf8().unwrap() call inside this Slint build; its file name is never sent
         CHECK(loc != std::string::npos);
-        if (loc != std::string::npos) { CHECK(std::isdigit(static_cast<unsigned char>(all[loc + 10])) != 0); }
+        if (loc != std::string::npos) { CHECK(std::isdigit(static_cast<unsigned char>(all[loc + 19])) != 0); }
+        CHECK(all.find(".rs") == std::string::npos);
         CHECK(all.find("unwrap()") != std::string::npos);
         CHECK(all.find("Utf8Error") != std::string::npos);
         CHECK(all.find(":\\") == std::string::npos);    // no drive-letter path

@@ -1541,17 +1541,13 @@ std::string stderrFileName(unsigned long processId) {
 }
 
 std::string keepPanicLocations(const std::string& line) {
-    // A RUST PANIC NAMES THE LINE THAT PANICKED: "thread 'main' panicked at internal\core\string.rs:581:85:". That is the one
-    // fact that decides a crash group (0.99.110's Option::unwrap report lost it to the path scrub), and it is a source location
-    // in the library, not the user's. So a token that ends ".rs:<line>:<column>" is cut back to its last TWO path components
-    // plus the position when the path is the toolchain's or the library's own (relative, or through .cargo / registry / rustc),
-    // and to the file name alone otherwise (an absolute path may run through a user's folders). Separators are kept as found.
+    // A RUST PANIC NAMES THE LINE THAT PANICKED: "thread 'main' panicked at internal\core\string.rs:581:85:". The position decides a crash
+    // group (0.99.110's Option::unwrap report lost it to the path scrub), but the FILE NAME is deliberately not sent: a crash report carries
+    // no file names and no file paths (the published privacy page says so), and a path may run through a user's folders. So the whole
+    // path-and-file token that ends ".rs:<line>:<column>" becomes the literal "<path>" and ":<line>:<column>" stays. The line and column plus
+    // the panic message identify the site for the Slint version that is bundled. A ".rs" without both numbers is left as found.
     static const auto pathChar = [](char c) {
         return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' || c == '.' || c == '-' || c == '\\' || c == '/' || c == ':';
-    };
-    static const auto lower = [](std::string s) {
-        for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
-        return s;
     };
     std::string out;
     std::size_t i = 0;
@@ -1567,19 +1563,9 @@ std::string keepPanicLocations(const std::string& line) {
         if (p == colStart) { out.append(line, i, dot + 4 - i); i = dot + 4; continue; }
         std::size_t k = dot;
         while (k > i && pathChar(line[k - 1])) { --k; }
-        const std::string path = line.substr(k, dot + 3 - k);
-        // component starts: after each separator
-        std::vector<std::size_t> starts{0};
-        for (std::size_t q = 0; q < path.size(); ++q) {
-            if (path[q] == '\\' || path[q] == '/') { starts.push_back(q + 1); }
-        }
-        const std::string low = lower(path);
-        const bool absolute = (path.size() >= 2 && path[1] == ':') || (!path.empty() && (path[0] == '\\' || path[0] == '/'));
-        const bool library = !absolute || low.find(".cargo") != std::string::npos || low.find("registry") != std::string::npos ||
-                             low.find("rustc") != std::string::npos;
-        const std::size_t keepFrom = (library && starts.size() >= 2) ? starts[starts.size() - 2] : starts.back();
+        while (k < dot && line[k] == ':') { ++k; }   // a ':' that only punctuates ("at:") is not part of the path
         out.append(line, i, k - i);
-        out += path.substr(keepFrom);
+        out += "<path>";
         out.append(line, dot + 3, p - (dot + 3));   // ".rs"'s tail is not repeated: ":<line>:<column>"
         i = p;
     }
@@ -1636,7 +1622,7 @@ std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsi
         // ... and every file path in it becomes the one token "<path>" (radioreport::pathsToToken, the rule the radio reports use): a library's last
         // words often name a file (a file it could not open, a panic's source location), and a report carries no file names and no paths. The words
         // around the path, which say WHAT failed, stay.
-        // (a Rust panic's "file.rs:line:column" is cut back first and kept: keepPanicLocations)
+        // (a Rust panic's "file.rs:line:column" first becomes "<path>:line:column": keepPanicLocations keeps the position, never the file name)
         const std::string clean = radioreport::pathsToToken(scrubUploadLine(scrubVendorLine(keepPanicLocations(line.substr(b, e - b)))));
         for (std::size_t at = 0; at < clean.size(); at += kStderrTailLineChars) {
             out.push_back("stderr: " + clean.substr(at, kStderrTailLineChars));

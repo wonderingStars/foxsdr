@@ -236,15 +236,17 @@ int main(int argc, char** argv) {
     CHECK(!cascade::core::stderrCaptureActive());
 #endif
 
-    // --- A Rust panic keeps its source location; a user path loses everything but the file name (0.99.112: the Option::unwrap report
-    //     had lost its location to the path scrub, so the crash group could not be decided) ---
+    // --- A Rust panic keeps its POSITION and never its file name (0.99.112: the Option::unwrap report had lost its
+    //     location to the path scrub; the owner's rule and the privacy page: a crash report carries no file names and no file paths, so the
+    //     whole path-and-file token becomes "<path>" and ":<line>:<column>" stays) ---
     {
         using cascade::core::keepPanicLocations;
-        CHECK(keepPanicLocations("thread 'main' panicked at internal\\core\\string.rs:581:85:") == "thread 'main' panicked at core\\string.rs:581:85:");
-        CHECK(keepPanicLocations("panicked at internal/core/model.rs:123:45") == "panicked at core/model.rs:123:45");
-        CHECK(keepPanicLocations("panicked at C:\\Users\\Zebulon\\proj\\src\\lib.rs:10:5") == "panicked at lib.rs:10:5");
-        CHECK(keepPanicLocations("at C:\\Users\\Zebulon\\.cargo\\registry\\src\\index.crates.io-abc\\foo-1.0\\src\\bar.rs:7:9") == "at src\\bar.rs:7:9");
-        CHECK(keepPanicLocations("at /home/zeb/code/x.rs:3:4") == "at x.rs:3:4");
+        CHECK(keepPanicLocations("thread 'main' panicked at internal\\core\\string.rs:581:85:") == "thread 'main' panicked at <path>:581:85:");
+        CHECK(keepPanicLocations("panicked at internal/core/model.rs:123:45") == "panicked at <path>:123:45");
+        CHECK(keepPanicLocations("panicked at C:\\Users\\Zebulon\\proj\\src\\lib.rs:10:5") == "panicked at <path>:10:5");
+        CHECK(keepPanicLocations("at C:\\Users\\Zebulon\\.cargo\\registry\\src\\index.crates.io-abc\\foo-1.0\\src\\bar.rs:7:9") == "at <path>:7:9");
+        CHECK(keepPanicLocations("at /home/zeb/code/x.rs:3:4") == "at <path>:3:4");
+        CHECK(keepPanicLocations("a.rs:1:2 and b.rs:3:4") == "<path>:1:2 and <path>:3:4");
         CHECK(keepPanicLocations("no location here, and file.rs mentioned without numbers") == "no location here, and file.rs mentioned without numbers");
         CHECK(keepPanicLocations("a.rs:12 only a line") == "a.rs:12 only a line");
         CHECK(keepPanicLocations("") == "");
@@ -262,7 +264,9 @@ int main(int argc, char** argv) {
         CHECK(tail.size() == cascade::core::kStderrTailMaxLines);
         std::string all;
         for (const std::string& l : tail) { all += l + "\n"; }
-        CHECK(all.find("panicked at core\\string.rs:581:85") != std::string::npos);   // the panic survives 100 backtrace lines
+        CHECK(all.find("panicked at <path>:581:85") != std::string::npos);   // the panic's POSITION survives 100 backtrace lines and every later scrub
+        CHECK(all.find(".rs") == std::string::npos);                         // and no file name does
+        CHECK(all.find("string.") == std::string::npos);
         CHECK(all.find("Utf8Error { valid_up_to: 8") != std::string::npos);
         CHECK(all.find("Zebulon") == std::string::npos);
         CHECK(all.find("Users") == std::string::npos);
