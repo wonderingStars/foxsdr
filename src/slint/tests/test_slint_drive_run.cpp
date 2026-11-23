@@ -109,6 +109,35 @@ struct Header {
     std::map<std::string, std::string> env;
 };
 
+// THE FOLDER A `plugins=` RUN COPIES ITS MODULES FROM (docs 6.49), and the one the module count is read from: the fixture folder the build made for pluginsdir=fixture, else
+// FOXSDR_DRIVE_PLUGINS_DIR, else the user's own folder (%LOCALAPPDATA%\FoxSDR\plugins). ONE RULE for the copy below and for the count (Windows and Linux alike).
+fs::path pluginsSourceFolder(bool fixturePlugins) {
+#ifdef FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR
+    if (fixturePlugins) { return fs::path(FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR); }   // the folder the build made (tests/CMakeLists.txt wg3_plugins), never the user's
+#else
+    (void)fixturePlugins;
+#endif
+    if (const char* o = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR"); o != nullptr && *o != '\0') { return fs::path(o); }
+    if (const char* la = std::getenv("LOCALAPPDATA"); la != nullptr && *la != '\0') { return fs::path(la) / "FoxSDR" / "plugins"; }
+    return fs::path();
+}
+
+// The module files of a plugin folder, the very ones the copy takes: .dll on Windows, .so elsewhere.
+int countPluginModules(const fs::path& folder) {
+#if defined(_WIN32)
+    const std::string ext = ".dll";
+#else
+    const std::string ext = ".so";
+#endif
+    int modules = 0;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(folder, ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.size() > ext.size() && n.compare(n.size() - ext.size(), ext.size(), ext) == 0) { ++modules; }
+    }
+    return modules;
+}
+
 Header parseHeader(const std::string& script) {
     Header h;
     std::istringstream in(script);
@@ -273,19 +302,23 @@ int main(int argc, char** argv) {
         }
         mapped.append(script, last, std::string::npos);
         script = mapped;
-        // plugins=all fits EVERY module of the folder, and the scripts count them ("state kit.plugins == 43": the 43 modules of the owner's Windows folder); a Linux folder holds as many as its own
-        // plugin build made, so the count is the folder's (the expectation is the same: every module that was fitted is loaded)
-        if (script.find("plugins=all") != std::string::npos && script.find("kit.plugins == 43") != std::string::npos) {
-            int modules = 0;
-            for (const auto& e : fs::directory_iterator(pd)) {
-                const std::string n = e.path().filename().string();
-                if (n.size() > 3 && n.compare(n.size() - 3, 3, ".so") == 0) { ++modules; }   // what the copy takes: every module file of the folder
-            }
-            const std::string was = "kit.plugins == 43", now = "kit.plugins == " + std::to_string(modules);
-            for (std::size_t at = script.find(was); at != std::string::npos; at = script.find(was, at + now.size())) { script.replace(at, was.size(), now); }
-        }
     }
 #endif
+    // THE MODULE COUNT, ON EVERY PLATFORM (one code path). plugins=all fits EVERY module of the folder, and the scripts count them ("state kit.plugins == 43": the 43 modules of the owner's
+    // folder when they were written). The folder now holds more (89 on the owner's machine on 2026-11-23, which made every plugins=all script fail on the count and none of the 86 really run), and a
+    // Linux folder holds as many as its own plugin build made. So the count in the script is the folder's: the expectation is the same - every module that was fitted is loaded - and the number is
+    // logged once per run, so a reader of the log sees what was asked.
+    if (script.find("plugins=all") != std::string::npos && script.find("kit.plugins == 43") != std::string::npos) {
+        const fs::path folder = pluginsSourceFolder(script.find("pluginsdir=fixture") != std::string::npos);
+        const int modules = folder.empty() ? 0 : countPluginModules(folder);
+        if (modules > 0) {
+            const std::string was = "kit.plugins == 43", now = "kit.plugins == " + std::to_string(modules);
+            for (std::size_t at = script.find(was); at != std::string::npos; at = script.find(was, at + now.size())) { script.replace(at, was.size(), now); }
+            std::printf("  plugins=all: %d module(s) in %s; the script's \"kit.plugins == 43\" is read as \"kit.plugins == %d\"\n", modules, folder.string().c_str(), modules);
+        } else {
+            std::printf("  plugins=all: no module found in '%s' (the script's count of 43 is left as written)\n", folder.string().c_str());
+        }
+    }
     const Header h = parseHeader(script);
 #if !defined(_WIN32)
     if (h.windowsOnly) {
@@ -311,14 +344,7 @@ int main(int argc, char** argv) {
     // variables are redirected - the host scans exactly that folder (core/plugin_host.cpp userPluginDir).
     int pluginsCopied = 0;
     if (!h.plugins.empty()) {
-        fs::path from;
-        const char* o = std::getenv("FOXSDR_DRIVE_PLUGINS_DIR");
-#ifdef FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR
-        if (h.fixturePlugins) { from = FOXSDR_DRIVE_FIXTURE_PLUGINS_DIR; }   // pluginsdir=fixture: the folder the build made (tests/CMakeLists.txt wg3_plugins), never the user's
-        else
-#endif
-        if (o != nullptr && *o != '\0') { from = o; }
-        else if (const char* la = std::getenv("LOCALAPPDATA"); la != nullptr && *la != '\0') { from = fs::path(la) / "FoxSDR" / "plugins"; }
+        const fs::path from = pluginsSourceFolder(h.fixturePlugins);   // pluginsdir=fixture: the folder the build made, never the user's
         const fs::path to = dir / "local" / "foxsdr" / "plugins";
         fs::create_directories(to, ec);
         std::vector<std::string> wanted;
