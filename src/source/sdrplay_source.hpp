@@ -632,10 +632,13 @@ public:
     //
     // CHECKED IN read(), on the pipeline's source thread, and costs nothing
     // there: one clock read on a read that came back empty. On expiry the
-    // stream is treated exactly as a service that answered (14): the fault is
-    // raised with sdrPlayStreamStalledSentence(), the session is marked lost,
-    // and the teardown makes no call into the vendor DLL (the 0.96.4 and
-    // 0.97.0 hang reports are a teardown entering a wedged service).
+    // fault is raised with sdrPlayStreamStalledSentence() and stalledThisOpen_
+    // is set for the rest of this open. The session is NOT marked lost: the
+    // teardown TRIES Uninit, ReleaseDevice and Close, each on a bounded worker
+    // (only a call that does not answer within kControlWait latches the
+    // session), and START is refused for the rest of the open - it never calls
+    // sdrplay_api_Init - so the one step is to pick the radio again (the 0.96.4
+    // and 0.97.0 hang reports are an unbounded call entering a wedged service).
     static constexpr std::chrono::milliseconds kStreamStallLimit{5000};
 
     // TESTS ONLY, and per instance so two tests can never see each other's

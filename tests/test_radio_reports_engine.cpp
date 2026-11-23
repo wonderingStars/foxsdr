@@ -305,6 +305,13 @@ struct AppWindowTestAccess {
     static double accSec(AppWindow& a) { double v = -1.0; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].accSec; }); return v; }
     static double runningSecOf(AppWindow& a) { double v = -1.0; passseam::on(th::engine(a), [&] { v = (*th::engine(a).radioRun_)[0].runningSec; }); return v; }
     static void setRunningSec(AppWindow& a, double s) { passseam::on(th::engine(a), [&] { (*th::engine(a).radioRun_)[0].runningSec = s; }); }
+    static std::uint64_t accRead(AppWindow& a) { std::uint64_t v = 0; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].accRead; }); return v; }
+    static bool journalFaulted(AppWindow& a) { bool v = false; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].faulted; }); return v; }
+    static void setJournalFaulted(AppWindow& a, bool f) { passseam::on(th::engine(a), [&] { th::engine(a).radioJournal_[0].faulted = f; }); }
+    static void forgetJournalSlot(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).radioJournal_[0] = cascade::engine::Engine::RadioJournalSlot{}; }); }   // a slot the pass has not noticed the radio of
+    static void setReadMarks(AppWindow& a, std::uint64_t readAtOpen, std::uint64_t minuteMark) {
+        passseam::on(th::engine(a), [&] { th::engine(a).radioJournal_[0].readAtOpen = readAtOpen; th::engine(a).rx().dspReadAtMinute_ = minuteMark; });
+    }
     static void minute(AppWindow& a, std::uint64_t read, std::uint64_t dropped) { passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 100); }); }
 };
 
@@ -788,6 +795,69 @@ static void journalOfAnOpenedRadioTest(std::vector<json>& everything) {
     }
 }
 
+// The final look of 7421b4c6 (F5, F6, S4): what the journal's minute does for a radio that streams again after a fault, how long it calls a minute, whose
+// samples are its first window's, and that a slot's running seconds start at zero at BOTH places a slot becomes open. (A function of its own: main() is at
+// the stack limit.)
+#if defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static void journalMinuteRulesTest() {
+    std::printf("  the journal's minute: running time, the open's own samples, a fault that ends, running seconds reset at both opens\n");
+    resetFake();
+    th::TestWindow app;
+    Rig rig("minute");
+    rig.start();
+    Access::restore(app, savedRadio());
+    CHECK(Access::deviceOpen(app));
+    Access::pass(app);
+    // F5: a radio the journal latched as faulted and that then streams (the pipeline has no fault of its own) is in use again
+    Access::setJournalFaulted(app, true);
+    Access::minute(app, 0, 0);
+    CHECK(Access::journalFaulted(app));            // a silent minute does not lift it
+    Access::minute(app, 1000, 0);
+    CHECK(!Access::journalFaulted(app));           // samples flowing again do
+    Access::minute(app, 1000, 0);
+    CHECK(Access::accRead(app) >= 2000);          // and the minutes count again
+    // F6a: the minute is the time the pipeline ran in it (20 s of 60), not the wall time
+    Access::forgetJournalSlot(app);
+    Access::pass(app);                             // the slot is noticed again (the pass opens it)
+    Access::ageOpenRadio(app, 60.0);
+    Access::setReadMarks(app, 0, 0);
+    Access::setRunningSec(app, 20.0);
+    const double accBefore = Access::accSec(app);
+    Access::minute(app, 100, 0);
+    CHECK(Access::accSec(app) - accBefore == 20.0);
+    // F6b: the samples read before the radio opened (the previous source's) are not its first window's: readAtOpen 700 of the 1000 read since the mark
+    Access::forgetJournalSlot(app);
+    Access::pass(app);
+    Access::setReadMarks(app, 700, 1000);          // the window started at mark 0 and read 1000; the open was at 700
+    Access::minute(app, 1000, 0);
+    CHECK(Access::accRead(app) == 300);
+    Access::setReadMarks(app, 700, 2000);          // closeDspMinute moved the mark to 2000: the next window started at 1000, after the open
+    Access::minute(app, 1000, 0);                  // nothing to cut
+    CHECK(Access::accRead(app) == 1300);
+}
+
+// S4, both places a slot becomes open: the open that said so (journalOpenOk, via the saved-radio restore) and the pass that noticed a radio nobody said.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#endif
+static void runningSecondsResetAtBothOpensTest() {
+    std::printf("  a slot's running seconds start at zero when it opens: said by the open, and noticed by the pass\n");
+    resetFake();
+    th::TestWindow app;
+    Rig rig("runreset");
+    rig.start();
+    Access::setRunningSec(app, 40.0);
+    Access::restore(app, savedRadio());            // journalOpenOk
+    CHECK(Access::deviceOpen(app));
+    CHECK(Access::runningSecOf(app) == 0.0);
+    Access::setRunningSec(app, 40.0);
+    Access::forgetJournalSlot(app);                // the radio is open, the journal does not know it
+    Access::pass(app);                             // the pass opens the slot itself
+    CHECK(Access::runningSecOf(app) == 0.0);
+}
+
 int main(int argc, char** argv) {
     if (argc >= 3 && std::string(argv[1]) == "--holder") { return holderMain(argv[2]); }
     std::printf("test_radio_reports_engine\n");
@@ -1056,6 +1126,8 @@ int main(int argc, char** argv) {
     }
 
     phantomFoundTest();
+    journalMinuteRulesTest();
+    runningSecondsResetAtBothOpensTest();
 
     // --- THE JOURNAL OF A RADIO THAT OPENS: found, open, settings, stream, close ---------------------------------------------------------------------
     journalOfAnOpenedRadioTest(everything);

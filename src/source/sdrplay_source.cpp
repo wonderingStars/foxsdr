@@ -318,7 +318,8 @@ const sdrplay_abi::Api& processSdrPlayApi() {
     // thread-safe initialisation is the language's problem rather than ours.
     // Two of them rather than one initialised from a lambda's return value,
     // because Api carries the session mutex and is deliberately non-copyable.
-    static abi::Api api;
+    // Leaked on purpose like the claim table and the graveyard: an abandoned Close worker may still hold api.sessionMutex at exit (exit-time crash family 929BF825, 74EEC22D).
+    static abi::Api& api = *core::leakOnPurpose(new abi::Api());
     static const bool once = [] {
         loadInto(api);
         core::diagLogf("source: SDRplay API - %s", api.loadDetail.c_str());
@@ -525,6 +526,24 @@ void heldSerialRelease(const abi::Api& api, const std::string& serial, const voi
     const auto it = m.find(std::make_pair(static_cast<const void*>(&api), serial));
     if (it != m.end() && it->second == owner) { m.erase(it); }
 }
+// True when ANOTHER radio of this process holds an RSP the wanted serial (a suffix, as the select matches it) names - or, with no serial
+// wanted, holds any RSP at all. Asked before "no SDRplay device is connected": a service may not list an RSP that is already selected
+// (API specification 3.15 sections 3.6, 3.7), and that radio is then in use here, not missing (final look of 7421b4c6, F7).
+bool heldSerialByAnotherRadio(const abi::Api& api, const std::string& wantSerial, const void* self) {
+    std::lock_guard<std::mutex> lk(heldSerialsMutex());
+    for (const auto& kv : heldSerials()) {
+        if (kv.first.first != static_cast<const void*>(&api) || kv.second == self) { continue; }
+        const std::string& s = kv.first.second;
+        if (wantSerial.empty() || (s.size() >= wantSerial.size() &&
+                                   s.compare(s.size() - wantSerial.size(), wantSerial.size(), wantSerial) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+const char* const kSerialClaimedSentence =
+    "this SDRplay RSP is already open in another radio of this FoxSDR (two radios "
+    "cannot share one RSP) - close that radio first, or restart FoxSDR if none is open";
 }  // namespace
 
 // --- the session ----------------------------------------------------------
@@ -1017,11 +1036,12 @@ const char* sdrPlayStreamStalledSentence() {
     // above.
     static_assert(SdrPlaySource::kStreamStallLimit == std::chrono::milliseconds(5000),
                   "the sentence below quotes five seconds");
-    // NotInitialised is "Device has not been selected" (API specification 3.15, sections 3.15 and 3.16), so START may fail where a fresh
-    // pick works; the order is what costs the user least. Whether the restart of FoxSDR can be skipped after a service restart is UNVERIFIED.
-    // Kept under ~150 characters so the whole advice survives a prefixed log line (DiagLog::kLineBytes is 192).
-    return "the SDRplay service stopped delivering (nothing for 5 s) - press START; if that fails pick "
-           "the radio again; then restart the SDRplay API service and FoxSDR";
+    // After a stall START is REFUSED and never calls sdrplay_api_Init (an unbounded vendor call on a service that just went quiet; NotInitialised
+    // is "Device has not been selected", API specification 3.15, sections 3.15 and 3.16), so the one step is to pick the radio again.
+    // Both the stall fault and the START refusal show this one sentence. Whether the restart of FoxSDR can be skipped after a service
+    // restart is UNVERIFIED. Kept under ~160 characters so the whole advice survives a prefixed log line (DiagLog::kLineBytes is 192).
+    return "the SDRplay service stopped delivering (nothing for 5 s) - pick the radio again; if that fails, "
+           "restart the SDRplay API service, then restart FoxSDR";
 }
 
 const char* sdrPlaySessionLostSentence() {
@@ -1936,6 +1956,11 @@ bool SdrPlaySource::selectByArgsLocked(const std::string& args) {
 
     if (chosen < 0) {
         a.UnlockDeviceApi();
+        // NOT "not connected" for a radio another slot of THIS process holds (the service may no longer list it): say who has it.
+        if (heldSerialByAnotherRadio(a, wantSerial, this) && (wantSerial.empty() ? n == 0 : true)) {
+            setError(kSerialClaimedSentence);
+            return false;
+        }
         setError(n == 0 ? "no SDRplay device is connected"
                         : ("no SDRplay device matches '" + args + "'"));
         return false;
@@ -2002,8 +2027,7 @@ bool SdrPlaySource::selectByArgsLocked(const std::string& args) {
         if (!heldSerialClaim(a, serial, this)) {
             a.UnlockDeviceApi();
             // Two radios sharing one RSP (RSPduo master/slave, API specification 3.15 section 1) is not supported today.
-            setError("this SDRplay RSP is already open in another radio of this FoxSDR (two radios "
-                     "cannot share one RSP) - close that radio first, or restart FoxSDR if none is open");
+            setError(kSerialClaimedSentence);
             return false;
         }
         heldSerial_ = serial;
@@ -2663,10 +2687,12 @@ bool SdrPlaySource::start() {
     // the sentence it gives is the one that says what to do.
     // A STALL THE LAST STOP DID NOT END CLEANLY (its Uninit answered Fail): the service still holds the old stream, and Init
     // would run with every control refused and the stall watchdog off (review of 885ebd7e, item 3). A clean Uninit lowered the flag.
-    if (streamStalled_.load(std::memory_order_acquire) && !vendorUnreachableLocked() && !sessionIsLost(api())) {
-        setError("the SDRplay stream stalled and could not be stopped cleanly - pick the radio again; "
-                 "if that fails, restart the SDRplay API service, then FoxSDR");
-        core::diagWarnf("source: SDRplay start refused - the stalled stream was not stopped cleanly; pick the radio again");
+    // NOW EVERY STALL (clean Uninit or not) REFUSES START (final look of 7421b4c6, F1/F2): Init would be an unbounded vendor call on a
+    // service that just went quiet, and a failed one replaced the advice with a bare "Init failed". The lost-session case below says more,
+    // so it goes first.
+    if (stalledThisOpen_.load(std::memory_order_acquire) && !vendorUnreachableLocked() && !sessionIsLost(api())) {
+        setError(sdrPlayStreamStalledSentence());
+        core::diagWarnf("source: SDRplay start refused - the stream stalled on this open; pick the radio again");
         return false;
     }
     if (vendorUnreachableLocked() || sessionIsLost(api())) {

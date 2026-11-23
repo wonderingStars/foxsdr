@@ -163,7 +163,7 @@ const Row kRows[] = {
      "the SDRplay scan probe: a one-shot call into the vendor service with its own abandon bound (Recovered::SdrEnum) - NOT COVERED by this batch (a known gap)"},
     {"src/source/sdrplay_service.cpp", 1, 0, 0, 0, "",
      "the SDRplay service enumeration worker: abandoned past its bound by design (Recovered::SdrEnum) - NOT COVERED by this batch (a known gap)"},
-    {"src/source/sdrplay_source.cpp", 4, 0, 0, 0, "", R_DRIVER},
+    {"src/source/sdrplay_source.cpp", 5, 0, 0, 0, "", R_DRIVER},   // +1: boundedVendorCallLocked's worker (ReleaseDevice, Close; 3813659b)
     {"src/source/soapy_enum_proc.cpp", 3, 0, 0, 0, "",
      "the SoapySDR enumeration CHILD process's pipe and wait threads: the child is contained by a process boundary and counted (Recovered::EnumChild)"},
     {"src/source/soapy_source.cpp", 2, 1, 0, 0, "",
