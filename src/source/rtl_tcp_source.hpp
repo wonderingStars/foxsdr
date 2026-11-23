@@ -151,6 +151,16 @@ public:
     // it writes one "source: stream health ..." line.
     static constexpr std::chrono::milliseconds kStreamHealthWindow{60000};
 
+    // HOW LONG THE OPEN WAITS FOR THE SERVER'S 12-BYTE HEADER (default 12 s; the socket's own receive bound, 2 s, still applies
+    // to each receive and the receive is repeated until this is spent) and HOW LONG A REFUSED CONNECT IS RETRIED (default 6 s).
+    // Both are for a real rtl_tcp, which serves one client at a time and needs ~3.6 s after a client leaves before it accepts
+    // the next (measured, tests/test_rtl_tcp_realpeer.cpp); see rtl_tcp_source.cpp handshakeLocked. The setter is for tests.
+    static constexpr std::chrono::milliseconds kHeaderWaitDefault{12000};
+    static constexpr std::chrono::milliseconds kRefusedRetryDefault{6000};
+    static std::chrono::milliseconds headerWait();
+    static std::chrono::milliseconds refusedRetryWait();
+    static void setWaitsForTest(std::chrono::milliseconds header, std::chrono::milliseconds refusedRetry);
+
     RtlTcpSource() = default;
     ~RtlTcpSource() override;
 

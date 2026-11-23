@@ -218,7 +218,10 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
     // ...and as its own report (radio reports, D4), radios 2 to 8 like the first
     reportFailedOpen(kind, args, rx().sourceError_, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, rateHz, restoreOpenMs);
     const std::string whyClass = cascade::core::health::radioFailWhy(kind, rx().sourceError_);
-    const bool failedBusy = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_) == cascade::core::health::RadioReason::Busy;
+    const cascade::core::health::RadioReason failedReason = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_);
+    const bool failedBusy = failedReason == cascade::core::health::RadioReason::Busy;
+    const bool waitMayCure = cascade::gui::savedRadioFailureWorthRetry(
+        failedBusy, kind == "rtltcp" && (failedReason == cascade::core::health::RadioReason::Absent || failedReason == cascade::core::health::RadioReason::Timeout));
     std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args) : modelFromNativeLabel(nativeLabelFor(kind, args));
     if (label.empty() || label == args) { label = kind; }
     cascade::core::diagWarnf("radio: radio %u could not be restored on %s (%s): %s - it is on the signal generator and the radio stays saved",
@@ -226,11 +229,12 @@ void Engine::restoreExtraRadioDevice(const std::string& kind, const std::string&
     rx().restoreKeep_ = cascade::gui::rememberedSourceAfterFailedOpen(kind, kind == "soapy" ? args : std::string(), kind == "soapy" ? std::string() : args,
                                                                       std::string(), rateHz);
     rx().restoreKeepLabel_ = label;
-    if (failedBusy && rx().restoreKeep_.valid()) {
+    if (waitMayCure && rx().restoreKeep_.valid()) {
         rx().savedRadioRetryBusy_ = true;
         rx().savedRadioRetryAttempts_ = 0;
         rx().savedRadioRetryLastFailSec_ = retryClockS();
-        offerHandoff(kind, args, rateHz, -1);   // FIELD FIX A2: is the holder another FoxSDR window? (once per failed restore)
+        if (!failedBusy) { cascade::core::diagLogf("source: the saved rtl_tcp server did not answer - trying it again in 2, 4, 8 and 16 s"); }
+        if (failedBusy) { offerHandoff(kind, args, rateHz, -1); }   // FIELD FIX A2: is the holder another FoxSDR window? (once per failed restore)
     }
     rx().sourceError_ = cascade::gui::radioNotOpenedSentence(label, rx().sourceError_);
     rx().refusal_ = rx().sourceError_;

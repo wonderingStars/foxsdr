@@ -1779,7 +1779,9 @@ void Engine::finishDeviceOpen(DeviceOpenResult r) {
         // A TRY AT THE SAVED RADIO (pollSavedRadioRetry) THAT FAILED: busy again keeps the retries going on their schedule; anything else ends
         // them, and the ordinary message stands - waiting does not cure an unplugged dongle. It is the SAME incident as the start-up failure
         // already counted, so a busy-again try adds nothing to the anonymous count; a different reason is a new fact and is counted.
-        const bool retryBusyAgain = r.savedRadioRetry && whyReason == cascade::core::health::RadioReason::Busy;
+        const bool retryBusyAgain = r.savedRadioRetry && cascade::gui::savedRadioFailureWorthRetry(
+            whyReason == cascade::core::health::RadioReason::Busy,
+            r.kind == "rtltcp" && (whyReason == cascade::core::health::RadioReason::Absent || whyReason == cascade::core::health::RadioReason::Timeout));
         if (r.savedRadioRetry) {
             rx().savedRadioRetryBusy_ = retryBusyAgain;
             rx().savedRadioRetryLastFailSec_ = retryClockS();
@@ -10507,7 +10509,10 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             // branch wraps sourceError_ in the radio's name. The 0.99.91 field report had to be read off the anonymous counts to learn that the
             // saved radio was merely busy; the log said only that it "did not reopen".
             const std::string whyClass = cascade::core::health::radioFailWhy(kind, rx().sourceError_);
-            const bool failedBusy = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_) == cascade::core::health::RadioReason::Busy;
+            const cascade::core::health::RadioReason failedReason = cascade::core::health::classifyRadioOpen(kind, rx().sourceError_);
+            const bool failedBusy = failedReason == cascade::core::health::RadioReason::Busy;
+            const bool waitMayCure = cascade::gui::savedRadioFailureWorthRetry(
+                failedBusy, kind == "rtltcp" && (failedReason == cascade::core::health::RadioReason::Absent || failedReason == cascade::core::health::RadioReason::Timeout));
             // openDeviceSync already set sourceError_. A radio that was there last
             // session and is not there now is the single most common support
             // question this product gets - but the driver's own message quotes
@@ -10555,14 +10560,14 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             // A RADIO THAT WAS ONLY BUSY IS TRIED AGAIN once the engine is running (0.99.92, engine/saved_radio_retry.hpp): the previous FoxSDR,
             // still letting go of the dongle after the in-app updater, is the case that was found. Armed for BUSY alone; the stamp is the retry
             // clock's now, so the first try is 2 s after this failure.
-            if (failedBusy && rx().restoreKeep_.valid()) {
+            if (waitMayCure && rx().restoreKeep_.valid()) {
                 rx().savedRadioRetryBusy_ = true;
                 rx().savedRadioRetryAttempts_ = 0;
                 rx().savedRadioRetryLastFailSec_ = retryClockS();
                 cascade::core::diagLogf(
-                    "source: the saved radio is in use by another program - trying it again in "
-                    "2, 4, 8 and 16 s");
-                offerHandoff(kind, args, cfg.sampleRateHz, -1);   // FIELD FIX A2: is the holder another FoxSDR window? (the answer cancels these retries)
+                    failedBusy ? "source: the saved radio is in use by another program - trying it again in 2, 4, 8 and 16 s"
+                               : "source: the saved rtl_tcp server did not answer - trying it again in 2, 4, 8 and 16 s");
+                if (failedBusy) { offerHandoff(kind, args, cfg.sampleRateHz, -1); }   // FIELD FIX A2: is the holder another FoxSDR window? (the answer cancels these retries)
             }
             // Which radio, why, and where the receiver is - the driver's own
             // reason is kept verbatim inside the sentence (0.99.36).

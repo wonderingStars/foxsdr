@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <utility>
 
 namespace cascade::source {
@@ -118,7 +119,30 @@ bool parseRtlTcpAddress(const std::string& args, std::string& host, std::uint16_
     port = kRtlTcpDefaultPort;
     error.clear();
 
-    const std::string text = argValue(args, "rtltcp");
+    std::string text = argValue(args, "rtltcp");
+    // WHAT A PASTED ADDRESS CARRIES THAT IS NOT THE ADDRESS: a URL-style prefix ("rtl_tcp://host:1234", "tcp://host"),
+    // a trailing slash, and spaces around the whole address (an inner space is still not a port number). The scheme made "rtl_tcp://host:1234" read as a bare IPv6
+    // literal with two colons (a host name that cannot exist, reported as "host not found"); the rest made a good
+    // address fail its port check. All of them are stripped here, never reported.
+    const auto trimSpace = [](std::string& v) {
+        std::size_t a = 0;
+        while (a < v.size() && std::isspace(static_cast<unsigned char>(v[a]))) { ++a; }
+        std::size_t b = v.size();
+        while (b > a && std::isspace(static_cast<unsigned char>(v[b - 1]))) { --b; }
+        v = v.substr(a, b - a);
+    };
+    trimSpace(text);
+    const std::size_t scheme = text.find("://");
+    if (scheme != std::string::npos && scheme > 0 && scheme <= 12) {
+        bool word = true;
+        for (std::size_t i = 0; i < scheme; ++i) {
+            const char c = text[i];
+            word = word && (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-');
+        }
+        if (word) { text = text.substr(scheme + 3); }
+    }
+    while (!text.empty() && text.back() == '/') { text.pop_back(); }
+    trimSpace(text);
     if (text.empty()) { return true; }
 
     std::string hostPart;
@@ -174,6 +198,20 @@ const char* rtlTcpTunerName(std::uint32_t tunerType) {
         case 6: return "R828D";
         default: return "unknown tuner";
     }
+}
+
+// --- the two waits a real server needs (see handshakeLocked, dialLocked) -------
+
+namespace {
+std::atomic<long long> g_headerWaitMs{RtlTcpSource::kHeaderWaitDefault.count()};
+std::atomic<long long> g_refusedRetryMs{RtlTcpSource::kRefusedRetryDefault.count()};
+}  // namespace
+
+std::chrono::milliseconds RtlTcpSource::headerWait() { return std::chrono::milliseconds(g_headerWaitMs.load()); }
+std::chrono::milliseconds RtlTcpSource::refusedRetryWait() { return std::chrono::milliseconds(g_refusedRetryMs.load()); }
+void RtlTcpSource::setWaitsForTest(std::chrono::milliseconds header, std::chrono::milliseconds refusedRetry) {
+    g_headerWaitMs.store(header.count());
+    g_refusedRetryMs.store(refusedRetry.count());
 }
 
 // --- construction ----------------------------------------------------------
@@ -349,10 +387,33 @@ bool RtlTcpSource::sendStateLocked(std::string& err) {
 // out the gain ladder, send the whole state. `t` is already connected.
 bool RtlTcpSource::handshakeLocked(std::unique_ptr<iiod::Transport> t, std::string& error) {
     std::uint8_t header[kHeaderBytes];
-    if (!t->recvAll(header, sizeof(header))) {
-        error = "nothing at " + hostPortText(host_, port_) + " answered as an rtl_tcp server (" +
-                t->lastError() + ")";
-        return false;
+    // THE HEADER WAIT IS NOT THE SOCKET'S 2 s. MEASURED 2026-11-23 against radioconda's real rtl_tcp.exe on this machine: the
+    // server serves ONE client and, after a client goes, takes about 3.6 s before it accepts the next one and sends its header
+    // (and refuses connections outright for part of that time); a cold start takes about 1.5 s to its first connection. A wait of
+    // 2 s failed every re-open made within seconds of a close with the very text the field reports ("receive timed out" at
+    // ~2.0 s). The socket's own bound still applies to each receive; the receive is repeated until kHeaderWait is spent.
+    {
+        const auto deadline = std::chrono::steady_clock::now() + headerWait();
+        std::size_t got = 0;
+        bool silent = false;
+        while (got < sizeof(header)) {
+            std::size_t part = 0;
+            if (t->recvSome(header + got, sizeof(header) - got, part)) {
+                got += part;
+                continue;
+            }
+            const std::string why = t->lastError();
+            if (why.find("timed out") != std::string::npos) {
+                if (std::chrono::steady_clock::now() < deadline) { continue; }
+                silent = true;
+            }
+            error = silent ? ("connected to " + hostPortText(host_, port_) + ", but nothing came back within " +
+                              std::to_string(std::chrono::duration_cast<std::chrono::seconds>(headerWait()).count()) +
+                              " s (timed out): either this is not an rtl_tcp server, or it is busy with another program (rtl_tcp serves one at a time) "
+                              "or still starting its dongle")
+                           : ("nothing at " + hostPortText(host_, port_) + " answered as an rtl_tcp server (" + why + ")");
+            return false;
+        }
     }
     if (std::memcmp(header, "RTL0", 4) != 0) {
         error = "nothing at " + hostPortText(host_, port_) +
@@ -394,11 +455,25 @@ std::unique_ptr<iiod::Transport> RtlTcpSource::dialLocked(std::string& error) {
     // "absent" class, "did not answer" / "timed out" the "timeout" class, so the
     // anonymous counts say "no server there" and "server not answering" rather
     // than "other".
-    peer.unknownHostHint = "nothing at that name was found - is rtl_tcp running there, and is the "
-                           "address right?";
-    peer.unreachableHint = "nothing at that address accepted the connection - is rtl_tcp running "
-                           "there?";
-    return iiod::connectTcp(host_, port_, iiod::kConnectWait, iiod::kReplyWait, error, peer);
+    peer.unknownHostHint = "nothing at that name was found - is rtl_tcp running there? check the spelling, or "
+                           "type the server's IP address instead of its name";
+    // NO "another program" / "in use" / "busy" HERE: classifyRadioOpen reads those as the Busy class and a refusal is Absent.
+    peer.unreachableHint = "nothing at that address accepted the connection - is rtl_tcp running there, is the "
+                           "port right, and has the server finished with its previous client? rtl_tcp serves "
+                           "one client at a time";
+    // A REFUSAL IS GIVEN A SECOND CHANCE. The real rtl_tcp refuses new connections while it is tearing down the previous client
+    // (measured 2026-11-23: a re-open right after a close was refused after 2 s, then accepted ~3.6 s after the close), so a
+    // refusal inside kRefusedRetryWait of the first try is tried again; a server that is simply not there still says so, a few
+    // seconds later. The wait is spent on the open worker, never the window's thread.
+    const auto began = std::chrono::steady_clock::now();
+    for (;;) {
+        auto t = iiod::connectTcp(host_, port_, iiod::kConnectWait, iiod::kReplyWait, error, peer);
+        if (t != nullptr) { return t; }
+        const bool refused = error.find("10061") != std::string::npos || error.find("refused") != std::string::npos ||
+                             error.find("111)") != std::string::npos;
+        if (!refused || std::chrono::steady_clock::now() - began >= refusedRetryWait()) { return nullptr; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
 }
 
 bool RtlTcpSource::open(const std::string& args) { return openImpl(args, nullptr); }
@@ -630,7 +705,12 @@ void RtlTcpSource::readerThreadBody(std::shared_ptr<ReaderLink> link) {
             // retry, and a stream cannot be resynchronised. Fault and leave;
             // the pipeline's source loop polls faulted().
             noteRead(*link, false, 0, false);
-            noteFaultOn(*link, "reading samples", link->transport->lastError());
+            // CONNECTED BUT SILENT is not "connection lost": the socket is up and the server has sent nothing for a receive bound.
+            std::string why = link->transport->lastError();
+            if (why.find("timed out") != std::string::npos) {
+                why = "the server is connected but sent no samples - is its dongle still plugged in, and is the network link up? (" + why + ")";
+            }
+            noteFaultOn(*link, "reading samples", why);
             break;
         }
         const std::size_t total = carry + got;
