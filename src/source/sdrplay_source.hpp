@@ -1209,9 +1209,10 @@ private:
     // would trade a hang nobody has reported for a receiver that cannot be
     // re-plugged without restarting the application. Only the two conditions
     // below mean the SERVICE is gone.
-    bool vendorUnreachableLocked() const {
-        return controlAbandoned_ || serviceGone_ || streamStalled_.load(std::memory_order_acquire);
-    }
+    // A STALL ALONE IS NOT IN THIS LIST (fault B): a stream that went quiet while
+    // the service still answers is torn down through bounded calls
+    // (teardownIsSuspectLocked); controls stay refused while it is stalled.
+    bool vendorUnreachableLocked() const { return controlAbandoned_ || serviceGone_; }
 
     // ...AND THE TEARDOWN'S QUESTION, which is wider: this device's own flags
     // OR THE PROCESS'S SESSION, lost by any radio (0.99.44, GitHub issue 5).
@@ -1223,6 +1224,13 @@ private:
     // ServiceNotResponding. start(), open(), the scan and every setter
     // already asked the session. devMutex_ held.
     bool teardownMustSkipVendorLocked() const;
+    // The softer half (fault B/C): the stream went quiet - the teardown is TRIED
+    // through bounded calls rather than skipped.
+    bool teardownIsSuspectLocked() const;
+    // Runs one vendor call on a worker, waits kControlWait; false = it did not
+    // return (the worker is detached and the session is marked hard-lost).
+    bool boundedVendorCallLocked(const char* what, std::function<sdrplay_abi::ErrT()> call,
+                                 sdrplay_abi::ErrT& result);
 
     // THE FIRST LINE OF EVERY SETTER (the review of 6e308c3). True - with
     // lastError "<what> refused: <the sentence for why>" - when the vendor DLL
@@ -1307,6 +1315,10 @@ private:
     sdrplay_abi::DeviceT device_{};
     sdrplay_abi::DeviceParamsT* deviceParams_ = nullptr;
     bool selected_ = false;
+    // The serial this object has SELECTED, claimed in the process-wide table so a
+    // second radio of this FoxSDR cannot SelectDevice the same RSP (fault A: the
+    // service answers sdrplay_api_Fail to it). Empty when nothing is claimed.
+    std::string heldSerial_;
     bool initialised_ = false;
 
     // TRUE ONCE A CONTROL'S WORKER HAS BEEN ABANDONED INSIDE THE VENDOR DLL,

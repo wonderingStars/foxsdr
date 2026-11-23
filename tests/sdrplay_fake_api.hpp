@@ -117,6 +117,18 @@ public:
 
     // --- what the tests configure ----------------------------------------
 
+    // THE VENDOR'S ORDERING RULES, ENFORCED (fault A/C lane, 2026-11-23). Off by
+    // default so every older test keeps its fake; when on, a call that breaks the
+    // rules answers sdrplay_api_Fail and is recorded in orderingViolations:
+    //   - SelectDevice only between LockDeviceApi and UnlockDeviceApi;
+    //   - SelectDevice of an RSP this process has already selected and not yet
+    //     released fails (the 21 Nov RSPduo log);
+    //   - ReleaseDevice of an RSP that is still Init-ed fails (Uninit first);
+    //   - Init of an RSP that is not selected fails.
+    // (Stated from SoapySDRPlay-style call order and the repo's notes on the 3.15
+    // specification; the specification PDF itself could not be fetched here.)
+    bool enforceOrdering = false;
+    std::vector<std::string> orderingViolations;
     float version = 3.15f;
     abi::ErrT openResult = abi::Success;
     abi::ErrT selectResult = abi::Success;
@@ -641,6 +653,8 @@ private:
     void* handle = reinterpret_cast<void*>(static_cast<std::uintptr_t>(0xD1A1));
 
     // See startService().
+    bool apiLocked_ = false;
+    std::vector<std::string> selectedSerials_;
     std::mutex serviceMutex_;
     std::thread serviceThread_;
     std::atomic<bool> serviceStop_{true};
@@ -682,6 +696,7 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr) { return abi::Fail; }
         f->note("LockDeviceApi");
+        f->apiLocked_ = true;
         return abi::Success;
     }
 
@@ -689,6 +704,7 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr) { return abi::Fail; }
         f->note("UnlockDeviceApi");
+        f->apiLocked_ = false;
         return abi::Success;
     }
 
@@ -727,6 +743,19 @@ private:
                       static_cast<int>(d->tuner), static_cast<int>(d->rspDuoMode));
         f->note(buf);
         ++f->selectCount;
+        if (f->enforceOrdering) {
+            const std::string serial(d->SerNo, strnlen(d->SerNo, sizeof(d->SerNo)));
+            if (!f->apiLocked_) {
+                f->orderingViolations.push_back("SelectDevice without LockDeviceApi");
+                return abi::Fail;
+            }
+            if (std::find(f->selectedSerials_.begin(), f->selectedSerials_.end(), serial) !=
+                f->selectedSerials_.end()) {
+                f->orderingViolations.push_back("SelectDevice of an RSP already selected");
+                return abi::Fail;
+            }
+            if (f->selectResult == abi::Success) { f->selectedSerials_.push_back(serial); }
+        }
         if (f->selectResult != abi::Success) { return f->selectResult; }
         d->dev = f->handle;
         return abi::Success;
@@ -746,6 +775,15 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             f->leftReleaseDevice.store(true);
+        }
+        if (f->enforceOrdering) {
+            if (f->initialised) {
+                f->orderingViolations.push_back("ReleaseDevice while Init-ed (no Uninit)");
+                return abi::Fail;
+            }
+            const std::string serial(d->SerNo, strnlen(d->SerNo, sizeof(d->SerNo)));
+            const auto it = std::find(f->selectedSerials_.begin(), f->selectedSerials_.end(), serial);
+            if (it != f->selectedSerials_.end()) { f->selectedSerials_.erase(it); }
         }
         ++f->releaseCount;
         d->dev = nullptr;
@@ -784,6 +822,10 @@ private:
         FakeSdrPlayApi* f = instance();
         if (f == nullptr || cbs == nullptr) { return abi::Fail; }
         f->note("Init");
+        if (f->enforceOrdering && f->selectedSerials_.empty()) {
+            f->orderingViolations.push_back("Init of an RSP that is not selected");
+            return abi::Fail;
+        }
         if (f->initDelayMs.load() > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(f->initDelayMs.load()));
         }

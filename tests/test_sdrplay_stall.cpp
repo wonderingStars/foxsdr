@@ -438,21 +438,23 @@ void testASilentStreamIsNamedAndTheRadioIsLeftAlone() {
     const std::string shown = src.lastError();
     std::printf("the receiver shows \"%s\"\n", shown.c_str());
     CHECK(shown.find(cascade::source::sdrPlayStreamStalledSentence()) != std::string::npos);
-    CHECK(shown.find("restart FoxSDR") != std::string::npos);
+    CHECK(shown.find("press START") != std::string::npos);   // a stall no longer costs the session (fault B)
     CHECK(ringHas("source: SDRplay stream stalled"));
     // Review note 4: the teardown line says WHICH of the three it was.
     // (Checked after the stop below.)
 
-    // THE TEARDOWN NEVER ENTERS THE WEDGED SERVICE, and the session is not
-    // handed to anything else in this process.
+    // THE TEARDOWN TRIES THE SERVICE ONCE (fault B): a quiet stream is not proof
+    // the service is gone. THIS fake IS wedged for real - its Uninit answers
+    // sdrplay_api_ServiceNotResponding - so that one bounded call is also what
+    // proves it, the session is latched, and ReleaseDevice/Close are skipped.
     reader.run.store(false);
     if (reader.t.joinable()) { reader.t.join(); }
     src.stop();
     src.closeDevice();
-    CHECK(fake.countStarting("Uninit") == 0);
+    CHECK(fake.countStarting("Uninit") == 1);
     CHECK(fake.countStarting("ReleaseDevice") == 0);
-    CHECK(ringHas("source: SDRplay stopped without Uninit - the stream stopped delivering samples"));
-    CHECK(!ringHas("stopped without Uninit - the service stopped answering"));
+    CHECK(ringHas("source: SDRplay Uninit failed - "));
+    CHECK(ringHas("closed without ReleaseDevice"));
     SdrPlaySource again;
     again.setApiForTest(&fake.table);
     CHECK(!again.open(""));
@@ -477,7 +479,9 @@ void testAStreamThatNeverStartsIsNamedToo() {
     if (reader.t.joinable()) { reader.t.join(); }
     src.stop();
     src.closeDevice();
-    CHECK(fake.countStarting("Uninit") == 0);
+    // The service still answers, so the teardown completes properly (fault B/C).
+    CHECK(fake.countStarting("Uninit") == 1);
+    CHECK(fake.countStarting("ReleaseDevice") == 1);
 }
 
 // --- 6. a WHOLE-PROCESS freeze is not a stalled service (review note 1) -------
@@ -632,7 +636,9 @@ void testAStallIsStillNamedWhenTheReaderIsSlow() {
           std::string::npos);
     src.stop();
     src.closeDevice();
-    CHECK(fake.countStarting("Uninit") == 0);
+    // The service still answers, so the teardown completes properly (fault B/C).
+    CHECK(fake.countStarting("Uninit") == 1);
+    CHECK(fake.countStarting("ReleaseDevice") == 1);
 }
 
 // --- 9. stop()'s OWN Uninit is bounded, even as the FIRST vendor call -------

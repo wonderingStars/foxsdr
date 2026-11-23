@@ -628,7 +628,9 @@ int everySetterAccepted(SdrPlaySource& src, FakeSdrPlayApi& fake, double blockHz
     CHECK(src.dabNotch() == dab);
     CHECK(src.antenna() == ant);
     // ...and what the user is shown still says what to do about it.
-    CHECK(std::string(src.lastError()).find("restart FoxSDR") != std::string::npos);
+    // (a stalled stream says "press START" - fault B - the other two still say restart FoxSDR)
+    CHECK(std::string(src.lastError()).find("restart FoxSDR") != std::string::npos ||
+          std::string(src.lastError()).find("press START") != std::string::npos);
     CHECK(src.deviceDead());
     return accepted;
 }
@@ -1266,8 +1268,11 @@ void testAntennasPerModel() {
         CHECK(src.setAntenna("Tuner 2"));
         CHECK(src.antenna() == "Tuner 2");
         CHECK(fake.indexOf("ReleaseDevice") == 0);
-        CHECK(fake.indexStarting("SelectDevice(tuner=2,mode=1)") == 1);
-        CHECK(fake.indexOf("GetDeviceParams") > 1);
+        // The re-select is bracketed by the API lock like every other SelectDevice (fault A ordering).
+        CHECK(fake.indexOf("LockDeviceApi") == 1);
+        CHECK(fake.indexStarting("SelectDevice(tuner=2,mode=1)") == 2);
+        CHECK(fake.indexOf("UnlockDeviceApi") == 3);
+        CHECK(fake.indexOf("GetDeviceParams") > 2);
         CHECK(fake.chB.tunerParams.gain.gRdB == 37);
         CHECK_NEAR(fake.chB.tunerParams.rfFreq.rfHz, 100000000.0, 1.0);
 
