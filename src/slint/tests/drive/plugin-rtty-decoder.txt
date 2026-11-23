@@ -1,11 +1,13 @@
-#! frames=500 bank=1 plugins=all open=module:rtty-decoder-1.2.0-abi3-win-x64.dll size=1600x1600
+#! frames=500 bank=1 plugins=rtty-decoder open=module:rtty-decoder-1.2.0-abi3-win-x64.dll size=1600x1600
 # plugin-rtty-decoder: RTTY Teleprinter Decoder (tick rows 678-696): the module page (START / STOP, GRANT, Keep running, the four plate
 # keys), the panel page "RTTY settings" with its "Plugin settings" fold (Baud, Shift, Reverse), the Decoder output page with the seven
 # presets. The field labels come from the DLL's own strings (verified there, not from a dump); the dump after the fold opens is KEPT as a
 # guard and to read the initial state of the Reverse box. No signal: state, not decodes.
 # START itself opens the plugin's windows: the pages read-back right after START is the assertion for RTTY settings; its tab is then
 # SELECTED with click "<page>"#2 (#1 is the DECODE bank row, a toggle that would close it) - no row click is used.
-120 state kit.plugins == 43
+# This script fits RTTY ALONE (plugins=rtty-decoder; it was plugins=all): the Decoder output page's preset bars are in a scrolling box in the order of the fitted decoders, and the wheel distance to this module's bar (885 px)
+# was measured against the 43 modules of 2026-11-09; with the 89 of the owner's folder today the bar is elsewhere, and any fixed distance would be wrong again with the next plugin. Alone, its bar is the first.
+120 state kit.plugins == 1
 state list.plugins.names contains "RTTY"
 state pages contains "RTTY"
 +1 expect "START" label equals "START"
@@ -46,9 +48,7 @@ state pages contains "RTTY"
 +5 state running == 1
 +1 click "+ Window"
 +3 state pages contains "Decoder output"
-# DRIVE FIXES 5 (merge 13): the Decoder output page keeps its preset bars in a 132 px scrolling box, in the order of the fitted decoders; RTTY's bar is 885 px down, so the box is wheeled to it before its keys are pressed.
-+2 scroll "Presets"#1 885
-+1 click "RTTY  14.080 MHz (20 m)"
++2 click "RTTY  14.080 MHz (20 m)"
 +10 state tunedHz > 14070000
 +1 state tunedHz < 14090000
 +1 click "RTTY  7.040 MHz (40 m)"

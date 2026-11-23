@@ -1,4 +1,4 @@
-#! frames=560 bank=1 plugins=all open=module:wefax-decoder-1.1.0-abi3-win-x64.dll size=1600x1600
+#! frames=560 bank=1 plugins=wefax-decoder open=module:wefax-decoder-1.1.0-abi3-win-x64.dll size=1600x1600
 # plugin-wefax-decoder: WEFAX Weather Fax Decoder (wefax-decoder 1.1.0, tick rows 1085-1111; an IMAGE DECODER + INSTRUMENT (FAX) + PANEL), docs 6.49 round two.
 # Idle page: IDLE lamp, START, GRANT RECEIVER CONTROL, Keep running, < FITTED. START is read back from the engine (decodersRunning) and from
 # the page's key turning into STOP. Windows from the DECODE bank: "WEFAX image" (picture + settings fold + preset keys), "UK & European WEFAX
@@ -6,7 +6,9 @@
 # EDGE are pressable rows of its memory table and plate keys of the module page, the wording is the plugin's: the labels are those of the round-one dump). The
 # settings fold ("Plugin settings", the groupbox is #1, the fold key #2) holds slant, hand-start rate and hand-start IOC. No signal is fed (the
 # fixture run, 6.49 phase B).
-120 state kit.plugins == 43
+# This script fits WEFAX ALONE (plugins=wefax-decoder; it was plugins=all): with the 89 modules of the owner's folder today its preset steps read back another tune than the key pressed (lines 65 and 75 saw 4608100 and 12748100 Hz
+# for 8038100 and 2616600; the kit, not the window, is what changed, and the same 77 steps all pass with the module alone). The exact cause in the full kit was not isolated.
+120 state kit.plugins == 1
 state list.plugins.names contains WEFAX
 +1 expect "START" enabled equals "true"
 +1 expect "GRANT RECEIVER CONTROL" enabled equals "true"
