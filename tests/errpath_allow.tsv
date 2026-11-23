@@ -1705,7 +1705,7 @@ src/sink/audio_out.cpp::AudioOut::open::warn::%	ALLOW	audio_out.cpp:152 noteSoun
 src/sink/audio_out.cpp::AudioOut::openLocked::ignored::pa_closestream stream	PENDING:A-audio	sound device failure (output stream close result ignored)	seed
 src/sink/pa_init.cpp::PaStreamListGuard::PaStreamListGuard::warn::audio waited % ms for portaudios stream list behind other op	PENDING:reports-not-in-function	survey: REPORTS (raiseRecovered(CloseLeak) at the same guard) but no reporting call encloses the site	seed
 src/sink/pa_init.cpp::paTerminateShared::ignored::pa_terminate	ALLOW	process-exit teardown	seed
-src/slint/cjk_register.hpp::registerForLanguage::errassign::window window_handle register_font_from_path slint sharedstr	ALLOW	UI result text: the failure is classified at the site that produced it	seed
+src/slint/cjk_register.hpp::registerForLanguage::errassign::window window_handle register_font_from_path foxsdr slintsaf	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/cjk_register.hpp::registerForLanguage::stderr::foxsdrslint font % not registered %	PENDING:unsure	UNSURE: stderr line in a start-up path: read it	seed
 src/slint/export_logic.cpp::saveData::errassign::no file name	ALLOW	UI result text: the failure is classified at the site that produced it	seed
 src/slint/export_logic.cpp::saveData::errassign::there is nothing to write	ALLOW	UI result text: the failure is classified at the site that produced it	seed
