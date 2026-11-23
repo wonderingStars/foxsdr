@@ -1540,6 +1540,52 @@ std::string stderrFileName(unsigned long processId) {
     return "stderr-" + std::to_string(processId) + ".txt";
 }
 
+std::string keepPanicLocations(const std::string& line) {
+    // A RUST PANIC NAMES THE LINE THAT PANICKED: "thread 'main' panicked at internal\core\string.rs:581:85:". That is the one
+    // fact that decides a crash group (0.99.110's Option::unwrap report lost it to the path scrub), and it is a source location
+    // in the library, not the user's. So a token that ends ".rs:<line>:<column>" is cut back to its last TWO path components
+    // plus the position when the path is the toolchain's or the library's own (relative, or through .cargo / registry / rustc),
+    // and to the file name alone otherwise (an absolute path may run through a user's folders). Separators are kept as found.
+    static const auto pathChar = [](char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' || c == '.' || c == '-' || c == '\\' || c == '/' || c == ':';
+    };
+    static const auto lower = [](std::string s) {
+        for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+        return s;
+    };
+    std::string out;
+    std::size_t i = 0;
+    while (i < line.size()) {
+        const std::size_t dot = line.find(".rs:", i);
+        if (dot == std::string::npos) { out.append(line, i, std::string::npos); break; }
+        std::size_t p = dot + 4;
+        const std::size_t lineStart = p;
+        while (p < line.size() && std::isdigit(static_cast<unsigned char>(line[p])) != 0) { ++p; }
+        if (p == lineStart || p >= line.size() || line[p] != ':') { out.append(line, i, dot + 4 - i); i = dot + 4; continue; }
+        const std::size_t colStart = ++p;
+        while (p < line.size() && std::isdigit(static_cast<unsigned char>(line[p])) != 0) { ++p; }
+        if (p == colStart) { out.append(line, i, dot + 4 - i); i = dot + 4; continue; }
+        std::size_t k = dot;
+        while (k > i && pathChar(line[k - 1])) { --k; }
+        const std::string path = line.substr(k, dot + 3 - k);
+        // component starts: after each separator
+        std::vector<std::size_t> starts{0};
+        for (std::size_t q = 0; q < path.size(); ++q) {
+            if (path[q] == '\\' || path[q] == '/') { starts.push_back(q + 1); }
+        }
+        const std::string low = lower(path);
+        const bool absolute = (path.size() >= 2 && path[1] == ':') || (!path.empty() && (path[0] == '\\' || path[0] == '/'));
+        const bool library = !absolute || low.find(".cargo") != std::string::npos || low.find("registry") != std::string::npos ||
+                             low.find("rustc") != std::string::npos;
+        const std::size_t keepFrom = (library && starts.size() >= 2) ? starts[starts.size() - 2] : starts.back();
+        out.append(line, i, k - i);
+        out += path.substr(keepFrom);
+        out.append(line, dot + 3, p - (dot + 3));   // ".rs"'s tail is not repeated: ":<line>:<column>"
+        i = p;
+    }
+    return out;
+}
+
 std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsigned long processId,
                                                  std::size_t maxLines) {
     std::vector<std::string> out;
@@ -1590,13 +1636,30 @@ std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsi
         // ... and every file path in it becomes the one token "<path>" (radioreport::pathsToToken, the rule the radio reports use): a library's last
         // words often name a file (a file it could not open, a panic's source location), and a report carries no file names and no paths. The words
         // around the path, which say WHAT failed, stay.
-        const std::string clean = radioreport::pathsToToken(scrubUploadLine(scrubVendorLine(line.substr(b, e - b))));
+        // (a Rust panic's "file.rs:line:column" is cut back first and kept: keepPanicLocations)
+        const std::string clean = radioreport::pathsToToken(scrubUploadLine(scrubVendorLine(keepPanicLocations(line.substr(b, e - b)))));
         for (std::size_t at = 0; at < clean.size(); at += kStderrTailLineChars) {
             out.push_back("stderr: " + clean.substr(at, kStderrTailLineChars));
         }
     }
     if (out.size() > maxLines) {
-        out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(out.size() - maxLines));
+        // THE PANIC MUST SURVIVE THE CUT. With RUST_BACKTRACE set a panic is followed by a long backtrace, and the newest
+        // lines alone would drop "panicked at <file>:<line>:<column>" and its message, which is what decides the crash group.
+        // The newest panic line and the line after it (the message) are kept, then the newest of the rest.
+        std::size_t panic = out.size();
+        for (std::size_t q = out.size(); q > 0; --q) {
+            if (out[q - 1].find("panicked at") != std::string::npos) { panic = q - 1; break; }
+        }
+        const std::size_t cut = out.size() - maxLines;
+        if (panic < cut && maxLines >= 3) {
+            std::vector<std::string> kept;
+            kept.push_back(out[panic]);
+            if (panic + 1 < out.size()) { kept.push_back(out[panic + 1]); }
+            for (std::size_t q = cut + kept.size(); q < out.size(); ++q) { kept.push_back(out[q]); }
+            out.swap(kept);
+        } else {
+            out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(cut));
+        }
     }
     return out;
 }

@@ -25,6 +25,7 @@
 #include <string_view>
 
 #include "core/diag_log.hpp"
+#include "safe_text_make.hpp"
 #include "core/utf8_text.hpp"
 
 namespace foxsdr::slintsafe {
@@ -65,8 +66,8 @@ inline std::string valid(std::string_view s, const char* site) {
 }
 
 inline slint::SharedString shared(std::string_view s, const char* site) {
-    if (cascade::core::isValidUtf8(s)) { return slint::SharedString(s); }  // the usual case: no copy
-    return slint::SharedString(std::string_view(valid(s, site)));
+    if (cascade::core::isValidUtf8(s)) { return Make::from(s); }  // the usual case: no copy
+    return Make::from(valid(s, site));
 }
 
 }  // namespace foxsdr::slintsafe

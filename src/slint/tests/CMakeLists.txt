@@ -644,3 +644,13 @@ if(FOXSDR_SLINT_SCAN_PYTHON)
     add_test(NAME slint_text_sites COMMAND ${FOXSDR_SLINT_SCAN_PYTHON} -I "${FOXSDR_REPO_ROOT}/tools/slint_text_sites.py" "${CMAKE_CURRENT_SOURCE_DIR}/..")
     set_tests_properties(slint_text_sites PROPERTIES LABELS "slint")
 endif()
+
+# The compiler proof (tools/slint_implicit_text_probe.py): every src/slint file compiled against a Slint header in which every route from a std::string / const char*
+# into a SharedString is closed but the boundary's friend. It needs the compiler's own environment and a built foxsdr-slint (its compile commands), and SKIPS (77)
+# without them - so it runs wherever the project is built with MSVC and never fails a machine that cannot.
+if(FOXSDR_SLINT_SCAN_PYTHON AND WIN32 AND TARGET foxsdr-slint)
+    get_filename_component(_foxsdr_slint_inc "${Slint_DIR}/../../../include/slint" ABSOLUTE)
+    add_test(NAME slint_implicit_text_probe COMMAND ${FOXSDR_SLINT_SCAN_PYTHON} -I "${FOXSDR_REPO_ROOT}/tools/slint_implicit_text_probe.py"
+             "${_foxsdr_slint_inc}" "${CMAKE_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/probe" "${CMAKE_CXX_COMPILER}")
+    set_tests_properties(slint_implicit_text_probe PROPERTIES LABELS "slint" SKIP_RETURN_CODE 77 TIMEOUT 900)
+endif()

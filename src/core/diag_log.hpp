@@ -406,6 +406,8 @@ std::string stderrFileName(unsigned long processId);   // "stderr-<id>.txt"
 // scrubUploadLine - the rules a driver's line and a log line already get - and control and
 // non-ASCII characters become '?'. Empty when the file is missing or empty. Platform-neutral
 // (it only reads).
+// A Rust panic location ("...\string.rs:581:85") cut back to what identifies the line and no user path: see diag_log.cpp.
+std::string keepPanicLocations(const std::string& line);
 std::vector<std::string> readStderrTailForReport(const std::string& logDir, unsigned long processId,
                                                  std::size_t maxLines = kStderrTailMaxLines);
 bool stderrCaptureActive();

@@ -157,8 +157,9 @@ std::string errText(const abi::Api& api, abi::ErrT err) {
         // before it reaches the log (shown in the new window) or lastError() (0.99.112 crash groups
         // 6CCFD0C0E58FC30C and 104F425230C2A742).
         const std::string text = core::utf8OrAnsiToUtf8(s);
-        std::snprintf(buf, sizeof(buf), "%s (%d)", text.c_str(), static_cast<int>(err));
-        buf[core::utf8Floor(buf, sizeof(buf) - 1)] = '\0';
+        // Built as a std::string, no fixed buffer: nothing is cut, nothing uninitialised is read (a cut would also need a
+        // character-aware floor that touches the buffer's tail only when the text really was truncated).
+        return text + " (" + std::to_string(static_cast<int>(err)) + ")";
     } else {
         std::snprintf(buf, sizeof(buf), "error %d", static_cast<int>(err));
     }
