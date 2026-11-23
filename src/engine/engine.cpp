@@ -11682,6 +11682,7 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
     // engine/stage4, batch A, docs/engine-stage4.md 6.31): the watcher outside the process must not read this thread's 62 beats a second as a window that is alive.
     controlWatchdog_.setSentinelHeartbeat(options.sentinelHeartbeat);
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
+    if (options.startupBudget) { controlWatchdog_.beginStartup(); }   // the first passes get the start-up budget (ControlThreadOptions::startupBudget)
     {
         std::lock_guard<std::mutex> lk(controlExitMutex_);
         controlExited_ = false;

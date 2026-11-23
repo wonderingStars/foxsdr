@@ -1507,6 +1507,10 @@ int AppWindow::run(int frames) {
     watchdog_.setDisplayStallSink([ledger = cascade::core::globalStallLedger()] { ledger->note(); });
     watchdog_.setForceDisplayStallForTest(forceDisplayStall);
     watchdog_.start(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // THE FIRST FRAMES GET THEIR OWN BUDGET (HangWatchdog::beginStartup; 89e251e9). The call was lost from here between 0.99.104 and 0.99.105, so from
+    // 0.99.105 on the first frame (shader compile, font texture, a software renderer) was judged against the 5 s steady threshold: two field freeze
+    // reports. tests/test_watchdog_startup_wired.cpp fails if this line goes again.
+    watchdog_.beginStartup();
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
     // to "may this run touch the disk at all", which is diagCrashDir_ and is

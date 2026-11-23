@@ -366,6 +366,7 @@ bool EngineService::start(std::string& why) {
     // what the watcher should judge.
     opt.sentinelHeartbeat = !options_.frontEndFollows;
     opt.watchdogReportDir = reportDir;
+    opt.startupBudget = true;   // the first passes are judged against the start-up budget (the Slint window has no watchdog of its own)
     opt.diagnosticsDir = options_.diagnosticsDir;   // where the interface's half moves the control watchdog to when it switches Diagnostics on (shell retirement R5)
     if (!options_.stepped) { engine_.controlPass(); }   // a stepped run's first frame runs the pass's front part: that IS the first pass
     engine_.startControlThread(opt);
