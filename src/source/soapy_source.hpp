@@ -687,8 +687,6 @@ private:
     bool restartStreamLocked(std::string& why);
     // Called from read() on every no-samples answer of the driver: the stall detector.
     void noteNoSamplesLocked();
-    // True for a driver whose stream must be re-created after a live rate change (the B200's master clock follows the rate).
-    bool recreatesStreamOnRateChange() const;
 
     // Releases whatever half-built state exists, swallowing every Soapy
     // exception: teardown runs inside catch blocks and destructors, where a

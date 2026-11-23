@@ -119,7 +119,7 @@ SoapySDR::Device* makeUhd(const SoapySDR::Kwargs& a) {
         std::lock_guard<std::mutex> lk(g_uhd.m);
         g_uhd.makeArgs.push_back(SoapySDR::KwargsToString(a));
     }
-    return new FakeDevice(g_uhd, "uhd", true);
+    return new FakeDevice(g_uhd, "uhd", false);
 }
 
 constexpr std::size_t kN = 1024;
@@ -222,22 +222,46 @@ int main() {
         CHECK(!src.faulted());
     }
 
-    // --- C: a live rate change on the B200's driver leaves the stream delivering at the new rate -------------------------------------------------------
+    // --- C: a live rate change on the B200's driver keeps the stream delivering at the new rate, with NO restart (0.99.112's deactivate, set rate, activate) ----
     {
         g_uhd.reset();
         SoapySource src;
-        src.setStallWindowForTest(std::chrono::seconds(60));   // the stall detector must NOT be what saves this: the rate change itself must
+        src.setStallWindowForTest(std::chrono::seconds(60));
         CHECK(src.open("driver=uhd, serial=ABC123") && src.start());
         CHECK(readSome(src, std::chrono::seconds(2)) == kN);
         for (const double hz : {2.4e6, 1.0e6, 2.0e6}) {   // the owner's sequence
             CHECK(src.setSampleRateHz(hz));
             CHECK(src.sampleRateHz() == hz);
-            CHECK(readSome(src, std::chrono::milliseconds(500)) == kN);   // delivering at the new rate, straight away
+            CHECK(readSome(src, std::chrono::milliseconds(500)) == kN);
             CHECK(readSome(src, std::chrono::milliseconds(500)) == kN);
         }
-        CHECK(g_uhd.setups == 1 + 3);                  // the stream was re-created for each new rate
+        CHECK(g_uhd.setups == 1);                      // the stream was NOT re-created by a rate change
+        CHECK(g_uhd.deactivates == 3 && g_uhd.activates == 4);   // deactivate, set, activate each time
+        CHECK(src.stallRestartsForTest() == 0);        // and no restart event
         CHECK(!src.faulted());
+    }
+
+    // --- C3: A STOPPED RECEIVER IS NOT A STALL (the journal counted stopped minutes as silent ones). Reads that stop for longer than the window, then start
+    // again, cost no restart and no fault - even when the last reads before the stop were timeouts and the first after the start is one too. -----------------
+    {
+        g_stall.reset();
+        SoapySource src;
+        src.setStallWindowForTest(std::chrono::milliseconds(150));
+        CHECK(src.open("driver=faketstall") && src.start());
+        CHECK(readSome(src, std::chrono::seconds(2)) == kN);
+        g_stall.killAll = true;
+        std::vector<std::complex<float>> buf(kN);
+        const auto quiet = Clock::now() + std::chrono::milliseconds(80);   // a silent run, shorter than the window
+        while (Clock::now() < quiet) { (void)src.read(buf.data(), kN); }
+        src.stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));       // stopped for much longer than the window
+        CHECK(src.start());
+        (void)src.read(buf.data(), kN);                                     // still silent for one read after the start
+        g_stall.killAll = false;
+        CHECK(readSome(src, std::chrono::seconds(2)) == kN);
+        CHECK(g_stall.setups == 1);
         CHECK(src.stallRestartsForTest() == 0);
+        CHECK(!src.faulted());
     }
 
     // --- C2: another driver's stream is not re-created for a rate change (it never needed it) --------------------------------------------------------

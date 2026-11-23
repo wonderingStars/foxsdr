@@ -2182,13 +2182,6 @@ bool SoapySource::recreateStreamLocked(std::string& why) {
     return true;
 }
 
-bool SoapySource::recreatesStreamOnRateChange() const {
-    // The B200's master clock follows the sample rate, and a UHD streamer built for the old clock is not trusted across the change (field: two
-    // silent stalls, 20 and 22 Nov 2026, the second straight after live rate changes). INFERRED, not proved on the hardware; the stall detector
-    // below is the net under every other driver.
-    return driverKey_ == "uhd";
-}
-
 bool SoapySource::restartStreamLocked(std::string& why) {
     // THE STATE TO PUT BACK, copied out before the guarded body (no lock may be taken inside it).
     const double rate = sampleRateHz_.load(std::memory_order_relaxed);
@@ -2691,19 +2684,6 @@ bool SoapySource::setSampleRateHz(double hz) {
     }
     sampleRateHz_.store(r.got, std::memory_order_relaxed);
     noSamplesRun_ = false;  // a new rate is a new stream: the stall clock starts again
-    if (wasRunning && recreatesStreamOnRateChange()) {
-        // THE B200 CASE (field, 22 Nov 2026): 2.4, then 1.0, then 2.0 MS/s on a live stream, and the stream went 1.55 M, 0.75 M, then 0 samples/s for
-        // 237 minutes with no fault. The master clock follows the rate, so the stream made for the old clock is closed and a fresh one made for the
-        // new, while the device is quiescent (deactivated above). INFERRED as the cause, not proved on the hardware.
-        std::string why;
-        if (!recreateStreamLocked(why)) {
-            running_.store(false, std::memory_order_relaxed);
-            if (!deviceDead()) {
-                setError(std::string("sample rate changed to ") + rateWords(r.got) + " but the stream could not be re-created (" + why + ") - it is stopped");
-            }
-            return false;
-        }
-    }
     // A restart the driver has not answered yet is PENDING (see
     // activateLocked): the stream stays running, reads answer 0 until the
     // answer is taken, and a late refusal stops it as faulted().
