@@ -362,6 +362,7 @@ int main() {
         stopReader = true;
         reader.join();
         CHECK(took < 3500);
+        CHECK(took < 5000);                                 // a stop during a restart is inside the hang watchdog's 5 s (kControlLockWait + kRestartGiveBack = 4.5 s at most)
         CHECK(!src.faulted());
         CHECK(std::string(src.lastError()).find("restart FoxSDR") == std::string::npos);
         CHECK(src.deadReason() != SoapySource::DeadReason::Abandoned);

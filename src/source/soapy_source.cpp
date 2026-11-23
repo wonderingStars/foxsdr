@@ -1463,7 +1463,13 @@ bool SoapySource::open(const std::string& args) {
 // THE LOCK FOR STOP AND CLOSE. A stall restart holds the device lock across its steps; a stop or close that arrives during one asks it to give the lock
 // back (escapeWaiters_, checked between its steps) and waits for it, instead of condemning a healthy radio after kControlLockWait ("restart FoxSDR").
 // The wait is bounded (kRestartGiveBack) and only taken while a restart is really in flight.
+// WHY 3000: a restart's steps are abandonable vendor jobs bounded by kVendorCallWait (1500 ms each; only the settings re-apply is not one) and it
+// checks escapeWaiters_ between steps, so two bounded steps is the most a stop ever has to wait behind. kControlLockWait + 3000 = 4.5 s: a stop
+// that arrives during a restart is back in the caller's hands inside the hang watchdog's 5 s (HangWatchdog::kDefaultThresholdMs). The old 6000
+// made it 7.5 s, which the watchdog would have reported as a hang.
 std::unique_lock<std::timed_mutex> SoapySource::lockForEscape() {
+    static_assert(kControlLockWait + kRestartGiveBack < std::chrono::milliseconds(5000),
+                  "stop()/closeDevice() during a stall restart must give the GUI thread back inside the hang watchdog's threshold");
     escapeWaiters_.fetch_add(1, std::memory_order_relaxed);
     std::unique_lock<std::timed_mutex> lk(link_->mutex, kControlLockWait);
     if (!lk.owns_lock() && restarting_.load(std::memory_order_relaxed)) {
