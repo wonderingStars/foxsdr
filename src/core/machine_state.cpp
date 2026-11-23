@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
@@ -25,6 +26,7 @@ namespace cascade::core {
 
 namespace {
 
+constexpr std::size_t kMachineLineBudget = 172;   // DiagLog::kLineBytes (192) - NUL - the 18-character stamp - one spare
 std::atomic<int> g_display{-1};
 std::string g_lastLogged;   // the pass thread's (logMachineStateIfChanged)
 
@@ -50,7 +52,92 @@ const char* windowWord() {
     return "unknown";
 }
 
+// THE PROCESSOR'S CLOCK NOW AND AT ITS MAXIMUM, in MHz (2026-11-23, the ringdrop measurement): the direct test of "a core held at its lowest clock
+// (battery saver, a thermal or power limit)", the leading candidate for a DSP thread that runs below real time. CallNtPowerInformation
+// (ProcessorInformation) from powrprof.dll, resolved at run time (no new import), read-only. "now" is the highest current clock of any logical
+// processor (what the thread could be given), "max" the highest maximum. Writes "N/M" or "unknown"; Windows only.
+std::string clockText() {
+    char out[96];
+    const std::size_t cap = sizeof(out);
+    std::snprintf(out, cap, "unknown");
+#if defined(_WIN32)
+    using CallNtPowerInformationFn = LONG(WINAPI*)(int, PVOID, ULONG, PVOID, ULONG);
+    struct ProcessorPowerInformation {   // PROCESSOR_POWER_INFORMATION (winnt.h), spelled out so no extra header is needed
+        ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState;
+    };
+    constexpr int kProcessorInformation = 11;   // POWER_INFORMATION_LEVEL::ProcessorInformation
+    const HMODULE lib = ::LoadLibraryW(L"powrprof.dll");
+    if (lib == nullptr) { return out; }
+    const auto fn = reinterpret_cast<CallNtPowerInformationFn>(reinterpret_cast<void*>(::GetProcAddress(lib, "CallNtPowerInformation")));
+    const DWORD active = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (fn != nullptr && active != 0 && active <= 1024) {
+        std::vector<ProcessorPowerInformation> info(active);
+        if (fn(kProcessorInformation, nullptr, 0, info.data(), static_cast<ULONG>(info.size() * sizeof(ProcessorPowerInformation))) >= 0) {
+            unsigned long now = 0, max = 0;
+            for (const ProcessorPowerInformation& p : info) {
+                if (p.CurrentMhz > now) { now = p.CurrentMhz; }
+                if (p.MaxMhz > max) { max = p.MaxMhz; }
+            }
+            if (now != 0 && max != 0) { std::snprintf(out, cap, "%lu/%lu", now, max); }
+        }
+    }
+    ::FreeLibrary(lib);
+#endif
+    return out;
+}
+
+// THE MEMORY (2026-11-23, a field session whose whole process was barely being run): the system's memory load in percent, the physical memory still
+// available in MB, and the commit charge against the commit limit in MB - GlobalMemoryStatusEx, read-only. "unknown" for each on a failed query.
+std::string memoryWords() {
+    char out[96];
+    std::snprintf(out, sizeof(out), "mem_load=unknown mem_avail_mb=unknown commit_mb=unknown");
+#if defined(_WIN32)
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    if (::GlobalMemoryStatusEx(&ms) != 0) {
+        const unsigned long long mb = 1024ull * 1024ull;
+        const unsigned long long used = ms.ullTotalPageFile >= ms.ullAvailPageFile ? (ms.ullTotalPageFile - ms.ullAvailPageFile) / mb : 0ull;
+        std::snprintf(out, sizeof(out), "mem_load=%lu mem_avail_mb=%llu commit_mb=%llu/%llu", static_cast<unsigned long>(ms.dwMemoryLoad),
+                      static_cast<unsigned long long>(ms.ullAvailPhys / mb), used, static_cast<unsigned long long>(ms.ullTotalPageFile / mb));
+    }
+#endif
+    return out;
+}
+
 }  // namespace
+
+bool processMemoryNow(unsigned long long* pageFaults, unsigned long long* workingSetMb) {
+#if defined(_WIN32)
+    struct Counters {   // PROCESS_MEMORY_COUNTERS (psapi.h), spelled out; K32GetProcessMemoryInfo is in kernel32 (no new import)
+        DWORD cb, PageFaultCount;
+        SIZE_T PeakWorkingSetSize, WorkingSetSize, QuotaPeakPagedPoolUsage, QuotaPagedPoolUsage, QuotaPeakNonPagedPoolUsage, QuotaNonPagedPoolUsage,
+            PagefileUsage, PeakPagefileUsage;
+    };
+    using Fn = BOOL(WINAPI*)(HANDLE, Counters*, DWORD);
+    const HMODULE k = ::GetModuleHandleW(L"kernel32.dll");
+    const auto fn = k == nullptr ? nullptr : reinterpret_cast<Fn>(reinterpret_cast<void*>(::GetProcAddress(k, "K32GetProcessMemoryInfo")));
+    Counters c{};
+    c.cb = sizeof(c);
+    if (fn != nullptr && fn(::GetCurrentProcess(), &c, sizeof(c)) != 0) {
+        *pageFaults = c.PageFaultCount;
+        *workingSetMb = static_cast<unsigned long long>(c.WorkingSetSize) / (1024ull * 1024ull);
+        return true;
+    }
+#else
+    (void)pageFaults;
+    (void)workingSetMb;
+#endif
+    return false;
+}
+
+int systemMemoryLoadPercent() {
+#if defined(_WIN32)
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    if (::GlobalMemoryStatusEx(&ms) != 0) { return static_cast<int>(ms.dwMemoryLoad); }
+#endif
+    return -1;
+}
 
 void noteDisplayState(int state) { g_display.store(state, std::memory_order_relaxed); }
 
@@ -101,14 +188,27 @@ std::string machineStateText(const std::string& dspPrio, const std::string& srcP
                   "machine: power=%s saver=%s throttle=%s timer_100ns=%s cpus=%u affinity=%s window=%s display=%s prio=dsp:%s,src:%s",
                   power, saver, throttle, timer, cpus, aff, windowWord(), display, firstWord(dspPrio).c_str(),
                   firstWord(srcPrio).c_str());
-    return line;
+    // THE CLOCK, last: "clock=<now>/<max>" (MHz) or "clock=unknown" - not "mhz=", whose letters make the upload scrub read the line as naming a
+    // frequency and mask its numbers. It is left out when the line would not fit the log's line with its stamp (a cut line is masked whole by the
+    // upload scrub): kMachineLineBudget characters, the same 172 the DSP minute's lines are held to; logMachineStateIfChanged then says it in a
+    // line of its own.
+    std::string text(line);
+    const std::string clockWord = std::string(" clock=") + clockText() + " " + memoryWords();
+    if (text.size() + clockWord.size() <= kMachineLineBudget) { text += clockWord; }
+    return text;
 }
 
 bool logMachineStateIfChanged(const std::string& dspPrio, const std::string& srcPrio, bool force) {
     const std::string text = machineStateText(dspPrio, srcPrio);
-    if (!force && text == g_lastLogged) { return false; }
-    g_lastLogged = text;
+    const bool clockInLine = text.find(" clock=") != std::string::npos;
+    const std::string clockLine = clockInLine ? std::string() : std::string("machine:") + " clock=" + clockText() + " " + memoryWords();
+    // CHANGE IS JUDGED ON THE STEADY WORDS ONLY: the clock and the memory figures move every time they are read and would make every call "changed".
+    const std::size_t volatileAt = text.find(" clock=");
+    const std::string key = volatileAt == std::string::npos ? text : text.substr(0, volatileAt);
+    if (!force && key == g_lastLogged) { return false; }
+    g_lastLogged = key;
     diagLogf("%s", text.c_str());
+    if (!clockLine.empty()) { diagLogf("%s", clockLine.c_str()); }
     return true;
 }
 

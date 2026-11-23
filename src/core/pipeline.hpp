@@ -352,6 +352,29 @@ public:
     std::uint64_t takeSrcGapLongestNs() { return srcGapLongestNs_.exchange(0, std::memory_order_relaxed); }
     std::uint64_t genResyncs() const { return genResyncs_.load(std::memory_order_relaxed); }
     std::uint64_t genSkippedNs() const { return genSkippedNs_.load(std::memory_order_relaxed); }
+    // WHERE THE TIME GOES (2026-11-23): the wall time the DSP thread has spent in each phase of its loop since the pipeline began, cumulative and
+    // never reset (measured by difference, like the counters above). The phases are the heartbeat's words, in this order: ring, spectrum,
+    // audio-lock, taps, plugin-iq, patch, demod, plugin-audio, host-audio, plugin-chain, sink. "ring" is the read of the ring and the idle sleep
+    // when it is empty, so it is NOT work; the other ten are. Taken from the timestamps the heartbeat already reads: no extra clock read.
+    static constexpr unsigned kDspPhases = 11;
+    static const char* dspPhaseName(unsigned index);   // "" for an index past the last
+    void dspPhaseTotalsNs(std::uint64_t* out) const;   // kDspPhases values
+    // The samples in one block (the FFT size the thread was built with): a block is that many samples at the input rate, so its duration is the
+    // budget the thread has for it. 0 until the thread has started once.
+    std::size_t dspBlockSamples() const { return dspBlockSamples_.load(std::memory_order_relaxed); }
+    // SHEDDING (core/dsp_shed.hpp): blocks that skipped their display-only work because the ring was more than half full, the number of times the
+    // thread went from full work to shedding, and the fullest the ring was (percent of its capacity) at the start of a shed block since the last
+    // take. dspShedding() is the state now. Shedding is not a fault: nothing here is filed.
+    std::uint64_t dspShedBlocks() const { return dspShedBlocks_.load(std::memory_order_relaxed); }
+    std::uint64_t dspShedEntries() const { return dspShedEntries_.load(std::memory_order_relaxed); }
+    std::uint64_t takeDspShedRingPeakPct() { return dspShedPeakPct_.exchange(0, std::memory_order_relaxed); }
+    bool dspShedding() const { return dspShedState_.load(std::memory_order_relaxed); }
+    // TEST SEAM (never set by the application): burn `microseconds` of processor inside the named phase (one of dspPhaseName's words) of every
+    // block - what a slow core costs a stage - on the DSP thread only. The spectrum's load is burned only in a block that computes the spectrum.
+    // 0 clears it; an unknown word is ignored. Process-wide.
+    static void setDspPhaseLoadForTest(const char* phase, int microseconds);
+    // TEST SEAM (never set by the application): false switches shedding off, so a test can show the loss a load causes without it.
+    static void setDspShedEnabledForTest(bool on);
     // TEST SEAM (never set by the application): the DSP thread sleeps this long after every block, which makes a loss minute on demand. Process-wide.
     static void setDspBlockDelayForTest(int ms);
     // TEST SEAM (never set by the application): inside every block's own span the DSP thread BURNS processor for burnMs (a busy loop) and
@@ -1716,6 +1739,15 @@ private:
     std::atomic<bool> dspCpuKnown_{false};
     std::atomic<std::uint64_t> dspBlocks_{0};
     std::atomic<std::uint64_t> dspGapLongestPacked_{0};
+    std::atomic<std::uint64_t> dspPhaseNs_[kDspPhases] = {};   // see dspPhaseTotalsNs; written only by the DSP thread
+    std::atomic<std::size_t> dspBlockSamples_{0};
+    // SHEDDING: dspShedding_ is the DSP thread's own state (never read elsewhere); the atomics are what the others may read.
+    bool dspShedding_ = false;
+    unsigned dspShedSpectrumTick_ = 0;
+    std::atomic<bool> dspShedState_{false};
+    std::atomic<std::uint64_t> dspShedBlocks_{0};
+    std::atomic<std::uint64_t> dspShedEntries_{0};
+    std::atomic<std::uint64_t> dspShedPeakPct_{0};
     std::atomic<std::uint64_t> srcGapLongestNs_{0};
     std::atomic<std::int64_t> srcLastWriteNs_{0};   // the previous write's steady-clock ns; 0 = none yet in this generation
     std::atomic<std::uint64_t> genResyncs_{0};

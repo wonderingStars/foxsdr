@@ -565,8 +565,29 @@ struct Receiver {
     std::uint64_t dspBlocksAtMinute_ = 0;
     std::uint64_t genResyncsAtMinute_ = 0;
     std::uint64_t genSkippedAtMinute_ = 0;
+    // WHERE THE TIME GOES (2026-11-23, core/dsp_baseline.hpp): the per-phase totals (Pipeline::dspPhaseTotalsNs) as the minute opened, the shed
+    // blocks as it opened, and the baseline line's small state machine: 0 = not armed, 1 = waiting to take the marks, 2 = marks taken, waiting to
+    // say the line, 3 = said (for this rate). baselineRate_ is the input rate the line was armed for; a different rate arms it again.
+    std::uint64_t dspPhaseAtMinute_[11] = {};
+    std::uint64_t dspShedAtMinute_ = 0;
+    unsigned long long pageFaultsAtMinute_ = 0;
     // THE AUDIO WATCHDOG'S BACK-OFF (item 7): seconds between re-open attempts while the output stays dead: 1, 2, 4 ... 30; back to 1 when it lives.
     double audioProbeIntervalS_ = 1.0;
+    double firstBaselineCostUs_ = 0.0;     // the first baseline line's cost per block (0 = none said yet)
+    bool baselineRelogged_ = false;        // the baseline has been said again in a loss minute (once per session)
+    int baselineStage_ = 0;
+    double baselineRate_ = 0.0;
+    double baselineMarkAtS_ = 0.0;
+    double baselineDueS_ = 0.0;
+    std::uint64_t baselineBusyMark_ = 0;
+    std::uint64_t baselineBlocksMark_ = 0;
+    std::uint64_t baselinePhaseMark_[11] = {};
+    // THE COMPUTER CANNOT KEEP UP (item 4): consecutive minutes in which more than 1% of the samples were dropped although display work was being
+    // shed; the note (shown where the audio health note is, see Engine::audioHealthLine) once there have been two, cleared by a minute that loses
+    // nothing; said at most once per session (keepUpSaid_).
+    unsigned keepUpBadMinutes_ = 0;
+    bool keepUpSaid_ = false;
+    std::string keepUpNote_;
     // ---- the slot's own life (multi-radio stage 4) ----
     // Which radio this is, from 1 (slot + 1); set once when the slot is built.
     std::uint32_t radioNumber_ = 1;

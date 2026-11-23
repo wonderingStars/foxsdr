@@ -52,6 +52,8 @@
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
 #include "core/machine_state.hpp"
+#include "core/dsp_baseline.hpp"
+#include "core/dsp_shed.hpp"
 #include "core/issue_report.hpp"
 #include "core/i18n.hpp"
 #include "core/utf8_text.hpp"
@@ -537,6 +539,9 @@ constexpr double kScanUserTuneEpsHz = 0.5;
 // The note is stored TRANSLATED (the Sinks panel draws audioHealthNote_ as it
 // stands), so it is written and compared through tr() in both places.
 const char* const kAudioBusyNote = FOX_TR_NOOP("audio device busy - still opening");
+// THE COMPUTER CANNOT KEEP UP (2026-11-23): shown with the audio health note (Engine::audioHealthLine) once two minutes in a row lost more than 1%
+// of the samples although the display work was already being skipped; cleared by a minute that loses nothing.
+const char* const kKeepUpNote = FOX_TR_NOOP("This computer is not keeping up with the radio at this sample rate: samples are being lost. Choose a lower sample rate, or switch off decoders you are not using.");
 
 // Monotonic milliseconds for the retune coalescer — steady_clock, because a
 // wall-clock step (NTP, DST) must never stall or flood the tune pacing.
@@ -1027,6 +1032,7 @@ void Engine::pollDspMinute() {
     // EVERY ABSENT DISCARD IS SAID, whether or not the minute clock has armed (review of 70d16f00, finding 1).
     reportAbsentDiscards();
     const double now = clockS();
+    pollDspBaseline(now);
     if (!rx().dspMinuteArmed_) {
         // THE FIRST MINUTE STARTS WITH THE STREAM: nothing is judged before the DSP thread has read the ring (or ten seconds after the receiver
         // was started, whichever is first), and the marks are taken HERE. What follows is a full minute, judged like any other: there is no
@@ -1044,6 +1050,13 @@ void Engine::pollDspMinute() {
         rx().dspBlocksAtMinute_ = rx().pipeline_.dspBlocks();
         rx().genResyncsAtMinute_ = rx().pipeline_.genResyncs();
         rx().genSkippedAtMinute_ = rx().pipeline_.genSkippedNs();
+        rx().pipeline_.dspPhaseTotalsNs(rx().dspPhaseAtMinute_);
+        rx().dspShedAtMinute_ = rx().pipeline_.dspShedBlocks();
+        {
+            unsigned long long faults = 0, ws = 0;
+            if (cascade::core::processMemoryNow(&faults, &ws)) { rx().pageFaultsAtMinute_ = faults; }
+        }
+        (void)rx().pipeline_.takeDspShedRingPeakPct();
         (void)rx().pipeline_.takeDspGapLongest(nullptr);
         (void)rx().pipeline_.takeSrcGapLongestNs();
         rx().dspEventMark_ = minuteEventCounts();
@@ -1056,6 +1069,60 @@ void Engine::pollDspMinute() {
         rx().lastDspLogSec_ = now;
         closeDspMinute();
     }
+}
+
+// THE BASELINE (2026-11-23, core/dsp_baseline.hpp, docs/DIAGNOSTICS.md "Where the time goes"): once per session, 15 s after the first drain, and again
+// 15 s after the input rate changes, one line saying how much margin this machine has at this rate - the mean time a block took over the last
+// 5 s against the time the block lasts, and where it went - whether or not the session ever drops. The marks are taken at 10 s, so the figures
+// are the 5 s between. Nothing is written when the DSP thread did no block in the window (the receiver was stopped): the window is taken again.
+void Engine::pollDspBaseline(double now) {
+    if (rx().firstDrainSeenS_ < 0.0) { return; }
+    constexpr double kMarkAfterS = 10.0;
+    constexpr double kSayAfterS = 15.0;
+    const double rate = rx().pipeline_.inputRateHz();
+    if (rx().baselineStage_ == 0) {
+        rx().baselineRate_ = rate;
+        rx().baselineStage_ = 1;
+        rx().baselineMarkAtS_ = rx().firstDrainSeenS_ + kMarkAfterS;
+        rx().baselineDueS_ = rx().firstDrainSeenS_ + kSayAfterS;
+    } else if (std::fabs(rate - rx().baselineRate_) > 0.5) {
+        rx().baselineRate_ = rate;
+        rx().baselineStage_ = 1;
+        rx().baselineMarkAtS_ = now + kMarkAfterS;
+        rx().baselineDueS_ = now + kSayAfterS;
+    }
+    if (rx().baselineStage_ == 1 && now >= rx().baselineMarkAtS_) {
+        rx().baselineBusyMark_ = rx().pipeline_.dspBusyNs();
+        rx().baselineBlocksMark_ = rx().pipeline_.dspBlocks();
+        rx().pipeline_.dspPhaseTotalsNs(rx().baselinePhaseMark_);
+        rx().baselineStage_ = 2;
+        return;
+    }
+    if (rx().baselineStage_ != 2 || now < rx().baselineDueS_) { return; }
+    const std::uint64_t busyNow = rx().pipeline_.dspBusyNs();
+    const std::uint64_t blocksNow = rx().pipeline_.dspBlocks();
+    std::uint64_t phaseNow[cascade::core::Pipeline::kDspPhases];
+    rx().pipeline_.dspPhaseTotalsNs(phaseNow);
+    const std::uint64_t blocks = blocksNow >= rx().baselineBlocksMark_ ? blocksNow - rx().baselineBlocksMark_ : 0;
+    if (blocks == 0) {   // no block ran in the window: try again over the next five seconds
+        rx().baselineMarkAtS_ = now;
+        rx().baselineDueS_ = now + (kSayAfterS - kMarkAfterS);
+        rx().baselineStage_ = 1;
+        return;
+    }
+    const std::uint64_t busy = busyNow >= rx().baselineBusyMark_ ? busyNow - rx().baselineBusyMark_ : 0;
+    std::uint64_t phaseNs[cascade::core::Pipeline::kDspPhases];
+    const char* names[cascade::core::Pipeline::kDspPhases];
+    for (unsigned i = 0; i < cascade::core::Pipeline::kDspPhases; ++i) {
+        phaseNs[i] = phaseNow[i] >= rx().baselinePhaseMark_[i] ? phaseNow[i] - rx().baselinePhaseMark_[i] : 0;
+        names[i] = cascade::core::Pipeline::dspPhaseName(i);
+    }
+    rx().baselineStage_ = 3;
+    if (rx().firstBaselineCostUs_ <= 0.0 && busy > 0) { rx().firstBaselineCostUs_ = static_cast<double>(busy) / 1000.0 / static_cast<double>(blocks); }
+    const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+    const std::string text = cascade::core::dspBaselineText(rate, rx().pipeline_.dspBlockSamples(), blocks, busy,
+                                                           cascade::core::dspTopPhasesText(phaseNs, names, cascade::core::Pipeline::kDspPhases));
+    cascade::core::diagLogf("%s%s", text.c_str(), radioTag.c_str());
 }
 
 bool Engine::digestClockStarted(double now) {
@@ -1172,6 +1239,54 @@ void Engine::closeDspMinute() {
     const char* gapPhase = "ring";
     const std::uint64_t gapNs = rx().pipeline_.takeDspGapLongest(&gapPhase);
     const std::uint64_t srcGapNs = rx().pipeline_.takeSrcGapLongestNs();
+    // WHERE THE MINUTE'S TIME WENT, per phase (the totals are cumulative: a difference), and how many blocks skipped their display-only work.
+    constexpr unsigned kPhases = cascade::core::Pipeline::kDspPhases;
+    std::uint64_t phaseNow[kPhases];
+    std::uint64_t phaseNs[kPhases];
+    const char* phaseNames[kPhases];
+    rx().pipeline_.dspPhaseTotalsNs(phaseNow);
+    for (unsigned i = 0; i < kPhases; ++i) {
+        phaseNs[i] = phaseNow[i] >= rx().dspPhaseAtMinute_[i] ? phaseNow[i] - rx().dspPhaseAtMinute_[i] : 0;
+        rx().dspPhaseAtMinute_[i] = phaseNow[i];
+        phaseNames[i] = cascade::core::Pipeline::dspPhaseName(i);
+    }
+    const std::uint64_t shedAbs = rx().pipeline_.dspShedBlocks();
+    const std::uint64_t shedBlocks = shedAbs >= rx().dspShedAtMinute_ ? shedAbs - rx().dspShedAtMinute_ : 0;
+    rx().dspShedAtMinute_ = shedAbs;
+    const std::uint64_t shedPeakPct = rx().pipeline_.takeDspShedRingPeakPct();
+    // THE PROCESS'S PAGE FAULTS THIS MINUTE (a difference) for the loss minute's memory line below; the mark moves every minute.
+    unsigned long long faultsMinute = 0, workingSetMb = 0;
+    bool memoryKnown = false;
+    {
+        unsigned long long faultsNow = 0;
+        if (cascade::core::processMemoryNow(&faultsNow, &workingSetMb)) {
+            memoryKnown = true;
+            faultsMinute = faultsNow >= rx().pageFaultsAtMinute_ ? faultsNow - rx().pageFaultsAtMinute_ : 0ull;
+            rx().pageFaultsAtMinute_ = faultsNow;
+        }
+    }
+    // THE COMPUTER CANNOT KEEP UP (item 4): two minutes in a row that lost more than 1% of the samples although display work was being shed. The
+    // run is broken by any minute that did not (more loss than 1% WITH shedding), and the note is cleared by a minute that lost nothing at all.
+    // Said once per session; never a report (the ringdrop report is filed as it always was, below).
+    {
+        const bool overOnePercent = read > 0 && dropped * 100u > read;
+        rx().keepUpBadMinutes_ = (overOnePercent && shedBlocks > 0) ? rx().keepUpBadMinutes_ + 1u : 0u;
+        if (dropped == 0 && !rx().keepUpNote_.empty()) { rx().keepUpNote_.clear(); }
+        if (rx().keepUpBadMinutes_ >= 2u && !rx().keepUpSaid_) {
+            rx().keepUpSaid_ = true;
+            rx().keepUpNote_ = tr(kKeepUpNote);
+            const std::string tag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+            cascade::core::diagLogf("dsp: over 1%% of the samples lost two minutes running although display work was skipped: the computer is not keeping up; the window says so%s", tag.c_str());
+        }
+    }
+    // SHEDDING IS SAID WHENEVER IT HAPPENED, loss or not, and is never a fault or a report (core/dsp_shed.hpp).
+    if (shedBlocks > 0) {
+        const std::string tag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
+        cascade::core::diagLogf("dsp: display work skipped for %llu of %llu blocks to keep up (ring up to %llu%% full)%s",
+                                static_cast<unsigned long long>(std::min<std::uint64_t>(shedBlocks, 9999999999ULL)),
+                                static_cast<unsigned long long>(std::min<std::uint64_t>(std::max(blocks, shedBlocks), 9999999999ULL)),
+                                static_cast<unsigned long long>(std::min<std::uint64_t>(shedPeakPct, 100u)), tag.c_str());
+    }
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it - and now also when the audio minute beside it starved a raise's worth
     // of callbacks (that digest closes after this one, so its numbers are read as they stand): the lines below are what an audiolead report
     // needs to carry. The text of every line fits the log's line with its 18-character stamp and level in front (DiagLog::kLineBytes: a cut
@@ -1200,14 +1315,41 @@ void Engine::closeDspMinute() {
     char cpuText[16] = "unknown";
     if (rx().pipeline_.dspCpuKnown()) { std::snprintf(cpuText, sizeof(cpuText), "%llu", cap(cpuNs / 1000000u)); }
     const std::uint64_t lenMs = nowS > beganS ? static_cast<std::uint64_t>((nowS - beganS) * 1000.0) : 0u;
-    cascade::core::diagLogf("dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s%s", cap(dropped), dropPct, cap(lenMs),
-                            static_cast<unsigned long long>(pct), eventWords, radioTag.c_str());
+    cascade::core::diagLogf("dsp minute: dropped=%llu pct=%s len_ms=%llu ring_high_pct=%llu events=%s shed_blocks=%llu%s", cap(dropped), dropPct,
+                            cap(lenMs), static_cast<unsigned long long>(pct), eventWords, cap(shedBlocks), radioTag.c_str());
     cascade::core::diagLogf("dsp minute: busy_ms=%llu cpu_ms=%s blocks=%llu longest_gap_ms=%llu gap_phase=%s%s", cap(busyNs / 1000000u), cpuText,
                             cap(blocks), cap(gapNs / 1000000u), gapPhase, radioTag.c_str());
     cascade::core::diagLogf("dsp minute: src_longest_gap_ms=%llu gen_resyncs=%llu gen_skipped_ms=%llu absent_discards=%llu%s", cap(srcGapNs / 1000000u),
                             cap(resyncs), cap(skippedNs / 1000000u), cap(absent), radioTag.c_str());
+    // AND WHERE THE BUSY TIME WENT: the phases over 1% of it, in milliseconds, the largest first (the minute's other lines say how long it was).
+    {
+        const std::string phases = cascade::core::dspPhaseMsText(phaseNs, phaseNames, kPhases,
+                                                                 cascade::core::kDspLineTextBudget - 21u - cascade::core::kDspRadioTagBudget);
+        cascade::core::diagLogf("dsp minute: phase_ms=%s%s", phases.empty() ? "none" : phases.c_str(), radioTag.c_str());
+    }
+    // THE PROCESS'S MEMORY in the minute: page faults (a machine that is paging shows thousands), its working set in MB and the system's load.
+    {
+        char faultsText[24] = "unknown", wsText[24] = "unknown", loadText[16] = "unknown";
+        if (memoryKnown) {
+            std::snprintf(faultsText, sizeof(faultsText), "%llu", cap(faultsMinute));
+            std::snprintf(wsText, sizeof(wsText), "%llu", cap(workingSetMb));
+        }
+        if (const int load = cascade::core::systemMemoryLoadPercent(); load >= 0) { std::snprintf(loadText, sizeof(loadText), "%d", load); }
+        cascade::core::diagLogf("dsp minute: page_faults=%s working_set_mb=%s mem_load=%s%s", faultsText, wsText, loadText, radioTag.c_str());
+    }
+    // A MACHINE THAT DEGRADES DURING A SESSION: the first loss minute whose cost per block is more than double the first baseline's says the
+    // baseline again, from the minute's own figures (once per session).
+    if (!rx().baselineRelogged_ && rx().firstBaselineCostUs_ > 0.0 && blocks > 0 && busyNs > 0 &&
+        static_cast<double>(busyNs) / 1000.0 / static_cast<double>(blocks) > 2.0 * rx().firstBaselineCostUs_) {
+        rx().baselineRelogged_ = true;
+        const char* topNames[kPhases];
+        for (unsigned i = 0; i < kPhases; ++i) { topNames[i] = cascade::core::Pipeline::dspPhaseName(i); }
+        const std::string text = cascade::core::dspBaselineText(rx().pipeline_.inputRateHz(), rx().pipeline_.dspBlockSamples(), blocks, busyNs,
+                                                               cascade::core::dspTopPhasesText(phaseNs, topNames, kPhases));
+        cascade::core::diagLogf("%s%s", text.c_str(), radioTag.c_str());
+    }
     // THE MACHINE, AGAIN WHEN IT CHANGED since the last time it was said (power source, throttling, window, display, priorities).
-    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), false);
+    cascade::core::logMachineStateIfChanged(rx().pipeline_.dspThreadPriority(), rx().pipeline_.sourceThreadPriority(), true);   // (forced: the clock and the memory are what a loss minute wants, and they move)
     if (dropped == 0) { return; }   // (only the application's own pause cost samples, or the audio minute beside this one is bad: said, never filed)
     // AND WHAT THE LOSS LOOKED LIKE (GitHub issue 6, the 0.99.90 report): in how
     // many writes, how full the ring got, and the longest one block took on the
@@ -1233,6 +1375,12 @@ void Engine::closeDspMinute() {
     if (lossMinute) {
         cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
     }
+}
+
+// THE AUDIO HEALTH ROW'S TEXT: the watchdog's note when it has one, else the "this computer is not keeping up" note (2026-11-23). One engine
+// string and no new row, so both windows already draw it, where they draw the audio health note.
+std::string Engine::audioHealthLine() const {
+    return !rx().audioHealthNote_.empty() ? rx().audioHealthNote_ : rx().keepUpNote_;
 }
 
 void Engine::setAudioBufferMs(int ms) {
@@ -11730,7 +11878,7 @@ void Engine::publishStatusText() {
     t.presetNote = presetNote_;
     t.pluginEnforceError = pluginEnforceError_;
     t.restoreKeepLabel = rx().restoreKeepLabel_;
-    t.audioHealth = rx().audioHealthNote_;
+    t.audioHealth = audioHealthLine();
     t.bookmarkNote = bookmarkImportNote_;
     t.bookmarkError = bookmarkError_;
     t.installReport = installReport_;
