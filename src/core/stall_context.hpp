@@ -186,6 +186,7 @@ enum class PassPhase : std::uint8_t {
     Macros,
     Wire,
     Smeter,
+    Stop,       // the pass is performing a receiver stop (a stop command, a source switch, a radio close, a rate change): a made of BOUNDED waits, judged by kStopThresholdMs
     Count
 };
 
@@ -206,6 +207,7 @@ inline const char* passPhaseWord(PassPhase p) noexcept {
         case PassPhase::Macros: return "macros";
         case PassPhase::Wire: return "wire";
         case PassPhase::Smeter: return "smeter";
+        case PassPhase::Stop: return "receiver-stop";
         default: return "idle";
     }
 }
@@ -222,11 +224,51 @@ inline bool passPhaseFromWord(const char* w, PassPhase& out) noexcept {
     return false;
 }
 
+// THE BOUNDED WAITS A CONTROL-THREAD RECEIVER STOP CAN SPEND IN ONE PASS (report C9E6E94B, 0.99.112: a normal stop was filed as a freeze because the pass spent 10.8 s in waits that
+// are each bounded on purpose). THE ONE TABLE. Every row is a constant under src/ that tests/test_stop_budget.cpp reads from its source and compares to the number here, and
+// every `constexpr std::chrono` wait on the stop path must have a row (the scan lists the ones it knows). The sum is what the control watchdog's threshold for the Stop phase is
+// built from, exactly as HangWatchdog::kShutdownBoundedWaitsMs builds the teardown's: twice (the sum plus a reserve).
+struct StopWait {
+    const char* file;
+    const char* name;
+    unsigned ms;
+    const char* why;
+};
+inline constexpr StopWait kStopWaits[] = {
+    {"src/source/soapy_source.cpp", "kControlLockWait", 1500, "SoapySource::stop() waits for the device lock"},
+    {"src/source/soapy_source.cpp", "kVendorCallWait", 1500, "the vendor deactivateStream / closeStream call, abandoned past it"},
+    {"src/source/soapy_source.hpp", "kRestartGiveBack", 3000, "only while a stall restart is in flight: the lock handed back"},
+    {"src/core/pipeline.cpp", "kSourceJoinWait", 3000, "Pipeline::stop() joins the source thread, abandoning it past this (the 'source thread did not exit within 3 s' line)"},
+};
+constexpr unsigned stopBoundedWaitsMs() {
+    unsigned s = 0;
+    for (const StopWait& w : kStopWaits) { s += w.ms; }
+    return s;
+}
+// What the rest of a stop costs: the DSP join, the recorders' flush, the driver's native close - milliseconds in a healthy run, none with a bound of its own named here.
+inline constexpr unsigned kStopReserveMs = 1000;
+// The control watchdog's threshold while the pass is in PassPhase::Stop: twice the worst legitimate stop. Outside that phase the threshold is the watchdog's own (5000 ms).
+inline constexpr unsigned kStopThresholdMs = 2u * (stopBoundedWaitsMs() + kStopReserveMs);
+
 inline std::atomic<std::uint8_t>& passPhaseCell() noexcept {
     static std::atomic<std::uint8_t> cell{0};
     return cell;
 }
 inline void setPassPhase(PassPhase p) noexcept { passPhaseCell().store(static_cast<std::uint8_t>(p), std::memory_order_relaxed); }
+// Marks the calling pass as inside `phase` for a scope, putting the phase back after (a stop performed from any phase, and a throw).
+class PassPhaseScope;
+inline PassPhase passPhase() noexcept;
+inline void setPassPhase(PassPhase p) noexcept;
+class PassPhaseScope {
+public:
+    explicit PassPhaseScope(PassPhase phase) noexcept : previous_(passPhase()) { setPassPhase(phase); }
+    ~PassPhaseScope() { setPassPhase(previous_); }
+    PassPhaseScope(const PassPhaseScope&) = delete;
+    PassPhaseScope& operator=(const PassPhaseScope&) = delete;
+
+private:
+    PassPhase previous_;
+};
 inline PassPhase passPhase() noexcept {
     const std::uint8_t v = passPhaseCell().load(std::memory_order_relaxed);
     return v < static_cast<std::uint8_t>(PassPhase::Count) ? static_cast<PassPhase>(v) : PassPhase::Idle;

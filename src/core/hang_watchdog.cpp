@@ -23,6 +23,7 @@
 #include "core/phase_clock.hpp"
 #include "core/plugin_fault.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -1001,7 +1002,10 @@ void HangWatchdog::threadMain() {
         pollThreadBeats(pollInterval);
         // THE START-UP BUDGET'S TIME LIMIT (beginStartupByTime): ends on time even when no pass completes.
         if (const double dl = startupDeadlineMs_.load(std::memory_order_relaxed); dl > 0.0 && now >= dl) { dropStartupBudget(); }
-        const double threshold = static_cast<double>(thresholdMs_.load(std::memory_order_relaxed));
+        double threshold = static_cast<double>(thresholdMs_.load(std::memory_order_relaxed));
+        // A CONTROL PASS INSIDE A RECEIVER STOP is judged against the stop's own budget (twice its bounded waits plus a reserve; core/stall_context.hpp kStopThresholdMs); every
+        // other pass, and every other watchdog, keeps its threshold. Never lowers one.
+        if (role() == Role::Control && stall::passPhase() == stall::PassPhase::Stop) { threshold = std::max(threshold, static_cast<double>(stall::kStopThresholdMs)); }
 
         // 3. THE WHOLE MACHINE STOPPED. Sleep, hibernate or a paused VM freezes
         //    this thread too. If the watchdog lost as much time as it is about

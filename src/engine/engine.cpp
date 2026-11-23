@@ -6410,6 +6410,9 @@ void Engine::holdAudioLockForTest() {
 }
 
 void Engine::stopReceiver(const char* who) {
+    // THE PASS IS IN A RECEIVER STOP, which is made of bounded waits (core/stall_context.hpp kStopWaits): the control watchdog judges it against kStopThresholdMs, not 5 s
+    // (report C9E6E94B, 0.99.112), and a report written meanwhile says `pass-phase: receiver-stop`.
+    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);
     // Play-stop while recording stops the recording cleanly (spec): taps
     // uninstalled and both WAVs finalized BEFORE the DSP threads join, so a
     // take can never outlive the sample flow it was taping. Only when the
