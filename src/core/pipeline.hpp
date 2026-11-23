@@ -324,6 +324,20 @@ public:
     std::size_t takeRingHighWaterSamples();
     std::uint64_t dspBlockLongestNs() const;
     std::uint64_t takeDspBlockLongestNs();
+    // SAMPLES DISCARDED WHILE THE DSP THREAD WAS DELIBERATELY ABSENT (2026-11-23, the ringdrop diagnosis): a live sample-rate change
+    // joins the DSP thread and respawns it while the source thread keeps writing ("a full ring drops overflow by design"), and
+    // every DSP (re)spawn has a start delay with the source already running. What the ring could not hold in those windows is
+    // counted HERE and not in ringDroppedSamples(): it is the application pausing its own consumer, not a consumer that fell
+    // behind, and it must not be filed as a ringdrop. Both are visible in the minute's log line. Never reset.
+    std::uint64_t ringDroppedAbsent() const { return ringDroppedAbsent_.load(std::memory_order_relaxed); }
+    // The pipeline's own two deliberate quiesces, counted where it performs them (a source switch: setSource; a live sample-rate
+    // change: setInputRateHz, accepted changes only). The engine's digests read them for the minute's event mask
+    // (core/minute_events.hpp). Never reset.
+    std::uint64_t sourceSwitches() const { return sourceSwitches_.load(std::memory_order_relaxed); }
+    std::uint64_t rateChanges() const { return rateChanges_.load(std::memory_order_relaxed); }
+    // TEST SEAM (never set by the application): every DSP thread start waits this long before its first ring read, with the thread
+    // counted as absent - so the window "the source is writing and the DSP thread is not there yet" can be made on demand. Process-wide.
+    static void setDspStartDelayForTest(int ms);
     // True when a worker thread aborted on an exception — a USB SDR pulled
     // mid-stream being the case that motivated it. Latched until start().
     bool faulted() const;
@@ -1625,6 +1639,13 @@ private:
     std::atomic<std::uint64_t> dspBlockLongestNs_{0};
     void noteRingWrite(std::size_t got, std::size_t put);
     void noteDspBlock(std::chrono::steady_clock::duration took);
+    // See ringDroppedAbsent(). dspAbsent_ is set by the controlling thread BEFORE a deliberate DSP spawn or pause (start, the
+    // ring-resizing setSource, a live setInputRateHz) and cleared by the DSP thread when it begins to read; ringDroppedAbsent_ is
+    // written by the source thread in noteRingWrite. The two switch counts are the controlling thread's.
+    std::atomic<bool> dspAbsent_{false};
+    std::atomic<std::uint64_t> ringDroppedAbsent_{0};
+    std::atomic<std::uint64_t> sourceSwitches_{0};
+    std::atomic<std::uint64_t> rateChanges_{0};
 
     std::shared_ptr<std::atomic<bool>> srcStopToken_;
     std::future<void> srcExitFuture_;

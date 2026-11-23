@@ -861,6 +861,19 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
     const std::uint64_t discounted = stopsThisMinute + opensThisMinute;
     const std::uint64_t starvedBeyondStops = starved > discounted ? starved - discounted : 0;
 
+    // THE DELIBERATE EVENTS OF THE MINUTE, THE SAME MASK THE DSP MINUTE USES (2026-11-23, core/minute_events.hpp): a source switch, a live
+    // rate change and a plugin wake or stop each starve a callback by construction (the DSP thread is joined, or waits on the runner's
+    // lock), exactly as a reload does; a minute that held one is logged and not judged, like the reloading minute above. An output open
+    // is in the mask for the log line, and keeps its own finer rule here (one callback per open, subtracted above). THE OVERRIDE: the
+    // third consecutive loss minute is judged whatever it held, so a machine that is really behind is not hidden by a busy spell.
+    const unsigned minuteEvents = cascade::core::minuteEventsSince(minuteEventCounts(), rx().audioEventMark_);
+    const unsigned heldEvents =
+        (minuteEvents & (cascade::core::kMinuteEventRate | cascade::core::kMinuteEventSwitch | cascade::core::kMinuteEventPlugins)) |
+        (pluginsReloadedThisMinute ? cascade::core::kMinuteEventPlugins : 0u);
+    const bool lossMinute = starvedBeyondStops >= static_cast<std::uint64_t>(cascade::sink::kAudioLeadStarvedPerMinute);
+    const bool judgedAnyway = cascade::core::minuteJudged(lossMinute, heldEvents, rx().audioLossRun_);
+    const bool skipMinute = heldEvents != 0u && !judgedAnyway;
+
     // THE BUFFER THAT DEEPENS ITSELF (0.99.73) AND EASES BACK (0.99.83). The
     // 12CF report - 110 to 126 starved callbacks every minute at a fixed 120 ms
     // - is the case: when a minute closes with three or more, the lead steps up
@@ -880,14 +893,23 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
         return shown;
     };
     const int leadMs = cascade::sink::audioLeadMs(out.leadFrames());
-    if (pluginsReloadedThisMinute) {
+    if (skipMinute) {
         // Say why nothing steps, but only when there is something not to step
         // on: a reloading minute that starved nobody has no news.
         if (starved > 0) {
-            cascade::core::diagLogf(
-                "audio: buffer kept at %d ms - the starved callbacks came in a minute that "
-                "reloaded plugins",
-                leadMs);
+            if (pluginsReloadedThisMinute) {
+                cascade::core::diagLogf(
+                    "audio: buffer kept at %d ms - the starved callbacks came in a minute that "
+                    "reloaded plugins",
+                    leadMs);
+            } else {
+                char events[48] = {};
+                cascade::core::minuteEventsText(heldEvents, events, sizeof(events));
+                cascade::core::diagLogf(
+                    "audio: buffer kept at %d ms - the starved callbacks came in a minute with "
+                    "deliberate events (%s)",
+                    leadMs, events);
+            }
         }
     } else {
         const int nextMs = cascade::sink::nextAudioLead(starvedBeyondStops, leadMs, audioBufferMs_);
@@ -966,7 +988,7 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
         patchStarvedAtMinute_[node] = total;
         // The reloading minute sits out here too, after the mark above is
         // taken - or next minute would inherit this one's starvation.
-        if (pluginsReloadedThisMinute) { continue; }
+        if (skipMinute) { continue; }
         const int speakerMs = dest->leadMs();
         const int speakerNext = cascade::sink::nextAudioLead(minute, speakerMs, audioBufferMs_);
         if (speakerNext > speakerMs) {
@@ -1000,6 +1022,15 @@ void Engine::closeAudioMinute(std::size_t ringFramesNow) {
     for (auto it = patchQuietMinutes_.begin(); it != patchQuietMinutes_.end();) {
         it = speakers.count(it->first) != 0 ? std::next(it) : patchQuietMinutes_.erase(it);
     }
+}
+
+cascade::core::MinuteEventCounts Engine::minuteEventCounts() {
+    cascade::core::MinuteEventCounts c;
+    c.rate = rx().pipeline_.rateChanges();
+    c.source = rx().pipeline_.sourceSwitches();
+    c.plugins = pluginScans_ + pluginLifeEvents_;
+    c.audio = rx().pipeline_.audio().opens();
+    return c;
 }
 
 void Engine::pollDspMinute() {
@@ -1061,10 +1092,30 @@ void Engine::closeDspMinute() {
     publishRingFigures();
     // THE JOURNAL'S STREAM EVENT for this radio's minute (radio reports): the figures just taken, before the quiet-unless-lost return below.
     journalStreamMinute(read, dropped, highWater);
+    // THE SAMPLES DISCARDED WHILE THE DSP THREAD WAS DELIBERATELY ABSENT (a live rate change joins and respawns it; a thread start has a delay)
+    // are counted apart (Pipeline::ringDroppedAbsent) and are NOT a ringdrop: they are in `dropped` of nothing below, and are said in the
+    // minute's own line.
+    const std::uint64_t absentNow = rx().pipeline_.ringDroppedAbsent();
+    const std::uint64_t absent = absentNow >= rx().dspAbsentAtMinute_ ? absentNow - rx().dspAbsentAtMinute_ : 0;
+    rx().dspAbsentAtMinute_ = absentNow;
+    // THE MINUTE'S DELIBERATE EVENTS (the mask the audio minute shares, core/minute_events.hpp), taken whether or not anything was lost, and
+    // the judgment: a minute that lost a hearable share is a LOSS minute; one that held a deliberate event is logged with the event named and
+    // not filed; three loss minutes in a row are filed whatever they held. Called every minute so a clean one ends the run.
+    const unsigned events = cascade::core::minuteEventsSince(minuteEventCounts(), rx().dspEventMark_);
+    const bool lossMinute = dropped > 0 && cascade::core::ringDropWorthAReport(dropped, read);
+    const bool judged = cascade::core::minuteJudged(lossMinute, events, rx().dspLossRun_);
     // QUIET UNLESS SOMETHING WAS LOST, like the audio digest beside it. 94
     // characters at the widest a uint64 can make it - inside the log's line
     // (DiagLog::kLineBytes), which a cut line would be masked whole by the scrub.
-    if (dropped == 0) { return; }
+    if (dropped == 0 && absent == 0) { return; }
+    char eventWords[48] = {};
+    cascade::core::minuteEventsText(events, eventWords, sizeof(eventWords));
+    if (dropped == 0) {
+        // Only the application's own pause cost samples: said, never filed.
+        cascade::core::diagLogf("dsp minute: absent_discards=%llu events=%s",
+                                static_cast<unsigned long long>(absent), eventWords);
+        return;
+    }
     const std::string share = cascade::core::droppedShareText(dropped, read);
     // WHICH RADIO, once there are several (the design: every receiver reports its own ring drops); the line of a lone radio is as it always was.
     const std::string radioTag = receiverCount() > 1u ? " [radio " + std::to_string(scopedSlot() + 1u) + "]" : std::string();
@@ -1093,7 +1144,13 @@ void Engine::closeDspMinute() {
     // FILED LAST (2026-11-23, the ringdrop diagnosis): the report keeps the log's tail as it is at the moment it is written, and
     // it used to be written BEFORE the lines above, so 259 of 262 field reports lacked the very lines that describe their own
     // minute (high water, cut writes, longest block). Everything this minute has to say is logged first.
-    if (cascade::core::ringDropWorthAReport(dropped, read)) {
+    // A minute that held a deliberate event says which, and why it is not a row.
+    cascade::core::diagLogf("dsp minute: absent_discards=%llu events=%s%s", static_cast<unsigned long long>(absent), eventWords, radioTag.c_str());
+    if (lossMinute && !judged) {
+        cascade::core::diagLogf("dsp: ring drops in a minute with deliberate events (%s) - logged, not filed as a fault%s", eventWords,
+                                radioTag.c_str());
+    }
+    if (judged) {
         cascade::core::issue::fileIssueReport(cascade::core::health::Recovered::RingDrop);
     }
 }
@@ -10967,6 +11024,10 @@ void Engine::initialise() {
     rx().audioRescansAtLogStart_ = pluginScans_;
     // Likewise the open that built the session's sink: not a re-open, not discounted from the first minute.
     rx().audioOpensAtLogStart_ = rx().pipeline_.audio().opens();
+    // ...and the event marks of both digests start here, so what set the session up (the first scan, the source installed, the open
+    // above) is not "an event" of the first minute.
+    rx().audioEventMark_ = minuteEventCounts();
+    rx().dspEventMark_ = rx().audioEventMark_;
     // THE FIRST SCAN IS DONE: the copies a session before this one could not delete (a module was mapped) are deleted now if this scan still
     // finds them superseded, and the store opens with the catalogue the last good read kept - no request is made (stub campaign B3; both run
     // before the first pass, like the scan beside them).

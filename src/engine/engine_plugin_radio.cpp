@@ -145,6 +145,7 @@ bool Engine::movePluginToRadio(const std::string& moduleKey, std::uint32_t radio
         pluginRadio_[id] = static_cast<int>(radio);
     }
     pluginApi_->setClientRadio(moduleKey, radio);
+    ++pluginLifeEvents_;   // (a stop and a start: the digests' event mask)
     // ARRIVE: built against the new radio's own rate and centre, if it is meant to be running.
     if (!patchRunning_ && !pluginIsStopped(moduleKey) && pluginShouldRun(*found)) { (void)runnerOf(radio - 1u).startPlugin(*found); }
     rebuildMuteStates();
@@ -192,6 +193,7 @@ bool Engine::pluginFeedingAnywhere(const std::string& moduleKey) const {
 }
 
 void Engine::stopPluginEverywhere(const std::string& moduleKey) {
+    ++pluginLifeEvents_;   // (the digests' event mask)
     forEachRunner([&](cc::PluginRunner& r) { r.stopPlugin(moduleKey); });
 }
 

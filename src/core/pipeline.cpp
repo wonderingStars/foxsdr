@@ -41,6 +41,9 @@ namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
 
+// See Pipeline::setDspStartDelayForTest.
+std::atomic<int> g_dspStartDelayMs{0};
+
 // THE DSP THREAD'S HEARTBEAT (core/thread_beats.hpp, docs/engine-stage4.md 6.27). dspThreadMain registers the thread and points
 // this at its registration for as long as the loop runs; processAudioBlock - which only ever runs on that thread - says where in
 // the block it is, so a report names the step ("plugin-iq", "audio-lock", "plugin-audio") and not just "the DSP thread". A
@@ -635,6 +638,7 @@ cascade::source::SigGen& Pipeline::sigGen() {
 
 void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
     std::lock_guard<std::mutex> lk(controlMutex_);
+    sourceSwitches_.fetch_add(1, std::memory_order_relaxed);   // (a deliberate quiesce: the digests' event mask, core/minute_events.hpp)
     const bool live = run_.load(std::memory_order_relaxed);
     // WHETHER TO QUIESCE IS A QUESTION ABOUT THE THREAD, NOT ABOUT run_.
     //
@@ -727,6 +731,7 @@ void Pipeline::setSource(std::unique_ptr<cascade::source::IqSource> s) {
         const std::size_t ringWant = ringCapacityForActiveSourceLocked();
         const bool newRing = ring_->capacity() != ringWant;
         if (newRing && dspThread_.joinable()) {
+            dspAbsent_.store(true, std::memory_order_relaxed);   // (cleared by the respawned DSP thread: see ringDroppedAbsent)
             dspRun_.store(false, std::memory_order_relaxed);
             dspThread_.join();
         }
@@ -748,6 +753,8 @@ std::size_t Pipeline::ringCapacity() {
     std::lock_guard<std::mutex> lk(controlMutex_);
     return ring_->capacity();
 }
+
+void Pipeline::setDspStartDelayForTest(int ms) { g_dspStartDelayMs.store(ms, std::memory_order_relaxed); }
 
 std::uint64_t Pipeline::ringCutWrites() const {
     return ringCutWrites_.load(std::memory_order_relaxed);
@@ -772,8 +779,13 @@ std::uint64_t Pipeline::takeDspBlockLongestNs() {
 // (a plain load-then-store could put a stale mark back over its reset).
 void Pipeline::noteRingWrite(std::size_t got, std::size_t put) {
     if (put < got) {
-        ringDropped_.fetch_add(got - put, std::memory_order_relaxed);
-        ringCutWrites_.fetch_add(1, std::memory_order_relaxed);
+        if (dspAbsent_.load(std::memory_order_relaxed)) {
+            // The DSP thread is deliberately not there (a respawn, a rate change's chain rebuild): not a ringdrop.
+            ringDroppedAbsent_.fetch_add(got - put, std::memory_order_relaxed);
+        } else {
+            ringDropped_.fetch_add(got - put, std::memory_order_relaxed);
+            ringCutWrites_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     const std::size_t occupancy = ring_->size();
     std::size_t seen = ringHighWater_.load(std::memory_order_relaxed);
@@ -956,6 +968,9 @@ void Pipeline::start() {
     // source thread itself reads it.
     resizeRingLocked(ringCapacityForActiveSourceLocked());
 
+    // The source thread below writes before the DSP thread can have started: that window is the application's own start, not a
+    // consumer falling behind (cleared by the DSP thread at its first ring read).
+    dspAbsent_.store(true, std::memory_order_relaxed);
     run_.store(true, std::memory_order_relaxed);
     srcRun_.store(true, std::memory_order_relaxed);
     dspRun_.store(true, std::memory_order_relaxed);
@@ -1974,6 +1989,9 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // stream discontinuity anyway, so mixing old-rate and new-rate samples in
     // one FFT would be worse than dropping less than one frame.
     if (dspThread_.joinable()) {
+        // The source keeps writing while the consumer is gone: what the ring cannot hold meanwhile is counted as ABSENT, not as a
+        // ringdrop (ringDroppedAbsent). Only on the live path, where the respawn below clears it again.
+        if (live) { dspAbsent_.store(true, std::memory_order_relaxed); }
         dspRun_.store(false, std::memory_order_relaxed);
         dspThread_.join();
     }
@@ -2109,6 +2127,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
     // leave no line: nothing changed.
     cascade::core::diagLogf("dsp: input rate %.0f S/s -> %.0f S/s, channel %.0f S/s (decimate by %u)",
                             rateBeforeHz, rateHz, chanRate, decim);
+    rateChanges_.fetch_add(1, std::memory_order_relaxed);   // (a deliberate quiesce: the digests' event mask, core/minute_events.hpp)
 
     if (live) {
         // THE RING FOLLOWS A LIVE RATE CHANGE (field report 5A76C1C8, 0.99.109:
@@ -2135,6 +2154,7 @@ bool Pipeline::setInputRateHz(double rateHz) {
                 // respawned beside it: stop here as a fault, not a second thread
                 // in a vendor stack (the setSource policy).
                 noteThreadFault("source thread", "did not stop for the ring to follow the new sample rate");
+                dspAbsent_.store(false, std::memory_order_relaxed);   // (no respawn follows: a fault, not a pause)
                 return true;
             }
             active_->start();
@@ -2545,6 +2565,13 @@ void Pipeline::dspThreadBody() {
     std::vector<std::complex<float>> acc(n);
     std::vector<float> db(n);
     std::size_t filled = 0;
+
+    // THE TEST SEAM'S START DELAY (never set by the application), taken while the thread still counts as absent.
+    if (const int delayMs = g_dspStartDelayMs.load(std::memory_order_relaxed); delayMs > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+    }
+    // FROM HERE THE DSP THREAD READS THE RING: what the source cannot write from now on is a consumer that fell behind.
+    dspAbsent_.store(false, std::memory_order_relaxed);
 
     // dspRun_ additionally gates this loop so setInputRateHz can quiesce the
     // DSP thread alone (the source keeps feeding the ring), mirroring how

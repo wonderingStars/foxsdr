@@ -33,6 +33,7 @@
 #include "core/airspy_settings.hpp"
 #include "core/audio_open.hpp"
 #include "core/bias_tee.hpp"
+#include "core/minute_events.hpp"
 #include "core/noise_floor_tracker.hpp"
 #include "core/pipeline.hpp"
 #include "core/receiver_snapshot.hpp"
@@ -540,6 +541,15 @@ struct Receiver {
     // bundle's dsp-ring line; publishRingFigures() adds the minute still open to them and publishes (core::setRingFigures).
     std::size_t dspRingHighWaterSession_ = 0;
     std::uint64_t dspBlockLongestNsSession_ = 0;
+    // THE DIGESTS' SHARED EVENT MASK (2026-11-23, core/minute_events.hpp): each digest keeps its OWN mark of the monotonic event counts (a
+    // source switch, a rate change, a plugin reload or wake, an output open) so each minute's mask is its own; and its count of consecutive
+    // loss minutes, which overrides the discount at three. ringDroppedAbsent_ mark: the samples discarded while the DSP thread was
+    // deliberately absent (Pipeline::ringDroppedAbsent), as they stood when the DSP minute last closed.
+    cascade::core::MinuteEventCounts dspEventMark_;
+    cascade::core::MinuteEventCounts audioEventMark_;
+    int dspLossRun_ = 0;
+    int audioLossRun_ = 0;
+    std::uint64_t dspAbsentAtMinute_ = 0;
     // ---- the slot's own life (multi-radio stage 4) ----
     // Which radio this is, from 1 (slot + 1); set once when the slot is built.
     std::uint32_t radioNumber_ = 1;

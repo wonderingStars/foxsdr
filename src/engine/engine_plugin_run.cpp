@@ -254,6 +254,7 @@ void Engine::startPluginInstances(const cascade::core::LoadedPlugin& p) {
     // states.
     pushPluginHoldSets();
     postPluginLife();
+    ++pluginLifeEvents_;   // (a deliberate event of the digests' minute: the runner's lock is held across create())
     if (!patchRunning_) { (void)runnerOf(radioOfPlugin(cascade::core::pluginKey(p)) - 1u).startPlugin(p); }
     // The mute snapshot carries "is it actually decoding", and that has just changed.
     rebuildMuteStates();
@@ -486,6 +487,7 @@ void Engine::updatePluginLifecycle() {
     pushPluginHoldSets();
     postPluginLife();
     for (const Change& c : changes) {
+        if (c.step == PluginLifeStep::Wake) { ++pluginLifeEvents_; }   // (the digests' event mask: a wake holds the runner's lock)
         if (c.step == PluginLifeStep::Wake && !patchRunning_) { (void)runnerOf(radioOfPlugin(apiPluginKeys_[c.index]) - 1u).startPlugin(plugins[c.index]); }
     }
     rebuildMuteStates();

@@ -4070,6 +4070,12 @@ private:
     // strings, a refusal, the file's size) can only have changed across one, so it is hashed into the list
     // fingerprint as one value (API 0.3 8.8).
     std::uint64_t pluginScans_ = 0;
+    // How many times a plugin was WOKEN or STOPPED (the decoders' create() runs with the runner's lock held, so a slow wake stalls the DSP
+    // thread's next call into it for as long as it takes). With pluginScans_ it is the plugin kind of the digests' event mask
+    // (core/minute_events.hpp). The pass thread's, like pluginScans_.
+    std::uint64_t pluginLifeEvents_ = 0;
+    // The monotonic event counts the two digests take their minute's mask from (minuteEventsSince), for the slot being worked on.
+    cascade::core::MinuteEventCounts minuteEventCounts();
     // FOXAPI_OP_SCAN_SERIAL_PORTS (API 0.3): the ports the last scan found.
     std::vector<std::string> serialPorts_;
     std::uint64_t serialPortsScans_ = 0;

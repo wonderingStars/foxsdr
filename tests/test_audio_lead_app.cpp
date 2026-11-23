@@ -213,6 +213,9 @@ struct AppWindowTestAccess {
     // the increment. (Master's pluginRescans_ is the engine's pluginScans_ here: the same
     // count, taken at the same place - the 0.99.104 merge.)
     static void noteRescan(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginScans_; }); }
+    // A plugin WOKEN or stopped (the engine's pluginLifeEvents_, bumped where startPluginInstances / stopPluginEverywhere run): the other
+    // plugin event of the digests' shared mask.
+    static void noteWake(AppWindow& a) { passseam::on(th::engine(a), [&] { ++th::engine(a).pluginLifeEvents_; }); }
     // A stop that stopped something, as stopReceiver counts it (the real stop also
     // joins the pipeline's threads, which this harness never starts), the real
     // stopReceiver for the stop-of-a-stopped-receiver case, and the count itself.
@@ -631,6 +634,34 @@ int main() {
                 const std::string body = src.substr(stopFn, stopEnd - stopFn);
                 CHECK(body.find("if (running) { ++rx().receiverStops_; }") != std::string::npos);
             }
+
+        // --- 9c2. THE OTHER DELIBERATE EVENTS ARE DISCOUNTED TOO, AND THREE LOSS MINUTES IN A ROW ARE NOT (2026-11-23) --------------------------------
+        // One mask serves both digests (core/minute_events.hpp): a source switch, a live rate change and a plugin wake or stop starve a callback
+        // by construction, as a reload does. A minute that held one is logged with the event named and judges nothing; the third consecutive
+        // loss minute is judged whatever it held, so a machine that is really behind is not hidden. A plugin WAKE is the event used here (the
+        // engine's own counter, as the rescan is bumped above).
+        {
+            Access::closeMinute(app);                                 // a clean minute: the run of loss minutes starts at none
+            const int leadBefore = Access::leadNow(app);
+            const int raisedBefore = logLinesWith("audio: buffer raised to");
+            const int noticesBefore = logLinesWith("deliberate events (plugins)");
+            Access::noteWake(app);
+            starve(out, 5);
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == leadBefore);                // not a raise
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBefore);
+            CHECK(logLinesWith("deliberate events (plugins)") == noticesBefore + 1);   // and the event is named
+            Access::noteWake(app);
+            starve(out, 5);
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) == leadBefore);                // the second: still not
+            Access::noteWake(app);
+            starve(out, 5);
+            Access::closeMinute(app);
+            CHECK(Access::leadNow(app) > leadBefore);                 // the THIRD in a row is judged, whatever it held
+            CHECK(logLinesWith("audio: buffer raised to") == raisedBefore + 1);
+            Access::closeMinute(app);                                 // a clean minute ends the run again
+        }
         }
     }
 
