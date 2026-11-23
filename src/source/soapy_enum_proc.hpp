@@ -157,6 +157,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -513,6 +514,10 @@ struct EnumOptions {
     // THE USER PRESSED REFRESH (set only by the engine's explicit SCAN_DEVICES; never by the start-up search, a hot-plug or a wake). A driver
     // whose child crashed an earlier scan this session is then asked again, at most kRefreshRetriesPerSession times per driver per session.
     bool userRefresh = false;
+
+    // TESTS ONLY: stands in for the in-process walk the no-helper fallback makes, handed the drivers the walk leaves out. An in-process walk of the real
+    // registry would load every vendor module this machine has and probe its radios.
+    std::function<std::vector<SoapyDeviceInfo>(const std::vector<std::string>& leaveOut)> inProcessWalkForTest;
 };
 
 // How many times an explicit Refresh asks a crashed driver again in one session. After that it stays left out until FoxSDR is restarted.
@@ -556,6 +561,10 @@ struct FaultedDriver {
 
 // The session's list, for the device panel's one-line note. Thread-safe.
 std::vector<FaultedDriver> sessionFaultedDrivers();
+
+// The drivers on that list whose last Refresh retry ran out its time (the whole-bus child was killed at its budget) instead of crashing or answering. The try
+// is spent, as a crash spends it, and the device panel says "did not finish in time" for them, not "crashed". Thread-safe.
+std::vector<std::string> sessionTimedOutDrivers();
 
 // Back to the start-of-session state (empty). Tests only: the list starts
 // empty and nothing else fills it, so this IS the initial state. Clears the

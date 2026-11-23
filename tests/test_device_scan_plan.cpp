@@ -375,6 +375,18 @@ void testFriendlyDriverNames() {
     CHECK(again.empty() && left == "uhd");
     cascade::gui::splitCrashedSearch("", "", again, left);
     CHECK(again.empty() && left.empty());
+    // A DRIVER WHOSE LAST RETRY RAN OUT ITS TIME is told as "did not finish in time", never as a crash, and the others keep the crashed sentences.
+    {
+        std::string slowAgain, slowLeft;
+        cascade::gui::splitSearchNotes("uhd, airspy", "", "uhd", again, left, slowAgain, slowLeft);
+        CHECK(again == "airspy" && left.empty() && slowAgain == "uhd" && slowLeft.empty());
+        cascade::gui::splitSearchNotes("uhd, airspy", "uhd", "uhd", again, left, slowAgain, slowLeft);
+        CHECK(again == "airspy" && left.empty() && slowAgain.empty() && slowLeft == "uhd");
+        cascade::gui::splitSearchNotes("uhd", "", "", again, left, slowAgain, slowLeft);   // nothing timed out: exactly the crashed note as before
+        CHECK(again == "uhd" && left.empty() && slowAgain.empty() && slowLeft.empty());
+        cascade::gui::splitSearchNotes("airspy", "", "uhd", again, left, slowAgain, slowLeft);   // a timed-out name that is not on the crashed list says nothing
+        CHECK(again == "airspy" && slowAgain.empty() && slowLeft.empty());
+    }
     CHECK(cascade::gui::friendlyDriverList("uhd") == "Ettus (UHD)");
     CHECK(cascade::gui::friendlyDriverList("uhd, airspy") == "Ettus (UHD), airspy");
     CHECK(cascade::gui::friendlyDriverList("airspy, uhd, hackrf") == "airspy, Ettus (UHD), hackrf");

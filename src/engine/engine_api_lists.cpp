@@ -746,6 +746,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     }
     for (const std::string& d : faultedDrivers_) { f.text(d); }
     for (const std::string& d : faultedNoRetry_) { f.text(d); }
+    for (const std::string& d : timedOutDrivers_) { f.text(d); }
     f.value(scanEvidenceSeq_);
     //  - the radio's fault sentence WHOLE (STATUS_LINES deviceFault) and the rates' captions
     f.text(rx().apiFaultText_);
@@ -1809,6 +1810,7 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
         fact("source.scanSkip", std::move(skip));
     }
     fact("source.faultedDrivers", joined(faultedDrivers_));
+    fact("source.timedOutDrivers", joined(timedOutDrivers_));   // the ones of the crashed list whose last retry ran out its time (the note says "did not finish in time")
     fact("source.faultedNoRetry", joined(faultedNoRetry_));   // the ones of those a Refresh no longer asks (the note says "left out until FoxSDR is restarted")
     // WHAT THE LAST SCAN SAID ABOUT UHD'S FIRMWARE IMAGES (master 0.99.85, re-expressed in the 0.99.90 merge): "1" when UHD itself
     // reported it has none, and (separately) when the scan's USB listing held a USRP. The Source section draws

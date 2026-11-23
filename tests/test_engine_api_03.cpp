@@ -617,6 +617,7 @@ struct AppWindowTestAccess {
     static bool& sdrRowsFound(cascade::engine::Engine& e) { return e.sdrPlayRowsFound_; }
     static std::vector<cascade::usb::UsbDeviceInfo>& unbound(cascade::engine::Engine& e) { return e.nativeUnbound_; }
     static std::vector<std::string>& faulted(cascade::engine::Engine& e) { return e.faultedDrivers_; }
+    static bool& lastScanUserRefresh(cascade::engine::Engine& e) { return e.lastSoapyScanUserRefreshForTest_; }
     static std::uint64_t& evidenceSeq(cascade::engine::Engine& e) { return e.scanEvidenceSeq_; }
     static std::string& busyLabel(cascade::engine::Engine& e) { return e.deviceBusyLabel_; }
     static bool& openPending(cascade::engine::Engine& e) { return e.deviceOpenPending_; }
@@ -5563,6 +5564,16 @@ void testSourceFacts() {
         CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
         CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
         CHECK_EQ(fact(s, "fact.source.faultedDrivers"), std::string());
+
+        // ONLY THE SOURCE PANEL'S OWN REFRESH KEY SPENDS A CRASHED DRIVER'S RE-ASK TRIES (review of fb3b2a89, 5.2): the scan every other sender asks for
+        // (the SDRplay service-restart rescan, the web control op, "Check again", "Look for radios", the add-radio rescan) is the same op with ival[0] = 0.
+        Access::lastScanUserRefresh(d.eng) = true;
+        CHECK_EQ(pumped(d.eng, s, testing::cmd(FOXAPI_OP_SCAN_DEVICES)).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK(!Access::lastScanUserRefresh(d.eng));                       // a plain scan: no tries spent
+        CHECK_EQ(pumped(d.eng, s, cascade::core::cmd::makeUserRefresh()).status(), FOXAPI_OK);
+        CHECK(passUntil(d.eng, [&] { return !g11::has(s, FOXAPI_SRC_SCAN_PENDING); }));
+        CHECK(Access::lastScanUserRefresh(d.eng));                        // the Refresh key
     }
     {
         // WITH THE SCAN STOOD IN FOR AND NO DIAGNOSTICS HOOK, the engine reads none of the four: no faulted drivers, no

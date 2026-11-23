@@ -744,6 +744,13 @@ void rememberFaultedDriver(const std::string& driver, unsigned long exitCode) {
     sessionList().push_back(FaultedDriver{name, exitCode});
 }
 
+// The drivers of the crashed list whose last GRANTED scan ran out its time instead of answering (the whole-bus child was killed at its budget). They are still on
+// the crashed list; this says WHY the note must not call it a crash. Guarded by sessionMutex().
+std::vector<std::string>& sessionTimedOutList() {
+    static std::vector<std::string> list;
+    return list;
+}
+
 std::map<std::string, int>& refreshRetryCounts() {
     static std::map<std::string, int> counts;
     return counts;
@@ -791,12 +798,22 @@ void finishRefreshGrant(const std::vector<std::string>& granted, const EnumResul
             asked = (r.outcome == EnumOutcome::Ok || r.answeredBeforeDeath) && !r.fellBackInProcess && !r.helperMissing && !has(r.absentDrivers, g) &&
                     !has(r.skippedDrivers, g);
         }
-        if (!asked) {
+        std::vector<std::string>& timedOut = sessionTimedOutList();
+        const auto forgetTimedOut = [&timedOut, &g]() { timedOut.erase(std::remove(timedOut.begin(), timedOut.end(), g), timedOut.end()); };
+        // A WHOLE-BUS CHILD THAT RAN OUT ITS TIME DID ASK THE DRIVER (review of fb3b2a89, 5.1): the try is SPENT, as a crash spends it. Refunding it let a driver
+        // that now hangs instead of crashing turn every Refresh into a 20 s scan that listed nothing for any driver, without end.
+        const bool ranOutOfTime = !r.sweptPerDriver && r.outcome == EnumOutcome::ChildTimedOut;
+        if (!asked && ranOutOfTime) {
+            if (std::find(timedOut.begin(), timedOut.end(), g) == timedOut.end()) { timedOut.push_back(g); }
+        } else if (!asked) {
             int& used = refreshRetryCounts()[g];
             if (used > 0) { --used; }
         } else if (!crashed) {
+            forgetTimedOut();
             std::vector<FaultedDriver>& list = sessionList();
             list.erase(std::remove_if(list.begin(), list.end(), [&g](const FaultedDriver& f) { return f.driver == g; }), list.end());
+        } else {
+            forgetTimedOut();   // it crashed this time: the crash is the news
         }
     }
 }
@@ -982,6 +999,11 @@ std::vector<FaultedDriver> sessionFaultedDrivers() {
     return sessionList();
 }
 
+std::vector<std::string> sessionTimedOutDrivers() {
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    return sessionTimedOutList();
+}
+
 int refreshRetriesLeft(const std::string& driver) {
     std::lock_guard<std::mutex> lk(sessionMutex());
     const auto it = refreshRetryCounts().find(lowerAscii(driver));
@@ -1010,6 +1032,7 @@ void clearSessionFaultedDriversForTest() {
     std::lock_guard<std::mutex> lk(sessionMutex());
     refreshRetryCounts().clear();
     sessionList().clear();
+    sessionTimedOutList().clear();
     sessionSlowList().clear();
 }
 
@@ -1711,7 +1734,7 @@ EnumResult enumerateIsolatedBody(const EnumOptions& options) {
                 leaveOut.push_back(d);
             }
         }
-        result.devices = SoapySource::enumerateInProcessEach(leaveOut, {});
+        result.devices = options.inProcessWalkForTest ? options.inProcessWalkForTest(leaveOut) : SoapySource::enumerateInProcessEach(leaveOut, {});
         result.sessionSkippedDrivers = faulted;
         result.fellBackInProcess = true;
     }

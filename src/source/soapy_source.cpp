@@ -290,6 +290,22 @@ struct VendorJob {
     double arg = 0.0;
     double got = 0.0;
 
+    // The stall restart's re-create (recreateStreamLocked): the stream to close, copied in by the caller, and the one the job set up, which the CALLER
+    // publishes into the link under the lock when the job has completed. An abandoned job writes only here, never into the link.
+    SoapySDR::Stream* oldStream = nullptr;
+    SoapySDR::Stream* newStream = nullptr;
+
+    // The stall restart's settings re-apply (restartStreamLocked): what to put back (copied in by the caller), what the driver read back, and one line
+    // per setting the driver refused. The caller reads them only after the job completed.
+    double restoreRate = 0.0;
+    double restoreFreq = 0.0;
+    double restoreRateBack = 0.0;
+    bool restoreAutoGain = false;
+    std::string restoreAntenna;
+    std::vector<std::string> restoreGainNames;
+    std::vector<double> restoreGainValues;
+    std::vector<std::string> refused;
+
     std::mutex m;
     std::condition_variable cv;
     bool done = false;
@@ -388,6 +404,42 @@ std::shared_ptr<VendorJob> makeVendorJob(const std::shared_ptr<SoapySource::Devi
         return job;
     } catch (...) {
         return nullptr;
+    }
+}
+
+// The settings the stall restart puts back, each in its own try so one the driver refuses does not cost the others. A refusal is recorded in the
+// job (which setting, the driver's words); the caller logs it after the job completed. Writes only into its own job.
+void reapplyBody(VendorJob& j) noexcept {
+    SoapySDR::Device& d = *j.link->dev;
+    const auto refuse = [&j](const std::string& setting, const char* words) noexcept {
+        try { j.refused.push_back(setting + ": " + words); } catch (...) {}
+    };
+    if (j.restoreRate > 0.0) {
+        try {
+            d.setSampleRate(SOAPY_SDR_RX, kChannel, j.restoreRate);
+            j.restoreRateBack = d.getSampleRate(SOAPY_SDR_RX, kChannel);
+        } catch (const std::exception& e) { refuse("sample rate", e.what()); } catch (...) { refuse("sample rate", "non-standard exception"); }
+    }
+    if (j.restoreFreq > 0.0) {
+        try { d.setFrequency(SOAPY_SDR_RX, kChannel, j.restoreFreq); }
+        catch (const std::exception& e) { refuse("frequency", e.what()); } catch (...) { refuse("frequency", "non-standard exception"); }
+    }
+    if (!j.restoreAntenna.empty()) {
+        try { d.setAntenna(SOAPY_SDR_RX, kChannel, j.restoreAntenna); }
+        catch (const std::exception& e) { refuse("antenna", e.what()); } catch (...) { refuse("antenna", "non-standard exception"); }
+    }
+    if (j.restoreAutoGain) {
+        try { d.setGainMode(SOAPY_SDR_RX, kChannel, true); }
+        catch (const std::exception& e) { refuse("automatic gain", e.what()); } catch (...) { refuse("automatic gain", "non-standard exception"); }
+    } else {
+        for (std::size_t i = 0; i < j.restoreGainNames.size() && i < j.restoreGainValues.size(); ++i) {
+            const std::string& gname = j.restoreGainNames[i];   // built before the call: no allocation inside a handler
+            std::string label;
+            try { label = "gain " + gname; } catch (...) {}
+            try { d.setGain(SOAPY_SDR_RX, kChannel, gname, j.restoreGainValues[i]); }
+            catch (const std::exception& e) { refuse(label, e.what()); }
+            catch (...) { refuse(label, "non-standard exception"); }
+        }
     }
 }
 
@@ -1875,6 +1927,9 @@ bool SoapySource::start() {
         return false;
     }
     if (running_.load(std::memory_order_relaxed)) {
+        // A stream the stall detector gave up on is left "running" with the fault latched: Play must not answer true and do nothing. It answers false, and
+        // lastError() is the fault's own sentence, which the window shows (review of fb3b2a89, 3.x: Play after the three-restart fault).
+        if (faulted()) { return false; }
         return true;  // idempotent per the IqSource contract
     }
     if (lateCallHoldsDriverLocked(0)) {
@@ -2166,17 +2221,18 @@ bool SoapySource::recreateStreamLocked(std::string& why) {
     // closeStream + setupStream as ONE ABANDONABLE JOB, like teardown's closeStream: a closeStream that never returns on a stalled device must cost
     // the reader thread one bounded wait, not the lock for good. Runs with the stream DEACTIVATED and the device lock held. A stream that cannot be made
     // again leaves link_->stream null, which read() answers with 0 and which the caller turns into a fault with this sentence.
+    // THE JOB WRITES ONLY INTO ITSELF (review of fb3b2a89, 3.4): the old stream is copied in here, the new one is published into the link below, under the
+    // lock, once the job has completed. An abandoned job's worker may return long after, and a link's handles are frozen from the abandonment on.
     const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
         try {
-            if (j.link->stream != nullptr) {
+            if (j.oldStream != nullptr) {
                 try {
-                    j.link->dev->closeStream(j.link->stream);
+                    j.link->dev->closeStream(j.oldStream);
                 } catch (...) {
                 }
-                j.link->stream = nullptr;
             }
-            j.link->stream = j.link->dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32, std::vector<std::size_t>{kChannel});
-            if (j.link->stream == nullptr) { j.ret = -1; }
+            j.newStream = j.link->dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32, std::vector<std::size_t>{kChannel});
+            if (j.newStream == nullptr) { j.ret = -1; }
         } catch (const std::exception& e) {
             j.threw = true;
             j.message = describe(e, "setupStream failed");
@@ -2185,8 +2241,11 @@ bool SoapySource::recreateStreamLocked(std::string& why) {
             j.message = "setupStream failed: non-standard exception";
         }
     });
+    if (job) { job->oldStream = link_->stream; }
     switch (job ? runAbandonableVendorCall(job) : JobOutcome::Abandoned) {
         case JobOutcome::Completed:
+            // The old stream is closed (or its close refused) and the new one made or not: either way the link now holds the new answer, null included.
+            link_->stream = job->newStream;
             break;
         case JobOutcome::Faulted:
             noteVendorFault("re-creating the stream");
@@ -2222,55 +2281,56 @@ bool SoapySource::restartStreamLocked(std::string& why) {
     }
     // A STOP OR CLOSE THAT ARRIVES DURING THE RESTART cancels it (escapeWaiters_, raised by stop()/closeDevice() while they wait for the lock): the steps
     // below are checked between, so the lock comes back within one step and the radio is stopped normally, not condemned.
+    // AFTER EVERY STEP the device is re-tested as well (review of fb3b2a89, 3.1): a stop that gave up waiting has condemned it, and a restart must then
+    // neither go on into the driver nor activate nor say it succeeded.
     const auto cancelled = [this]() { return escapeWaiters_.load(std::memory_order_relaxed) > 0; };
-    if (!deactivateLocked("stopping a stalled stream")) {
-        if (deviceDead()) { why = lastError(); return false; }
-        // The driver answered and said no: the stream is rebuilt anyway, which is the point of a restart.
-    }
-    if (cancelled()) { why = "cancelled by a stop"; return false; }
-    if (!recreateStreamLocked(why)) { return false; }
-    if (cancelled()) { why = "cancelled by a stop"; return false; }
-    struct Apply {
-        SoapySource* self;
-        double rate, freq;
-        const std::string* antenna;
-        const std::vector<std::string>* names;
-        const std::vector<double>* values;
-        bool autoGain;
-        double rateBack = 0.0;
-    } a{this, rate, freq, &antenna, &gainNames, &gainValues, autoGain};
-    const bool completed = guardedVendorCall([&a]() noexcept {
-        auto& d = *a.self->link_->dev;
-        // each setting on its own: one the driver refuses must not cost the others
-        if (a.rate > 0.0) {
-            try { d.setSampleRate(SOAPY_SDR_RX, kChannel, a.rate); a.rateBack = d.getSampleRate(SOAPY_SDR_RX, kChannel); } catch (...) {}
-        }
-        if (a.freq > 0.0) {
-            try { d.setFrequency(SOAPY_SDR_RX, kChannel, a.freq); } catch (...) {}
-        }
-        if (!a.antenna->empty()) {
-            try { d.setAntenna(SOAPY_SDR_RX, kChannel, *a.antenna); } catch (...) {}
-        }
-        if (a.autoGain) {
-            try { d.setGainMode(SOAPY_SDR_RX, kChannel, true); } catch (...) {}
-        } else {
-            for (std::size_t i = 0; i < a.names->size(); ++i) {
-                try { d.setGain(SOAPY_SDR_RX, kChannel, (*a.names)[i], (*a.values)[i]); } catch (...) {}
-            }
-        }
-    });
-    if (!completed) {
-        noteVendorFault("re-applying the settings");
-        why = lastError();
+    const auto interrupted = [this, &why, &cancelled]() {
+        if (deviceDead()) { why = lastError(); return true; }
+        if (cancelled()) { why = "cancelled by a stop"; return true; }
         return false;
+    };
+    if (interrupted()) { return false; }
+    // The driver answering "no" to the deactivate is not the end: the stream is rebuilt anyway, which is the point of a restart.
+    (void)deactivateLocked("stopping a stalled stream");
+    if (interrupted()) { return false; }
+    if (!recreateStreamLocked(why)) { return false; }
+    if (interrupted()) { return false; }
+    // THE RE-APPLY IS AN ABANDONABLE JOB like every other step (review of fb3b2a89, 3.1): bounded by kVendorCallWait, writing only into its own job object;
+    // what it read back and what the driver refused are published here, under the lock, once it has completed.
+    const auto reapply = makeVendorJob(link_, &reapplyBody);
+    if (reapply) {
+        reapply->restoreRate = rate;
+        reapply->restoreFreq = freq;
+        reapply->restoreAntenna = antenna;
+        reapply->restoreAutoGain = autoGain;
+        reapply->restoreGainNames = gainNames;
+        reapply->restoreGainValues = gainValues;
     }
-    if (a.rateBack > 0.0) { sampleRateHz_.store(a.rateBack, std::memory_order_relaxed); }
-    if (cancelled()) { why = "cancelled by a stop"; return false; }
+    switch (reapply ? runAbandonableVendorCall(reapply) : JobOutcome::Abandoned) {
+        case JobOutcome::Completed:
+            break;
+        case JobOutcome::Faulted:
+            noteVendorFault("re-applying the settings");
+            why = lastError();
+            return false;
+        case JobOutcome::Abandoned:
+        default:
+            abandonWedgedDriverLocked("re-applying the settings");
+            why = lastError();
+            return false;
+    }
+    for (const std::string& line : reapply->refused) {
+        core::diagWarnf("source: the driver refused to put back the %s after the restart", line.c_str());   // "<setting>: <the driver's words>"
+    }
+    if (reapply->restoreRateBack > 0.0) { sampleRateHz_.store(reapply->restoreRateBack, std::memory_order_relaxed); }
+    if (interrupted()) { return false; }
     bool pending = false;
     if (!activateLocked("restarting a stalled stream", &pending)) {
         why = lastError();
         return false;
     }
+    // Condemned while the activation was in flight (the escape wait ran out inside it): the stream was not restarted, as far as anyone is told.
+    if (deviceDead()) { why = lastError(); return false; }
     return true;
 }
 
@@ -2286,7 +2346,7 @@ void SoapySource::resetSilenceLocked() {
 // which no read was made (a sleep, a late retune, a long lock hold) adds one step and not the gap. Silence of kStallWindow restarts the stream, at most
 // kMaxStallRestarts times, for the one driver with field evidence (uhd); samples reset everything and, after 60 s of steady samples, the restart budget.
 // Every other driver keeps 0.99.112's behaviour (wait): one log line and one radio-journal note when the silence passes the window, no restart, no fault.
-void SoapySource::noteNoSamplesLocked() {
+void SoapySource::noteNoSamplesLocked(bool& restartFlagHeld) {
     if (!running_.load(std::memory_order_relaxed)) {
         // An inactive stream answers TIMEOUT by SoapySDR's contract: not a stall, and nothing here may activate it.
         resetSilenceLocked();
@@ -2330,10 +2390,11 @@ void SoapySource::noteNoSamplesLocked() {
     core::diagWarnf("source: %s: the stream delivered nothing for %lld s; restarting the stream (attempt %d of %d)", model.c_str(), secs, stallRestarts_,
                     kMaxStallRestarts);
     restarting_.store(true, std::memory_order_relaxed);
+    restartFlagHeld = true;   // read() lowers it after the device lock is released, never before (a waiter's second wait depends on it)
     const auto t0 = std::chrono::steady_clock::now();
     std::string why;
     const bool back = restartStreamLocked(why);
-    restarting_.store(false, std::memory_order_relaxed);
+    if (afterRestartHook_) { afterRestartHook_(); }
     lastStallRestartAt_ = std::chrono::steady_clock::now();
     resetSilenceLocked();
     lastRestartMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(lastStallRestartAt_ - t0).count();
@@ -2350,10 +2411,23 @@ void SoapySource::noteNoSamplesLocked() {
     }
     std::string msg = "the radio delivered no samples and its stream would not restart: " + why;
     std::lock_guard<std::mutex> lk(errorMutex_);
+    // A driver fault inside a restart step was filed by noteVendorFault already: one fault, one report (review of fb3b2a89, minor item).
+    const bool alreadyFiled = deviceDead_ && deadReason_ == DeadReason::VendorFault;
     if (!deviceDead_) { lastError_ = msg; }
     faulted_ = true;
     running_.store(false, std::memory_order_relaxed);
-    rre::noteDeviceFault(this, "soapy", "reading samples", msg);
+    if (!alreadyFiled) { rre::noteDeviceFault(this, "soapy", "reading samples", msg); }
+}
+
+void SoapySource::condemnForTest() {
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    deviceDead_ = true;
+    faulted_ = true;
+    deadReason_ = DeadReason::Abandoned;
+    try {
+        lastError_ = kAbandonedMessage;
+    } catch (...) {
+    }
 }
 
 bool SoapySource::deactivateUnderneathForTest() {
@@ -2397,6 +2471,15 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
     // becomes a slightly later "nothing yet, retry" than usual. Nothing is
     // recorded and the device is not marked dead; that verdict belongs only
     // to the user's own escape paths (stop()/closeDevice()).
+    //
+    // restarting_ IS LOWERED BY THIS GUARD, which is declared BEFORE the lock so that it is destroyed AFTER the lock is released (review of fb3b2a89, 3.2):
+    // a stop/close whose first wait ran out while the restart's last lines were still running under the lock must still see "restarting" and take its
+    // second wait, or it condemns a healthy radio.
+    struct RestartFlag {
+        std::atomic<bool>& flag;
+        bool held = false;
+        ~RestartFlag() { if (held) { flag.store(false, std::memory_order_relaxed); } }
+    } restartFlag{restarting_};
     std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
     if (!devLk.owns_lock()) {
         return 0;
@@ -2502,12 +2585,17 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
         // "readStream failed" in the GUI. (A literal 0 is not a documented
         // return, but it means no samples either way, so it lands here.)
         if (ret == SOAPY_SDR_TIMEOUT || ret == 0) {
-            noteNoSamplesLocked();
+            noteNoSamplesLocked(restartFlag.held);
             return 0;
         }
-        if (transientStreamError(ret)) { noteNoSamplesLocked(); }
+        // EVERY OTHER ANSWER WITHOUT SAMPLES IS SILENCE TOO (OVERFLOW, CORRUPTION, and a hard error before it is counted into a fault): a stalled stream
+        // need not answer TIMEOUT (review of fb3b2a89, 3.3).
+        noteNoSamplesLocked(restartFlag.held);
         {
             std::lock_guard<std::mutex> lk(errorMutex_);
+            // THE STALL DETECTOR MAY HAVE LATCHED A FAULT ON THIS VERY READ, with its own sentence ("restart FoxSDR", "power-cycle"): that sentence is the one
+            // the person must see, not "readStream failed: OVERFLOW" written over it.
+            if (faulted_ || deviceDead_) { return 0; }
             lastError_ = std::string("readStream failed: ") + SoapySDR::errToStr(ret);
             if (transientStreamError(ret)) {
                 consecutiveErrors_ = 0;

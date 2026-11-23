@@ -1382,6 +1382,8 @@ private:
     // is what the list fingerprint hashes (the texts are not hashed one by one).
     std::vector<std::string> faultedDrivers_;
     std::vector<std::string> faultedNoRetry_;   // the ones of those a Refresh will no longer ask (soapy_enum_proc.hpp: kRefreshRetriesPerSession)
+    bool lastSoapyScanUserRefreshForTest_ = false;   // TESTS ONLY (through the friend): whether the scan last started was the user's own Refresh
+    std::vector<std::string> timedOutDrivers_;  // the ones of those whose last Refresh retry ran out its time instead of crashing (the note says "did not finish in time")
     ScanDiagnostics scanEvidence_;
     std::uint64_t scanEvidenceSeq_ = 0;
     // Takes the diagnostics a landed scan reads (the hook's, the runtime's, or - with soapyScan hooked and no

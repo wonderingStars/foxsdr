@@ -758,6 +758,15 @@ inline FoxCommand make(std::uint32_t op) {
     return c;
 }
 
+// THE SOURCE PANEL'S OWN REFRESH KEY: FOXAPI_OP_SCAN_DEVICES with ival[0] = 1. Only this one lets a SoapySDR driver whose scan child crashed earlier be asked
+// again (and spends one of its kRefreshRetriesPerSession tries). Every other sender of the scan - the SDRplay service-restart rescan, the web control op,
+// "Check again", "Look for radios", the add-radio rescan - sends it with ival[0] = 0 and never spends a try (review of fb3b2a89, 5.2).
+inline FoxCommand makeUserRefresh() {
+    FoxCommand c = make(FOXAPI_OP_SCAN_DEVICES);
+    c.ival[0] = 1;
+    return c;
+}
+
 inline FoxCommand makeInt(std::uint32_t op, std::int64_t v0, std::int64_t v1 = 0) {
     FoxCommand c = make(op);
     c.ival[0] = v0;

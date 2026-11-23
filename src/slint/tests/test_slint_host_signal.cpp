@@ -1039,6 +1039,7 @@ int main() {
 
         c = opRefresh();
         CHECK(c.valid && c.q.c.op == FOXAPI_OP_SCAN_DEVICES && c.q.c.op == 0x0301u);
+        CHECK(c.q.c.ival[0] == 1);   // the Refresh key is the one scan that asks a crashed driver again (cmd::makeUserRefresh)
         c = opScanOnOpen();
         CHECK(c.valid && c.q.c.op == FOXAPP_OP_SCAN_DEVICES_ON_OPEN);
         // the window's own first search (map-focus.md section 2): once, 1.5 s after the first publish, and not in a bounded run unless it opted in
@@ -1243,6 +1244,7 @@ int main() {
 
         c = opSetupCheckAgain();
         CHECK(c.valid && c.q.c.op == FOXAPI_OP_SCAN_DEVICES);
+        CHECK(c.q.c.ival[0] == 0);   // "Check again" is a plain rescan: it spends no crashed driver's re-ask tries
         c = opImportPath("C:\\lists\\f.csv", 0);
         CHECK(c.valid && c.q.c.op == FOXAPP_OP_BOOKMARK_IMPORT_FILE && textOf(c.q.c, c.q.longText) == "C:\\lists\\f.csv");
         c = opImportPath("C:\\iq\\a.wav", 1);

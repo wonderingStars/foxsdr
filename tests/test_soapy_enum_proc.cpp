@@ -1977,6 +1977,73 @@ int main(int argc, char** argv) {
         CHECK(cascade::source::refreshRetriesLeft("uhd") == cascade::source::kRefreshRetriesPerSession - 1);
         cascade::source::clearSessionFaultedDriversForTest();
     }
+    // --- A REFRESH RETRY THAT RUNS OUT OF TIME SPENDS THE TRY (review of fb3b2a89, 5.1) --------------------------------------------------------------------
+    //
+    // A driver on the crashed list that now HANGS instead of crashing: the granted whole-bus child runs out its budget and lists nothing for any driver.
+    // That used to refund the try, so every Refresh was a 20 s scan that listed nothing, without end. Now the try is spent like a crash spends it, the
+    // driver is named as timed out (not crashed), and after kRefreshRetriesPerSession the driver is left out and Refresh is quick again.
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        o.timeoutMs = 1500;
+        const std::vector<std::string> wantUhd{"uhd"};
+        (void)enumerateIsolated(o);                                   // the crash: uhd is on the list
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);
+        CHECK(cascade::source::sessionTimedOutDrivers().empty());
+        setMode("hang");
+        EnumOptions refresh = o;
+        refresh.userRefresh = true;
+        const EnumResult t1 = enumerateIsolated(refresh);             // Refresh, try 1 of 2: the whole-bus child hangs
+        CHECK(t1.outcome == EnumOutcome::ChildTimedOut);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == 1);       // SPENT, not refunded
+        CHECK(cascade::source::sessionTimedOutDrivers() == wantUhd);  // and said to have timed out
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u); // still on the list
+        const EnumResult t2 = enumerateIsolated(refresh);             // try 2 of 2
+        CHECK(t2.outcome == EnumOutcome::ChildTimedOut);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == 0);
+        const EnumResult t3 = enumerateIsolated(refresh);             // nothing left: uhd is not asked any more
+        CHECK(t3.sessionSkippedDrivers == wantUhd);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == 0);
+        // A later answer that does not die takes it off both lists (the retries are gone here, so only a cleared session shows that: a fresh one).
+        cascade::source::clearSessionFaultedDriversForTest();
+        CHECK(cascade::source::sessionTimedOutDrivers().empty());
+    }
+    // --- THE IN-PROCESS FALLBACK NEVER PROBES A DRIVER THAT CRASHED A CHILD (review of fb3b2a89, 5.x), not even one this scan's Refresh granted -----------
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        (void)enumerateIsolated(o);                                   // uhd crashed a child
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);
+        std::vector<std::vector<std::string>> walks;
+        // A helper path that EXISTS but cannot be started (a directory: CreateProcess refuses it): the spawn fails, which is the one case that walks the bus
+        // in this process. (A path that names no file is "an incomplete install" and never falls back. A file that is no program is not used: Windows may
+        // answer that one with a dialog.)
+        std::error_code unusableEc;
+        const std::filesystem::path unusable = std::filesystem::temp_directory_path(unusableEc);
+        EnumOptions noHelper;
+        noHelper.helperPath = unusable.string();
+        noHelper.allowInProcessFallback = true;
+        noHelper.inProcessWalkForTest = [&walks](const std::vector<std::string>& leaveOut) {
+            walks.push_back(leaveOut);
+            return std::vector<cascade::source::SoapyDeviceInfo>();
+        };
+        for (const bool userRefresh : {false, true}) {                // an automatic scan, and a Refresh that GRANTS uhd one more try
+            walks.clear();
+            noHelper.userRefresh = userRefresh;
+            const EnumResult r = enumerateIsolated(noHelper);
+            CHECK(r.fellBackInProcess);
+            CHECK(walks.size() == 1u);
+            if (walks.size() == 1u) { CHECK(std::find(walks[0].begin(), walks[0].end(), "uhd") != walks[0].end()); }   // left out of the in-process walk
+            CHECK(cascade::source::refreshRetriesLeft("uhd") == cascade::source::kRefreshRetriesPerSession);   // nothing asked it: the try is refunded
+        }
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
     {
         // THE FOREIGN DEVICE'S WORDS: vendor and product id only, never its instance path.
         const std::string err =

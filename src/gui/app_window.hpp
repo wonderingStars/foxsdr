@@ -1867,6 +1867,7 @@ private:
         std::string scanSkip;                // fact.source.scanSkip
         std::string faultedDrivers;          // fact.source.faultedDrivers
         std::string faultedNoRetry;          // fact.source.faultedNoRetry
+        std::string timedOutDrivers;         // fact.source.timedOutDrivers
         bool uhdNoImages = false;            // fact.source.uhdNoImages: UHD itself said it has no firmware images (0.99.85)
         bool usrpOnUsb = false;              // fact.source.usrpOnUsb: the last scan's USB listing held a USRP
         std::string plutoUri;                // fact.source.plutoUri

@@ -685,8 +685,10 @@ private:
     // DEACTIVATED. restartStreamLocked: deactivate, recreate, re-apply rate / frequency / antenna / gain, activate.
     bool recreateStreamLocked(std::string& why);
     bool restartStreamLocked(std::string& why);
-    // Called from read() on every no-samples answer of the driver: the stall detector.
-    void noteNoSamplesLocked();
+    // Called from read() on every no-samples answer of the driver: the stall detector. A restart it runs raises restarting_ and sets restartFlagHeld, and
+    // read() lowers restarting_ only AFTER it has released the device lock (a stop/close that waits for the lock must still see "restarting" until it
+    // can take it: review of fb3b2a89, 3.2).
+    void noteNoSamplesLocked(bool& restartFlagHeld);
     void resetSilenceLocked();
     std::unique_lock<std::timed_mutex> lockForEscape();
     static constexpr std::chrono::milliseconds kRestartGiveBack{1500};
@@ -895,9 +897,16 @@ public:
     int stallRestartsForTest() const { return stallRestarts_; }
     long long lastRestartMsForTest() const { return lastRestartMs_; }
     bool restartingForTest() const { return restarting_.load(std::memory_order_relaxed); }
+    // Tests only: called by the stall restart right after the restart's last step, with the device lock still held and restarting_ still raised (the window
+    // between the end of a restart and read() letting go of the lock). A test blocks here to hold the lock deterministically.
+    void setAfterRestartHookForTest(std::function<void()> h) { afterRestartHook_ = std::move(h); }
     // DEVELOPER-ONLY (tools/uhd_rate_hw, tests): deactivate the stream underneath the source, leaving it believing it runs, so the next reads are real
     // silence on real hardware. Not on any shipped path.
     bool deactivateUnderneathForTest();
+    // Tests only: condemn the device exactly as a stop that gave up waiting does (dead, faulted, Abandoned, the abandoned sentence), without a call in the driver.
+    void condemnForTest();
+    // Tests only: the stream handle the link holds now (read WITHOUT the lock: only meaningful on a link whose handles are frozen).
+    const void* linkStreamForTest() const { return link_ ? static_cast<const void*>(link_->stream) : nullptr; }
 
     // HOW LONG A LATE CALL IS LISTENED FOR before it is given up (see
     // setCenterFrequencyHz). Nothing ever blocks on this: it is the age past
@@ -925,6 +934,7 @@ private:
     long long lastRestartMs_ = 0;
     // A restart in flight, and a stop/close asking it to give the lock back (see stop(), closeDevice()).
     std::atomic<bool> restarting_{false};
+    std::function<void()> afterRestartHook_;
     // Stop/close calls waiting for the device lock: a restart gives the lock back at its next step, and none starts while one waits.
     std::atomic<int> escapeWaiters_{0};
     int stallRestarts_ = 0;

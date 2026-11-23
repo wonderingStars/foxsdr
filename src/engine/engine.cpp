@@ -1495,6 +1495,7 @@ void Engine::scanSoapy(bool userRefresh) {
     // promises a list and nothing more, and this caller also needs the scan's
     // uhdImagesMissing answer for the hint under the Source list.
     const auto scanHook = testHooks_.soapyScan;  // null in every build of the application
+    lastSoapyScanUserRefreshForTest_ = userRefresh;
     soapyScanFuture_ = std::async(std::launch::async, [skip, namedSoapyArgs, lookForNetworkUsrps, userRefresh,
                                                        absentOut, uhdNoImagesOut, usrpOnUsbOut, helperMissingOut, scanHook] {
         // THE HEARTBEAT (core/thread_beats.hpp, 6.27): the scan is the thread's life; pumpWorkers collects it, and a scan that
@@ -3165,9 +3166,12 @@ void Engine::takeScanDiagnostics(bool wholeAndEmpty) {
     }
     faultedDrivers_ = asked ? std::move(d.faultedDrivers) : std::vector<std::string>();
     faultedNoRetry_.clear();
+    timedOutDrivers_.clear();
     if (testHooks_.scanDiagnostics == nullptr && testHooks_.soapyScan == nullptr) {
+        const std::vector<std::string> slow = cascade::source::sessionTimedOutDrivers();
         for (const std::string& f : faultedDrivers_) {
             if (cascade::source::refreshRetriesLeft(f) == 0) { faultedNoRetry_.push_back(f); }
+            if (std::find(slow.begin(), slow.end(), f) != slow.end()) { timedOutDrivers_.push_back(f); }
         }
     }
     ScanDiagnostics next;
@@ -8447,7 +8451,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // SoapySDR scan goes through its own gate, which defers while a
             // radio is open and says why once.
             scanNative();
-            scanSoapy(/*userRefresh=*/true);
+            scanSoapy(/*userRefresh=*/c.ival[0] == 1);   // only the Source panel's own Refresh key sends 1 (cmd::makeUserRefresh)
             return res;
         case FOXAPP_OP_SCAN_DEVICES_ON_OPEN:
             // The Source list opening: the lazy first SoapySDR scan, or the

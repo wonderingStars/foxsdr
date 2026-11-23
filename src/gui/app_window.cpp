@@ -7779,9 +7779,20 @@ void AppWindow::drawSourceSection() {
     // shorter with nothing to say why. fact.source.faultedDrivers is the
     // engine's list of them (the child that died is the engine's).
     if (!c.faultedDrivers.empty()) {
-        std::string again, left;
-        cascade::gui::splitCrashedSearch(c.faultedDrivers, c.faultedNoRetry, again, left);
+        std::string again, left, slowAgain, slowLeft;
+        cascade::gui::splitSearchNotes(c.faultedDrivers, c.faultedNoRetry, c.timedOutDrivers, again, left, slowAgain, slowLeft);
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::warning());
+        if (!slowAgain.empty()) {
+            std::string note;
+            cascade::core::formatUtf8(note, tr("The search for %s radios did not finish in time; press Refresh to try again"), cascade::gui::friendlyDriverList(slowAgain).c_str());
+            ImGui::TextWrapped("%s", note.c_str());
+        }
+        if (!slowLeft.empty()) {
+            std::string note;
+            cascade::core::formatUtf8(note, tr("The search for %s radios did not finish in time again; it is left out until FoxSDR is restarted"),
+                                      cascade::gui::friendlyDriverList(slowLeft).c_str());
+            ImGui::TextWrapped("%s", note.c_str());
+        }
         if (!again.empty()) {
             std::string note;
             cascade::core::formatUtf8(note, tr("The search for %s radios crashed; press Refresh to try again"), cascade::gui::friendlyDriverList(again).c_str());
@@ -7884,7 +7895,7 @@ void AppWindow::drawSourceSection() {
     if (ImGui::Button(trId("Refresh"))) {
         // The SoapySDR half defers itself, and says so once, while a radio is
         // open.
-        uiSubmit(cascade::core::cmd::make(FOXAPI_OP_SCAN_DEVICES));
+        uiSubmit(cascade::core::cmd::makeUserRefresh());   // the user's own Refresh: the only scan that asks a crashed driver again
     }
     // LOOK FOR NETWORK USRPs (2026-09-25), off by default: UHD is only asked
     // when a USRP could be here (gui::soapyDriversWithNoHardware), and a USRP
@@ -8645,6 +8656,7 @@ const AppWindow::SourceListCache& AppWindow::sourceLists() {
     readFactText("fact.source.scanSkip", c.scanSkip);
     readFactText("fact.source.faultedDrivers", c.faultedDrivers);
     readFactText("fact.source.faultedNoRetry", c.faultedNoRetry);
+    readFactText("fact.source.timedOutDrivers", c.timedOutDrivers);
     {
         std::string flag;
         readFactText("fact.source.uhdNoImages", flag);

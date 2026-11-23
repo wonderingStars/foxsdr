@@ -61,6 +61,43 @@ inline void splitCrashedSearch(const std::string& faultedCsv, const std::string&
     }
 }
 
+// The names of `csv` that are not in `removeCsv` (both ", "-joined).
+inline std::string withoutNames(const std::string& csv, const std::string& removeCsv) {
+    std::string out;
+    std::size_t i = 0;
+    while (i <= csv.size()) {
+        std::size_t j = csv.find(", ", i);
+        if (j == std::string::npos) { j = csv.size(); }
+        const std::string name = csv.substr(i, j - i);
+        i = j + 2;
+        if (name.empty()) { continue; }
+        bool drop = false;
+        std::size_t k = 0;
+        while (k <= removeCsv.size()) {
+            std::size_t m = removeCsv.find(", ", k);
+            if (m == std::string::npos) { m = removeCsv.size(); }
+            if (removeCsv.substr(k, m - k) == name) { drop = true; }
+            k = m + 2;
+        }
+        if (!drop) { out += (out.empty() ? "" : ", ") + name; }
+    }
+    return out;
+}
+
+// THE DRIVERS ON THE CRASHED LIST WHOSE LAST REFRESH RETRY RAN OUT ITS TIME (not a crash: the whole-bus child was killed at its budget): the two lists the
+// two "did not finish in time" sentences read - slowAgain (a Refresh will still ask them) and slowLeft (no tries left). The crashed pair (again, left) is
+// then what splitCrashedSearch says about the rest.
+inline void splitSearchNotes(const std::string& faultedCsv, const std::string& noRetryCsv, const std::string& timedOutCsv, std::string& again,
+                             std::string& left, std::string& slowAgain, std::string& slowLeft) {
+    splitCrashedSearch(withoutNames(faultedCsv, timedOutCsv), noRetryCsv, again, left);
+    std::string onlyTimedOut;
+    {   // the timed-out names that really are on the crashed list
+        const std::string notTimedOut = withoutNames(faultedCsv, timedOutCsv);
+        onlyTimedOut = withoutNames(faultedCsv, notTimedOut);
+    }
+    splitCrashedSearch(onlyTimedOut, noRetryCsv, slowAgain, slowLeft);
+}
+
 // "uhd, airspy" -> "Ettus (UHD), airspy": driver names as the screen says them (only a driver with a well-known brand is renamed). Used by the note that
 // says a driver's search crashed (the classic Source section and the Slint source panel).
 inline std::string friendlyDriverList(const std::string& commaSeparated) {
