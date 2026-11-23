@@ -750,26 +750,54 @@ std::map<std::string, int>& refreshRetryCounts() {
 }
 
 // THE USER'S REFRESH GIVES A CRASHED DRIVER ANOTHER TURN (field, 22 Nov 2026: after one libusb crash the B200's driver stayed out for the rest of the
-// session, so a healthy board could never be listed without a restart). Each such driver leaves the faulted list, so the walk below asks it; if it
-// crashes again it is remembered again. Bounded by kRefreshRetriesPerSession per driver per session; the automatic searches never come here.
-void grantRefreshRetries() {
+// session, so a healthy board could never be listed without a restart). The driver is NOT taken off the crashed list: it is GRANTED for this scan only, so
+// the child walks ask it (sessionFaultedNamesForWalk) while the in-process fallback, which has no isolation, still never does (sessionFaultedNames). When
+// the scan is over finishRefreshGrant settles each grant by what really happened: a child asked it and it came back (off the list), a child asked it and
+// it crashed again (stays on it), or no child asked it at all (stays on it and the try is refunded). Bounded by kRefreshRetriesPerSession per driver per
+// session; the automatic searches never come here.
+thread_local std::vector<std::string> t_grantedThisScan;
+
+std::vector<std::string> beginRefreshGrant() {
     std::vector<std::string> granted;
     {
         std::lock_guard<std::mutex> lk(sessionMutex());
-        std::vector<FaultedDriver>& list = sessionList();
-        for (auto it = list.begin(); it != list.end();) {
-            int& used = refreshRetryCounts()[it->driver];
+        for (const FaultedDriver& f : sessionList()) {
+            int& used = refreshRetryCounts()[f.driver];
             if (used < kRefreshRetriesPerSession) {
                 ++used;
-                granted.push_back(it->driver + " (try " + std::to_string(used) + " of " + std::to_string(kRefreshRetriesPerSession) + ")");
-                it = list.erase(it);
-            } else {
-                ++it;
+                granted.push_back(f.driver);
             }
         }
     }
     for (const std::string& g : granted) {
         core::diagLogf("soapy: asking %s again because Refresh was pressed - it crashed a device scan earlier in this session", g.c_str());
+    }
+    t_grantedThisScan = granted;
+    return granted;
+}
+
+void finishRefreshGrant(const std::vector<std::string>& granted, const EnumResult& r) {
+    t_grantedThisScan.clear();
+    if (granted.empty()) { return; }
+    const auto has = [](const std::vector<std::string>& v, const std::string& n) { return std::find(v.begin(), v.end(), n) != v.end(); };
+    std::lock_guard<std::mutex> lk(sessionMutex());
+    for (const std::string& g : granted) {
+        bool asked;
+        bool crashed = false;
+        if (r.sweptPerDriver) {
+            asked = has(r.sweptDrivers, g);
+            crashed = has(r.faultedDrivers, g);
+        } else {
+            asked = (r.outcome == EnumOutcome::Ok || r.answeredBeforeDeath) && !r.fellBackInProcess && !r.helperMissing && !has(r.absentDrivers, g) &&
+                    !has(r.skippedDrivers, g);
+        }
+        if (!asked) {
+            int& used = refreshRetryCounts()[g];
+            if (used > 0) { --used; }
+        } else if (!crashed) {
+            std::vector<FaultedDriver>& list = sessionList();
+            list.erase(std::remove_if(list.begin(), list.end(), [&g](const FaultedDriver& f) { return f.driver == g; }), list.end());
+        }
     }
 }
 
@@ -777,6 +805,15 @@ std::vector<std::string> sessionFaultedNames() {
     std::vector<std::string> out;
     std::lock_guard<std::mutex> lk(sessionMutex());
     for (const FaultedDriver& f : sessionList()) { out.push_back(f.driver); }
+    return out;
+}
+
+// The crashed drivers the CHILD walks leave out: the session's list less the ones this scan's Refresh granted.
+std::vector<std::string> sessionFaultedNamesForWalk() {
+    std::vector<std::string> out;
+    for (const std::string& d : sessionFaultedNames()) {
+        if (std::find(t_grantedThisScan.begin(), t_grantedThisScan.end(), d) == t_grantedThisScan.end()) { out.push_back(d); }
+    }
     return out;
 }
 
@@ -1185,7 +1222,7 @@ void sweepEachDriver(const std::string& helper, const EnumOptions& options,
     for (const std::string& s : options.absentDrivers) { absent.push_back(lowerAscii(s)); }
     // A driver that already killed a child of its own this session is not
     // asked again, beside an open radio or after a whole-bus death alike.
-    const std::vector<std::string> faultedBefore = sessionFaultedNames();
+    const std::vector<std::string> faultedBefore = sessionFaultedNamesForWalk();
     const std::vector<std::string> slowBefore =
         restricted ? sessionSlowNames() : std::vector<std::string>();
     std::vector<std::string> asked;
@@ -1433,9 +1470,9 @@ struct UsbOnlyEnvScope {
 };
 }  // namespace
 
-EnumResult enumerateIsolated(const EnumOptions& options) {
+namespace {
+EnumResult enumerateIsolatedBody(const EnumOptions& options) {
     const UsbOnlyEnvScope usbOnlyEnv(options.usbOnlyDrivers);
-    if (options.userRefresh) { grantRefreshRetries(); }
     const auto t0 = std::chrono::steady_clock::now();
     EnumResult result;
 
@@ -1480,7 +1517,7 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
         // the child itself (runEnumerateHelper's `skip`): one child, as ever,
         // and no Refresh that re-runs a probe known to kill it.
         std::vector<std::string> sessionSkip;
-        for (const std::string& d : sessionFaultedNames()) {
+        for (const std::string& d : sessionFaultedNamesForWalk()) {
             if (skippableName(d)) { sessionSkip.push_back(d); }
         }
         // ...AND SO ARE THE DRIVERS WITH NOTHING HERE TO FIND, through the
@@ -1756,6 +1793,14 @@ EnumResult enumerateIsolated(const EnumOptions& options) {
                                                               t0)
             .count());
     return result;
+}
+}  // namespace
+
+EnumResult enumerateIsolated(const EnumOptions& options) {
+    const std::vector<std::string> granted = options.userRefresh ? beginRefreshGrant() : std::vector<std::string>();
+    EnumResult r = enumerateIsolatedBody(options);
+    finishRefreshGrant(granted, r);
+    return r;
 }
 
 #ifdef _WIN32

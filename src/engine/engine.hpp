@@ -1375,6 +1375,7 @@ private:
     // nothing found, and cleared when one finds something. scanEvidenceSeq_ moves with every write of either, and
     // is what the list fingerprint hashes (the texts are not hashed one by one).
     std::vector<std::string> faultedDrivers_;
+    std::vector<std::string> faultedNoRetry_;   // the ones of those a Refresh will no longer ask (soapy_enum_proc.hpp: kRefreshRetriesPerSession)
     ScanDiagnostics scanEvidence_;
     std::uint64_t scanEvidenceSeq_ = 0;
     // Takes the diagnostics a landed scan reads (the hook's, the runtime's, or - with soapyScan hooked and no

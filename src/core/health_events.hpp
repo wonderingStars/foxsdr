@@ -115,7 +115,7 @@ enum class Recovered : std::uint8_t {
     ReaderLeak,    // a native radio's reader (or Pluto's writer) thread did not stop and was let go
     CloseLeak,     // a sound device's close did not return in time and was left to finish alone
     LinkStranded,  // the SDRplay callback was still running after Uninit; its link was stranded
-    StreamRestart, // an Airspy's halted bulk stream was re-armed and streaming continued
+    StreamRestart, // a radio's halted or silent stream (Airspy, HackRF, RTL-SDR, UHD) was re-armed or restarted and streaming continued
     TunerRetry,    // the RTL-SDR tuner refused an I2C transfer and accepted it on a retry
     LateCall,      // a SoapySDR or SDRplay control call answered seconds late; changes were held
     ScanLimit,     // the device search ran out of time: drivers skipped, or walked in-process

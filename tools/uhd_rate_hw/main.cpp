@@ -33,6 +33,10 @@ namespace cascade::gui {
 struct AppWindowTestAccess {
     using Engine = cascade::engine::Engine;
     static std::uint64_t read(Engine& e, std::size_t slot) { return e.receivers_[slot] ? e.receivers_[slot]->pipeline_.sourceSamplesRead() : 0; }
+    static cascade::source::SoapySource* soapy(Engine& e, std::size_t slot) {
+        if (!e.receivers_[slot] || e.receivers_[slot]->device_ == nullptr) { return nullptr; }
+        return dynamic_cast<cascade::source::SoapySource*>(e.receivers_[slot]->device_);
+    }
     static int restarts(Engine& e, std::size_t slot) {
         if (!e.receivers_[slot] || e.receivers_[slot]->device_ == nullptr) { return -1; }
         const auto* sp = dynamic_cast<const cascade::source::SoapySource*>(e.receivers_[slot]->device_);
@@ -240,6 +244,54 @@ int main(int argc, char** argv) {
             std::printf("restarted-run t=%3d s  samples/s %.0f  faulted %d restarts %d '%s'\n", t, lastWindow, Access::faulted(*eng, 0) ? 1 : 0, Access::restarts(*eng, 0), Access::fault(*eng, 0).c_str());
         }
         if (lastWindow < 1.0) { ++stalledPhases; std::printf("RESTARTED RUN ENDED WITH ZERO SAMPLES\n"); }
+    }
+    // DEVELOPER-ONLY FORCED RESTART (UHD_RATE_HW_FORCE=restart | closeduring): the stream is deactivated UNDERNEATH the source, which still believes it
+    // runs, so the next reads are real silence on the real board and the source's own stall detector restarts the stream. Receive only.
+    if (const char* force = std::getenv("UHD_RATE_HW_FORCE")) {
+        cascade::source::SoapySource* sp = Access::soapy(*eng, 0);
+        if (sp == nullptr) { std::printf("FORCE: no SoapySource\n"); }
+        else {
+            const double rate0 = sp->sampleRateHz(), freq0 = sp->centerFrequencyHz();
+            const std::string ant0 = sp->antenna();
+            std::vector<double> gain0;
+            for (const auto& g : sp->gains()) { gain0.push_back(sp->gainDb(g.name)); }
+            std::printf("FORCE before: rate %.0f freq %.0f antenna '%s' gains", rate0, freq0, ant0.c_str());
+            for (double g : gain0) { std::printf(" %.1f", g); }
+            std::printf(" restarts %d\n", sp->stallRestartsForTest());
+            const auto t0 = std::chrono::steady_clock::now();
+            std::uint64_t prev = Access::read(*eng, 0);
+            std::printf("FORCE: deactivating the stream underneath: %s\n", sp->deactivateUnderneathForTest() ? "done" : "REFUSED");
+            const bool closeDuring = std::string(force) == "closeduring";
+            bool announcedSilence = false, recovered = false, closed = false;
+            double silentAtMs = -1.0, backAtMs = -1.0;
+            for (int i = 0; i < 400 && !recovered && !closed; ++i) {   // 40 s
+                sleepMs(100);
+                const std::uint64_t now = Access::read(*eng, 0);
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                if (now == prev) { if (!announcedSilence) { announcedSilence = true; silentAtMs = ms; } }
+                else if (announcedSilence && sp->stallRestartsForTest() >= 1) { recovered = true; backAtMs = ms; }
+                prev = now;
+                if (closeDuring && sp->restartingForTest()) {
+                    const auto c0 = std::chrono::steady_clock::now();
+                    sp->closeDevice();
+                    const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
+                    std::printf("FORCE: closeDevice() DURING the restart took %.0f ms; faulted %d, error '%s', abandoned %d\n", took, sp->faulted() ? 1 : 0, sp->lastError(),
+                                sp->deadReason() == cascade::source::SoapySource::DeadReason::Abandoned ? 1 : 0);
+                    closed = true;
+                }
+            }
+            if (!closeDuring) {
+                std::printf("FORCE: silent from %.0f ms; samples back at %.0f ms (restart took %lld ms by the source's own clock); restarts %d; faulted %d\n", silentAtMs, backAtMs,
+                            sp->lastRestartMsForTest(), sp->stallRestartsForTest(), Access::faulted(*eng, 0) ? 1 : 0);
+                sleepMs(15000);
+                const std::uint64_t a = Access::read(*eng, 0);
+                sleepMs(10000);
+                std::printf("FORCE after: rate %.0f freq %.0f antenna '%s' gains", sp->sampleRateHz(), sp->centerFrequencyHz(), sp->antenna().c_str());
+                for (const auto& g : sp->gains()) { std::printf(" %.1f", sp->gainDb(g.name)); }
+                std::printf("; samples/s after the restart %.0f; restarts %d\n", static_cast<double>(Access::read(*eng, 0) - a) / 10.0, sp->stallRestartsForTest());
+                if (backAtMs < 0.0) { ++stalledPhases; std::printf("FORCED RESTART DID NOT BRING SAMPLES BACK\n"); }
+            }
+        }
     }
     send(makeCmd(FOXAPI_OP_RUN, 0.0, 0, 1));   // a graceful stop
     sleepMs(1500);

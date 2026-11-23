@@ -36,6 +36,31 @@
 
 namespace cascade::gui {
 
+// The crashed-search drivers split by whether a Refresh will still ask them (faulted = "uhd, airspy", noRetry = the ones with no tries left): the two
+// lists the two sentences of the note read. Names are as the screen says them (friendlyDriverList).
+inline void splitCrashedSearch(const std::string& faultedCsv, const std::string& noRetryCsv, std::string& again, std::string& left) {
+    again.clear();
+    left.clear();
+    std::size_t i = 0;
+    while (i <= faultedCsv.size()) {
+        std::size_t j = faultedCsv.find(", ", i);
+        if (j == std::string::npos) { j = faultedCsv.size(); }
+        const std::string name = faultedCsv.substr(i, j - i);
+        i = j + 2;
+        if (name.empty()) { continue; }
+        bool noRetry = false;
+        std::size_t k = 0;
+        while (k <= noRetryCsv.size()) {
+            std::size_t m = noRetryCsv.find(", ", k);
+            if (m == std::string::npos) { m = noRetryCsv.size(); }
+            if (noRetryCsv.substr(k, m - k) == name) { noRetry = true; }
+            k = m + 2;
+        }
+        std::string& dst = noRetry ? left : again;
+        dst += (dst.empty() ? "" : ", ") + name;
+    }
+}
+
 // "uhd, airspy" -> "Ettus (UHD), airspy": driver names as the screen says them (only a driver with a well-known brand is renamed). Used by the note that
 // says a driver's search crashed (the classic Source section and the Slint source panel).
 inline std::string friendlyDriverList(const std::string& commaSeparated) {

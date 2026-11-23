@@ -1944,6 +1944,39 @@ int main(int argc, char** argv) {
         CHECK(r3.childDeaths == 0);
         cascade::source::clearSessionFaultedDriversForTest();
     }
+    // --- THE REFRESH GRANT IS SETTLED BY WHAT A CHILD REALLY DID (review of fix/soapy-stall, item 7) -----------------------------------------------------
+    {
+        cascade::source::clearSessionFaultedDriversForTest();
+        setMode("uhdtrap");
+        EnumOptions o;
+        o.helperPath = self;
+        o.allowInProcessFallback = false;
+        const std::vector<std::string> wantUhd{"uhd"};
+        (void)enumerateIsolated(o);                                  // the crash: uhd is on the crashed list
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);
+
+        // A Refresh BESIDE AN OPEN RADIO that leaves uhd out asks no child about it: it stays on the list and the try is refunded, so the next
+        // AUTOMATIC scan still leaves it out and the sentence does not clear.
+        EnumOptions beside = o;
+        beside.userRefresh = true;
+        beside.skipDrivers = {"uhd"};
+        (void)enumerateIsolated(beside);
+        CHECK(cascade::source::sessionFaultedDrivers().size() == 1u);
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == cascade::source::kRefreshRetriesPerSession);
+        const EnumResult automatic = enumerateIsolated(o);
+        CHECK(automatic.sessionSkippedDrivers == wantUhd);
+        CHECK(automatic.childDeaths == 0);
+
+        // A Refresh that a child answers WITHOUT dying takes uhd off the list (the driver came back), and spends the try.
+        setMode("ok");
+        EnumOptions refresh = o;
+        refresh.userRefresh = true;
+        const EnumResult healthy = enumerateIsolated(refresh);
+        CHECK(healthy.outcome == EnumOutcome::Ok);
+        CHECK(cascade::source::sessionFaultedDrivers().empty());
+        CHECK(cascade::source::refreshRetriesLeft("uhd") == cascade::source::kRefreshRetriesPerSession - 1);
+        cascade::source::clearSessionFaultedDriversForTest();
+    }
     {
         // THE FOREIGN DEVICE'S WORDS: vendor and product id only, never its instance path.
         const std::string err =

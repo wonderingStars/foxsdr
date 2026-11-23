@@ -189,22 +189,22 @@ std::string describe(const std::exception& e, const char* context) {
     return std::string(context) + ": " + msg;
 }
 
-// THE ARGUMENTS A SAVED RADIO IS OPENED WITH. The row carries every key the search printed, and for an Ettus (UHD) radio several of them are not the
-// radio: `label` and `name` are display text (the label embeds the USB address and changes when the board re-enumerates), `product` is a model string.
-// UHD filters on every key it is given, so a stale one answers "No devices found" for a board that is on the bus. For driver=uhd with a serial the open
-// keeps driver, serial and type only. Any other driver, and a uhd row with no serial, is passed through untouched. The saved row itself is never edited.
+// THE ARGUMENTS A SAVED RADIO IS OPENED WITH. The row carries every key the search printed, and for an Ettus (UHD) radio some of them are display text,
+// not the radio: `label` and `name` (the label embeds the USB address, which changes when the board re-enumerates) and `product`. UHD filters on every key
+// it is given, so a stale one answers "No devices found" for a board that is on the bus. For driver=uhd with a serial the open drops ONLY those three and
+// keeps everything else - `addr`, `resource`, `mgmt_addr`, `second_addr` and any key the user typed - because a network USRP opened without its address
+// depends on UDP broadcast discovery, which firewalls often block. Any other driver, and a uhd row with no serial, passes through untouched. The saved
+// row itself is never edited.
 std::string reducedMakeArgs(const std::string& args) {
     try {
-        const SoapySDR::Kwargs kw = SoapySDR::KwargsFromString(args);
+        SoapySDR::Kwargs kw = SoapySDR::KwargsFromString(args);
         const auto d = kw.find("driver");
         const auto sn = kw.find("serial");
         if (d == kw.end() || d->second != "uhd" || sn == kw.end() || sn->second.empty()) { return args; }
-        SoapySDR::Kwargs out;
-        out["driver"] = d->second;
-        out["serial"] = sn->second;
-        const auto t = kw.find("type");
-        if (t != kw.end() && !t->second.empty()) { out["type"] = t->second; }
-        return SoapySDR::KwargsToString(out);
+        kw.erase("label");
+        kw.erase("name");
+        kw.erase("product");
+        return SoapySDR::KwargsToString(kw);
     } catch (...) {
         return args;
     }
@@ -1460,6 +1460,19 @@ bool SoapySource::open(const std::string& args) {
     }
 }
 
+// THE LOCK FOR STOP AND CLOSE. A stall restart holds the device lock across its steps; a stop or close that arrives during one asks it to give the lock
+// back (escapeWaiters_, checked between its steps) and waits for it, instead of condemning a healthy radio after kControlLockWait ("restart FoxSDR").
+// The wait is bounded (kRestartGiveBack) and only taken while a restart is really in flight.
+std::unique_lock<std::timed_mutex> SoapySource::lockForEscape() {
+    escapeWaiters_.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock<std::timed_mutex> lk(link_->mutex, kControlLockWait);
+    if (!lk.owns_lock() && restarting_.load(std::memory_order_relaxed)) {
+        lk = std::unique_lock<std::timed_mutex>(link_->mutex, kRestartGiveBack);
+    }
+    escapeWaiters_.fetch_sub(1, std::memory_order_relaxed);
+    return lk;
+}
+
 void SoapySource::closeDevice() {
     // Same bounded wait, and the same escape-path verdict, as stop() below -
     // see the rationale there. On a timeout the link's handles are left
@@ -1472,7 +1485,7 @@ void SoapySource::closeDevice() {
     // itself faults - and the message says so, matching stop()'s wording so
     // the user sees one consistent abandonment reason regardless of which
     // control path gave up.
-    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk = lockForEscape();
     if (!devLk.owns_lock()) {
         running_.store(false, std::memory_order_relaxed);
         core::diagWarnf(
@@ -1886,7 +1899,7 @@ bool SoapySource::start() {
     // 40002A91C26F3C07 and 9B804643C56308CF). A start the driver has not
     // answered within kVendorCallWait is PENDING: true, running, reads answer
     // 0, and the answer is taken when it comes (see LateCall).
-    noSamplesRun_ = false;
+    resetSilenceLocked();
     stallRestarts_ = 0;
     bool pending = false;
     if (!activateLocked("starting the stream", &pending)) {
@@ -1956,7 +1969,7 @@ void SoapySource::stop() {
     // in a driver that is not answering — which is the same abandonment the
     // dead-device policy above already performs deliberately, for the same
     // reason — and the user is told, instead of the window going white.
-    std::unique_lock<std::timed_mutex> devLk(link_->mutex, kControlLockWait);
+    std::unique_lock<std::timed_mutex> devLk = lockForEscape();
     if (!devLk.owns_lock()) {
         // running_ is atomic and is what the read loop actually tests, so
         // clearing it here still stops the source as soon as the driver
@@ -2144,41 +2157,43 @@ bool SoapySource::deactivateLocked(const char* what) {
 }
 
 bool SoapySource::recreateStreamLocked(std::string& why) {
-    // closeStream + setupStream, guarded like every vendor crossing. Runs with the stream DEACTIVATED and the device lock held. A stream that cannot be
-    // made again leaves link_->stream null, which read() answers with 0 and which the caller turns into a fault with this sentence.
-    struct Re {
-        SoapySource* self;
-        bool threw = false;
-        bool noStream = false;
-        std::string message;
-    } r{this};
-    const bool completed = guardedVendorCall([&r]() noexcept {
+    // closeStream + setupStream as ONE ABANDONABLE JOB, like teardown's closeStream: a closeStream that never returns on a stalled device must cost
+    // the reader thread one bounded wait, not the lock for good. Runs with the stream DEACTIVATED and the device lock held. A stream that cannot be made
+    // again leaves link_->stream null, which read() answers with 0 and which the caller turns into a fault with this sentence.
+    const auto job = makeVendorJob(link_, [](VendorJob& j) noexcept {
         try {
-            auto& l = *r.self->link_;
-            if (l.stream != nullptr) {
+            if (j.link->stream != nullptr) {
                 try {
-                    l.dev->closeStream(l.stream);
+                    j.link->dev->closeStream(j.link->stream);
                 } catch (...) {
                 }
-                l.stream = nullptr;
+                j.link->stream = nullptr;
             }
-            l.stream = l.dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32, std::vector<std::size_t>{kChannel});
-            if (l.stream == nullptr) { r.noStream = true; }
+            j.link->stream = j.link->dev->setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32, std::vector<std::size_t>{kChannel});
+            if (j.link->stream == nullptr) { j.ret = -1; }
         } catch (const std::exception& e) {
-            r.threw = true;
-            r.message = describe(e, "setupStream failed");
+            j.threw = true;
+            j.message = describe(e, "setupStream failed");
         } catch (...) {
-            r.threw = true;
-            r.message = "setupStream failed: non-standard exception";
+            j.threw = true;
+            j.message = "setupStream failed: non-standard exception";
         }
     });
-    if (!completed) {
-        noteVendorFault("re-creating the stream");
-        why = lastError();
-        return false;
+    switch (job ? runAbandonableVendorCall(job) : JobOutcome::Abandoned) {
+        case JobOutcome::Completed:
+            break;
+        case JobOutcome::Faulted:
+            noteVendorFault("re-creating the stream");
+            why = lastError();
+            return false;
+        case JobOutcome::Abandoned:
+        default:
+            abandonWedgedDriverLocked("re-creating the stream");
+            why = lastError();
+            return false;
     }
-    if (r.threw) { why = r.message; return false; }
-    if (r.noStream) { why = "setupStream(RX, CF32) returned no stream"; return false; }
+    if (job->threw) { why = job->message; return false; }
+    if (job->ret == -1) { why = "setupStream(RX, CF32) returned no stream"; return false; }
     return true;
 }
 
@@ -2199,11 +2214,16 @@ bool SoapySource::restartStreamLocked(std::string& why) {
             gainValues.push_back(gainDb_[i]);
         }
     }
+    // A STOP OR CLOSE THAT ARRIVES DURING THE RESTART cancels it (escapeWaiters_, raised by stop()/closeDevice() while they wait for the lock): the steps
+    // below are checked between, so the lock comes back within one step and the radio is stopped normally, not condemned.
+    const auto cancelled = [this]() { return escapeWaiters_.load(std::memory_order_relaxed) > 0; };
     if (!deactivateLocked("stopping a stalled stream")) {
         if (deviceDead()) { why = lastError(); return false; }
         // The driver answered and said no: the stream is rebuilt anyway, which is the point of a restart.
     }
+    if (cancelled()) { why = "cancelled by a stop"; return false; }
     if (!recreateStreamLocked(why)) { return false; }
+    if (cancelled()) { why = "cancelled by a stop"; return false; }
     struct Apply {
         SoapySource* self;
         double rate, freq;
@@ -2239,6 +2259,7 @@ bool SoapySource::restartStreamLocked(std::string& why) {
         return false;
     }
     if (a.rateBack > 0.0) { sampleRateHz_.store(a.rateBack, std::memory_order_relaxed); }
+    if (cancelled()) { why = "cancelled by a stop"; return false; }
     bool pending = false;
     if (!activateLocked("restarting a stalled stream", &pending)) {
         why = lastError();
@@ -2247,29 +2268,52 @@ bool SoapySource::restartStreamLocked(std::string& why) {
     return true;
 }
 
-// THE STALL DETECTOR (field: 20 and 22 Nov 2026, a B200 open and "streaming" with zero samples for 18 minutes and for 237 minutes, no fault, no message).
-// Every read answer that carries no samples while the stream is meant to run lands here, with the device lock held. A run of them longer than the
-// stall window restarts the stream, at most kMaxStallRestarts times; steady samples afterwards forgive the budget. A stream that still delivers nothing
-// is the fault, worded for what it is, never "unplugged" unless the driver says the device is gone.
+void SoapySource::resetSilenceLocked() {
+    silentFor_ = std::chrono::milliseconds(0);
+    haveLastSilent_ = false;
+    silenceReported_ = false;
+}
+
+// THE STALL DETECTOR (field: 20 and 22 Nov 2026, a B200 shown open with zero samples per second; the cause of those was probably a STOPPED receiver, which this
+// must never mistake for a stall). It runs from read() with the device lock held, on every read that answered without samples, and only for a stream this
+// object says is running. SILENCE IS ACCUMULATED PER SILENT READ, each adding the time since the previous silent read capped at kSilenceStep, so a gap in
+// which no read was made (a sleep, a late retune, a long lock hold) adds one step and not the gap. Silence of kStallWindow restarts the stream, at most
+// kMaxStallRestarts times, for the one driver with field evidence (uhd); samples reset everything and, after 60 s of steady samples, the restart budget.
+// Every other driver keeps 0.99.112's behaviour (wait): one log line and one radio-journal note when the silence passes the window, no restart, no fault.
 void SoapySource::noteNoSamplesLocked() {
-    const auto now = std::chrono::steady_clock::now();
-    if (!noSamplesRun_) {
-        noSamplesRun_ = true;
-        noSamplesSince_ = now;
+    if (!running_.load(std::memory_order_relaxed)) {
+        // An inactive stream answers TIMEOUT by SoapySDR's contract: not a stall, and nothing here may activate it.
+        resetSilenceLocked();
         return;
     }
-    if (now - noSamplesSince_ < stallWindow_) { return; }
+    const auto now = std::chrono::steady_clock::now();
+    if (haveLastSilent_) {
+        const auto step = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSilentAt_);
+        silentFor_ += std::min(step, kSilenceStep);
+    }
+    lastSilentAt_ = now;
+    haveLastSilent_ = true;
+    if (silentFor_ < stallWindow_) { return; }
+    // A stop or close is waiting for the lock this thread holds: it gets it first, and no restart is started under it.
+    if (escapeWaiters_.load(std::memory_order_relaxed) > 0) { return; }
     std::string model;
     {
         std::lock_guard<std::mutex> lk(errorMutex_);
         model = name_;
     }
     if (model.rfind("SoapySDR: ", 0) == 0) { model.erase(0, 10); }
-    const long long secs = std::chrono::duration_cast<std::chrono::seconds>(now - noSamplesSince_).count();
+    const long long secs = std::chrono::duration_cast<std::chrono::seconds>(silentFor_).count();
+    if (driverKey_ != "uhd") {
+        if (silenceReported_) { return; }
+        silenceReported_ = true;
+        core::diagWarnf("source: the %s stream has delivered nothing for %lld s; waiting for it (not restarted: only a UHD stream is)", model.c_str(), secs);
+        rre::noteStreamTrouble(this, "soapy", rre::StreamTrouble{static_cast<double>(std::max<long long>(secs, 1)), 0, 0, 0, 0, secs * 1000});
+        return;
+    }
     if (stallRestarts_ >= kMaxStallRestarts) {
         std::string msg = "the radio delivered no samples for " + std::to_string(secs) + " s and restarting its stream " + std::to_string(kMaxStallRestarts) +
                           " times did not bring them back - power-cycle the radio, then pick it again";
-        core::diagWarnf("source: the %s %s", model.c_str(), msg.c_str());
+        core::diagWarnf("source: %s: %s", model.c_str(), msg.c_str());
         std::lock_guard<std::mutex> lk(errorMutex_);
         lastError_ = msg;
         faulted_ = true;
@@ -2277,21 +2321,44 @@ void SoapySource::noteNoSamplesLocked() {
         return;
     }
     ++stallRestarts_;
-    core::health::raiseRecovered(core::health::Recovered::StreamRestart);
-    core::diagWarnf("source: the %s stream delivered nothing for %lld s; restarting the stream (attempt %d of %d)", model.c_str(), secs, stallRestarts_,
+    core::diagWarnf("source: %s: the stream delivered nothing for %lld s; restarting the stream (attempt %d of %d)", model.c_str(), secs, stallRestarts_,
                     kMaxStallRestarts);
+    restarting_.store(true, std::memory_order_relaxed);
+    const auto t0 = std::chrono::steady_clock::now();
     std::string why;
     const bool back = restartStreamLocked(why);
+    restarting_.store(false, std::memory_order_relaxed);
     lastStallRestartAt_ = std::chrono::steady_clock::now();
-    noSamplesRun_ = false;
-    if (!back) {
-        std::string msg = "the radio delivered no samples and its stream would not restart: " + why;
-        std::lock_guard<std::mutex> lk(errorMutex_);
-        if (!deviceDead_) { lastError_ = msg; }
-        faulted_ = true;
-        running_.store(false, std::memory_order_relaxed);
-        rre::noteDeviceFault(this, "soapy", "reading samples", msg);
+    resetSilenceLocked();
+    lastRestartMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(lastStallRestartAt_ - t0).count();
+    if (back) {
+        core::health::raiseRecovered(core::health::Recovered::StreamRestart);
+        core::diagLogf("source: %s: the stream was restarted in %lld ms", model.c_str(), static_cast<long long>(lastRestartMs_));
+        return;
     }
+    if (why == "cancelled by a stop") {
+        // The user stopped or closed the radio while it restarted: not a fault of the radio, and the stop that asked is about to run.
+        --stallRestarts_;
+        core::diagLogf("source: %s: the stream restart was cancelled by a stop", model.c_str());
+        return;
+    }
+    std::string msg = "the radio delivered no samples and its stream would not restart: " + why;
+    std::lock_guard<std::mutex> lk(errorMutex_);
+    if (!deviceDead_) { lastError_ = msg; }
+    faulted_ = true;
+    running_.store(false, std::memory_order_relaxed);
+    rre::noteDeviceFault(this, "soapy", "reading samples", msg);
+}
+
+bool SoapySource::deactivateUnderneathForTest() {
+    std::unique_lock<std::timed_mutex> lk(link_->mutex, kControlLockWait);
+    if (!lk.owns_lock() || link_->dev == nullptr || link_->stream == nullptr) { return false; }
+    try {
+        link_->dev->deactivateStream(link_->stream);
+    } catch (...) {
+        return false;
+    }
+    return true;
 }
 
 std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
@@ -2409,7 +2476,7 @@ std::size_t SoapySource::read(std::complex<float>* dst, std::size_t n) {
             const bool scrubbed = sanitizeNonFinite(dst, got);
             std::lock_guard<std::mutex> lk(errorMutex_);
             consecutiveErrors_ = 0;  // samples arrived: the device is alive
-            noSamplesRun_ = false;
+            resetSilenceLocked();
             if (stallRestarts_ > 0 && std::chrono::steady_clock::now() - lastStallRestartAt_ >= std::chrono::seconds(60)) { stallRestarts_ = 0; }
             if (scrubbed) {
                 // Classified like an overflow: recorded so the GUI can show
@@ -2683,7 +2750,7 @@ bool SoapySource::setSampleRateHz(double hz) {
         return false;
     }
     sampleRateHz_.store(r.got, std::memory_order_relaxed);
-    noSamplesRun_ = false;  // a new rate is a new stream: the stall clock starts again
+    resetSilenceLocked();  // a new rate is a new stream: the silence count starts again
     // A restart the driver has not answered yet is PENDING (see
     // activateLocked): the stream stays running, reads answer 0 until the
     // answer is taken, and a late refusal stops it as faulted().

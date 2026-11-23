@@ -3055,6 +3055,12 @@ void Engine::takeScanDiagnostics(bool wholeAndEmpty) {
         asked = true;
     }
     faultedDrivers_ = asked ? std::move(d.faultedDrivers) : std::vector<std::string>();
+    faultedNoRetry_.clear();
+    if (testHooks_.scanDiagnostics == nullptr && testHooks_.soapyScan == nullptr) {
+        for (const std::string& f : faultedDrivers_) {
+            if (cascade::source::refreshRetriesLeft(f) == 0) { faultedNoRetry_.push_back(f); }
+        }
+    }
     ScanDiagnostics next;
     if (asked && wholeAndEmpty) {
         next.modules = std::move(d.modules);
@@ -10503,8 +10509,8 @@ void Engine::applyConfig(const cascade::core::AppConfig& cfg) {
             cascade::core::health::noteRadioFail(kind, rx().sourceError_);
             // ...AND AS ITS OWN REPORT (radio reports, D4): the reason is the driver's sentence before it is wrapped in the radio's name below.
             reportFailedOpen(kind, args, rx().sourceError_, cascade::core::radioreport::Trigger::StartupRestore, /*superseded=*/false, cfg.sampleRateHz, restoreOpenMs);
-            // WHY, AS ONE WORD (0.99.92): the same reason class the count above files it under, and the only part of the driver's message that
-            // may go in the log - the message itself quotes the device arguments back (below). Taken HERE, before the sentence at the end of this
+            // WHY, AS ONE WORD (0.99.92): the same reason class the count above files it under; the driver's own message quotes the device arguments back
+            // (below), so it enters the log only for a SoapySDR radio, scrubbed (openFailureWords), and never for a native one. Taken HERE, before the sentence at the end of this
             // branch wraps sourceError_ in the radio's name. The 0.99.91 field report had to be read off the anonymous counts to learn that the
             // saved radio was merely busy; the log said only that it "did not reopen".
             const std::string whyClass = cascade::core::health::radioFailWhy(kind, rx().sourceError_);

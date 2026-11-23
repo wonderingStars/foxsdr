@@ -603,6 +603,7 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
     const std::string scanGate = factOf(t, "fact.source.scanGate");
     const std::string scanSkip = factOf(t, "fact.source.scanSkip");
     const std::string faultedDrivers = factOf(t, "fact.source.faultedDrivers");
+    const std::string faultedNoRetry = factOf(t, "fact.source.faultedNoRetry");
     const bool uhdNoImages = factOf(t, "fact.source.uhdNoImages") == "1";
     const bool usrpOnUsb = factOf(t, "fact.source.usrpOnUsb") == "1";
     const std::string restoreKeepLabel = factOf(t, "fact.status.restoreKeepLabel");
@@ -943,7 +944,10 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
             paras.push_back({m.busy_line, true});
         }
         if (!faultedDrivers.empty()) {
-            paras.push_back({cc::formatText(tr("The search for %s radios crashed; press Refresh to try again"), cascade::gui::friendlyDriverList(faultedDrivers).c_str()), true});
+            std::string again, left;
+            cascade::gui::splitCrashedSearch(faultedDrivers, faultedNoRetry, again, left);
+            if (!again.empty()) { paras.push_back({cc::formatText(tr("The search for %s radios crashed; press Refresh to try again"), cascade::gui::friendlyDriverList(again).c_str()), true}); }
+            if (!left.empty()) { paras.push_back({cc::formatText(tr("The search for %s radios crashed again; it is left out until FoxSDR is restarted"), cascade::gui::friendlyDriverList(left).c_str()), true}); }
         }
         if ((src & FOXAPI_SRC_UHD_LEFT_OUT) != 0u && !m.look_for_usrps) {
             const std::vector<std::string> left{"uhd"};
