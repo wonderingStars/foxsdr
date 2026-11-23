@@ -14,6 +14,7 @@
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
+#include "source/usb_stream_note.hpp"
 #include "core/ppm_correction.hpp"
 
 namespace cascade::source {
@@ -301,6 +302,7 @@ bool rearmStream(RtlSdrSource::Link& link, std::string& why) {
         why = link.transport->lastError();
         return false;
     }
+    reportStreamNote(*link.transport, link.owner, "rtlsdr");
     return true;
 }
 
@@ -810,6 +812,7 @@ bool RtlSdrSource::startStreamLocked() {
         setError("the radio's bulk endpoint would not start: " + link_->transport->lastError());
         return false;
     }
+    reportStreamNote(*link_->transport, link_->owner, "rtlsdr");
     return true;
 }
 

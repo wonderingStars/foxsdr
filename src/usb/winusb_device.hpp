@@ -73,6 +73,21 @@ struct WinUsbApi {
     BOOL(__stdcall* unregisterIsochBuffer)(WINUSB_ISOCH_BUFFER_HANDLE);
     BOOL(__stdcall* readIsochPipeAsap)(WINUSB_ISOCH_BUFFER_HANDLE, ULONG, ULONG, BOOL, ULONG,
                                        PUSBD_ISO_PACKET_DESCRIPTOR, LPOVERLAPPED);
+
+    // ADDED FOR THE RAW_IO FIELD FAULT (Airspy HF+, Mirics MSi2500; 19-23 Nov
+    // 2026), again at the END so every older brace-initialised table still
+    // compiles and leaves these null. They let beginBulkStream() say WHERE a
+    // streaming endpoint lives (which interface, which alternate setting, what
+    // transfer type, what maximum packet size) when WinUsb_SetPipePolicy
+    // refuses it, and move to the interface or alternate setting that holds it.
+    // All four are exported by winusb.dll since Windows Vista, so
+    // realWinUsbApi() links them directly. A null entry means "cannot look":
+    // the stream then falls back to plain reads rather than refusing.
+    BOOL(__stdcall* queryPipe)(WINUSB_INTERFACE_HANDLE, UCHAR, UCHAR, PWINUSB_PIPE_INFORMATION);
+    BOOL(__stdcall* getAssociatedInterface)(WINUSB_INTERFACE_HANDLE, UCHAR,
+                                            PWINUSB_INTERFACE_HANDLE);
+    BOOL(__stdcall* setCurrentAlternateSetting)(WINUSB_INTERFACE_HANDLE, UCHAR);
+    BOOL(__stdcall* getCurrentAlternateSetting)(WINUSB_INTERFACE_HANDLE, PUCHAR);
 };
 
 // The table openWinUsb() uses: the real WinUsb_* functions, CancelIoEx and

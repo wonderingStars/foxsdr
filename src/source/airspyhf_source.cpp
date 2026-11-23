@@ -10,6 +10,7 @@
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
+#include "source/usb_stream_note.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -158,9 +159,7 @@ void AirspyHfSource::noteTransportFaultOn(ReaderLink& link, const char* what,
         // later transfer on it fails too, and the last message is the least
         // informative one there is.
         if (!link.deviceDead) {
-            link.lastError = std::string("the radio stopped answering while ") + what +
-                             (detail.empty() ? std::string() : (": " + detail)) +
-                             "; unplug it and plug it back in";
+            link.lastError = transportFaultSentence(what, detail);
             link.deadWhat = what;
         }
         link.faulted = true;
@@ -717,6 +716,7 @@ bool AirspyHfSource::open(const std::string& args) {
     dev_ = std::move(dev);
     link_->dev = dev_.get();
     clearError();
+    logUsbLayout(*dev_, "airspyhf");
 
     const auto giveUp = [this]() {
         dev_.reset();
@@ -876,6 +876,7 @@ bool AirspyHfSource::startStreamingLocked() {
         noteTransportFault("queueing the sample transfers", dev_->lastError());
         return false;
     }
+    reportStreamNote(*dev_, link_->owner, "airspyhf");
     if (!setReceiverModeLocked(airspyhf::ReceiverMode::On, "starting the receiver")) {
         dev_->endBulkStream();
         return false;

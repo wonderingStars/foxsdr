@@ -323,11 +323,16 @@ class WinUsbDevice final : public UsbDevice {
 public:
     WinUsbDevice(const WinUsbApi& api, HANDLE file, WINUSB_INTERFACE_HANDLE winusb,
                  std::string path)
-        : api_(&api), file_(file), winusb_(winusb), path_(std::move(path)) {}
+        : api_(&api), file_(file), winusb_(winusb), path_(std::move(path)),
+          streamHandle_(winusb) {}
 
     ~WinUsbDevice() override {
         endBulkStream();
         endIsoStream();
+        // Associated-interface handles (see probeHandles()) go before the first
+        // interface's own, as WinUsb_GetAssociatedInterface documents.
+        for (WINUSB_INTERFACE_HANDLE h : assoc_) { api_->winUsbFree(h); }
+        assoc_.clear();
         if (winusb_ != nullptr) { api_->winUsbFree(winusb_); }
         if (file_ != INVALID_HANDLE_VALUE) { api_->closeFile(file_); }
         // Requests the drain gave up on are not ours any more: endBulkStream()
@@ -372,10 +377,25 @@ public:
         // RAW_IO: no buffering in winusb.sys, the transfer goes straight at
         // the pipe. This is what keeps a 2.4 MS/s stream from adding a copy
         // and a scheduling hop per buffer.
+        //
+        // A REFUSAL IS NOT THE END OF THE STREAM (field fault, 19-23 Nov 2026:
+        // an Airspy HF+ and a Mirics MSi2500 closed on every start with
+        // "WinUsb_SetPipePolicy(RAW_IO) failed (Windows error 87)" and never
+        // delivered a sample). RAW_IO is a throughput option: Microsoft lists it
+        // for Bulk IN and Interrupt IN pipes only, and documents error 87 for
+        // a wrong ValueLength; a pipe id that is not in the interface the handle
+        // belongs to is the other way this call is refused. So when it is
+        // refused, recoverStreamPipe() looks at what the device actually
+        // exposes: it moves to the interface / alternate setting that holds the
+        // endpoint, falls back to plain overlapped reads when the endpoint is a
+        // usable bulk or interrupt IN pipe, and refuses - in words that say
+        // what is wrong - only when the endpoint cannot be streamed at all.
+        streamHandle_ = winusb_;
+        rawIo_ = true;
+        streamNote_.clear();
         UCHAR raw = TRUE;
         if (api_->setPipePolicy(winusb_, endpoint, RAW_IO, sizeof(raw), &raw) == FALSE) {
-            setError(lastErrorText("WinUsb_SetPipePolicy(RAW_IO)", ::GetLastError()));
-            return false;
+            if (!recoverStreamPipe(endpoint, ::GetLastError())) { return false; }
         }
 
         // A STALLED PIPE SELF-CLEARS. Without this a single stall - which
@@ -385,7 +405,7 @@ public:
         // the first read returns Windows error 31 and the SECOND one
         // delivers 16384 bytes. Off, the stall is permanent.
         UCHAR on = TRUE;
-        api_->setPipePolicy(winusb_, endpoint, AUTO_CLEAR_STALL, sizeof(on), &on);
+        api_->setPipePolicy(streamHandle_, endpoint, AUTO_CLEAR_STALL, sizeof(on), &on);
 
         // NO SELECTIVE SUSPEND WHILE A RADIO IS STREAMING. Whether WinUSB
         // idles this device at all comes from its INF, which on a
@@ -412,7 +432,7 @@ public:
         // driver was first run against, in which every read on a correctly
         // configured dongle timed out with no error at all until an
         // unrelated libusb program had claimed and released the interface.
-        api_->resetPipe(winusb_, endpoint);
+        api_->resetPipe(streamHandle_, endpoint);
 
         endpoint_ = endpoint;
         ring_.clear();
@@ -431,11 +451,29 @@ public:
         streaming_ = true;
         for (std::size_t i = 0; i < ring_.size(); ++i) {
             if (!queue(*ring_[i])) {
+                if (!rawIo_ && lastError_.find("(Windows error 87)") != std::string::npos) {
+                    // Plain reads are refused too: the pipe id is not one this
+                    // handle can read. Say so, with the layout, instead of
+                    // leaving a bare error number.
+                    char msg[96];
+                    std::snprintf(msg, sizeof(msg),
+                                  "endpoint 0x%02X refused plain reads as well (Windows error 87); ",
+                                  static_cast<unsigned>(endpoint));
+                    setError(std::string(kLayoutErrorPrefix) + msg + layoutText(walkLayout()));
+                }
                 endBulkStream();
                 return false;
             }
         }
         return true;
+    }
+
+    std::string endpointLayout() override { return layoutText(walkLayout()); }
+
+    std::string takeStreamNote() override {
+        std::string out;
+        out.swap(streamNote_);
+        return out;
     }
 
     int readBulk(std::uint8_t* dst, std::size_t cap, unsigned timeoutMs) override {
@@ -455,7 +493,7 @@ public:
             return -1;
         }
         DWORD moved = 0;
-        if (api_->getOverlappedResult(winusb_, &req.overlapped, &moved, FALSE) == FALSE) {
+        if (api_->getOverlappedResult(streamHandle_, &req.overlapped, &moved, FALSE) == FALSE) {
             const DWORD err = ::GetLastError();
             req.pending = false;
             // A device that has gone (unplugged, or the driver torn from
@@ -479,7 +517,7 @@ public:
             // Both, in this order: AbortPipe tells the function driver to
             // fail everything queued on the pipe, CancelIoEx covers requests
             // the I/O manager has not handed down yet.
-            api_->abortPipe(winusb_, endpoint_);
+            api_->abortPipe(streamHandle_, endpoint_);
         }
         for (auto& slot : ring_) {
             if (slot && slot->pending && file_ != INVALID_HANDLE_VALUE) {
@@ -499,7 +537,7 @@ public:
             }
             if (::WaitForSingleObject(slot->event, budget) == WAIT_OBJECT_0) {
                 DWORD moved = 0;
-                api_->getOverlappedResult(winusb_, &slot->overlapped, &moved, FALSE);
+                api_->getOverlappedResult(streamHandle_, &slot->overlapped, &moved, FALSE);
                 slot->pending = false;
             } else {
                 allDrained = false;
@@ -529,7 +567,11 @@ public:
 
     bool resetPipe(std::uint8_t endpoint) override {
         if (winusb_ == nullptr) { return false; }
-        if (api_->resetPipe(winusb_, endpoint) == FALSE) {
+        // A pipe the stream was routed to another interface for (recoverStreamPipe)
+        // is reset through THAT interface's handle.
+        const WINUSB_INTERFACE_HANDLE h =
+            (endpoint == routedEndpoint_ && streamHandle_ != nullptr) ? streamHandle_ : winusb_;
+        if (api_->resetPipe(h, endpoint) == FALSE) {
             setError(lastErrorText("WinUsb_ResetPipe", ::GetLastError()));
             return false;
         }
@@ -867,6 +909,206 @@ private:
 
     void setError(std::string msg) { lastError_ = std::move(msg); }
 
+    // --- the endpoint layout (RAW_IO field fault) ---------------------------
+    //
+    // One endpoint as WinUSB reports it. `iface` is 0 for the first interface
+    // (the handle WinUsb_Initialize returned) and n for the handle
+    // WinUsb_GetAssociatedInterface gave for index n-1.
+    struct PipeFact {
+        int iface = 0;
+        UCHAR interfaceNumber = 0;
+        UCHAR alt = 0;
+        bool current = false;  // `alt` is the interface's current alternate setting
+        UCHAR id = 0;
+        int type = 0;  // USBD_PIPE_TYPE: 0 control, 1 isochronous, 2 bulk, 3 interrupt
+        USHORT maxPacket = 0;
+    };
+
+    static const char* pipeTypeName(int t) {
+        switch (t) {
+            case 0: return "control";
+            case 1: return "isochronous";
+            case 2: return "bulk";
+            case 3: return "interrupt";
+            default: return "unknown-type";
+        }
+    }
+
+    WINUSB_INTERFACE_HANDLE handleOf(int iface) const {
+        if (iface == 0) { return winusb_; }
+        const std::size_t i = static_cast<std::size_t>(iface - 1);
+        return i < assoc_.size() ? assoc_[i] : nullptr;
+    }
+
+    // The handles of the interfaces after the first. Asked once; a device with
+    // a single interface answers "no more items" at once.
+    void probeHandles() {
+        if (assocProbed_) { return; }
+        assocProbed_ = true;
+        if (api_->getAssociatedInterface == nullptr) { return; }
+        for (UCHAR i = 0; i < 8; ++i) {
+            WINUSB_INTERFACE_HANDLE h = nullptr;
+            if (api_->getAssociatedInterface(winusb_, i, &h) == FALSE || h == nullptr) { break; }
+            assoc_.push_back(h);
+        }
+    }
+
+    // Every endpoint of every alternate setting of every interface WinUSB will
+    // describe. Descriptor queries are answered from WinUSB's own copy of the
+    // configuration: nothing goes on the bus. Empty when the table cannot look.
+    std::vector<PipeFact> walkLayout() {
+        std::vector<PipeFact> out;
+        if (winusb_ == nullptr || api_->queryInterfaceSettings == nullptr ||
+            api_->queryPipe == nullptr) {
+            return out;
+        }
+        probeHandles();
+        for (int iface = 0; iface <= static_cast<int>(assoc_.size()); ++iface) {
+            const WINUSB_INTERFACE_HANDLE h = handleOf(iface);
+            UCHAR cur = 0;
+            const bool haveCur = api_->getCurrentAlternateSetting != nullptr &&
+                                 api_->getCurrentAlternateSetting(h, &cur) != FALSE;
+            for (UCHAR alt = 0; alt < 16; ++alt) {
+                USB_INTERFACE_DESCRIPTOR d{};
+                if (api_->queryInterfaceSettings(h, alt, &d) == FALSE) { break; }
+                for (UCHAR p = 0; p < d.bNumEndpoints; ++p) {
+                    WINUSB_PIPE_INFORMATION pi{};
+                    if (api_->queryPipe(h, alt, p, &pi) == FALSE) { continue; }
+                    PipeFact f;
+                    f.iface = iface;
+                    f.interfaceNumber = d.bInterfaceNumber;
+                    f.alt = alt;
+                    f.current = haveCur ? (alt == cur) : (alt == 0);
+                    f.id = pi.PipeId;
+                    f.type = static_cast<int>(pi.PipeType);
+                    f.maxPacket = pi.MaximumPacketSize;
+                    out.push_back(f);
+                }
+            }
+        }
+        return out;
+    }
+
+    // "interface 0 alt 0 (current): 0x81 bulk packet 512; interface 0 alt 1: ...".
+    // No serial number and nothing else that identifies a person.
+    static std::string layoutText(const std::vector<PipeFact>& facts) {
+        if (facts.empty()) { return "USB layout unavailable"; }
+        std::string out;
+        int lastIface = -1;
+        int lastAlt = -1;
+        for (const PipeFact& f : facts) {
+            char buf[160];
+            if (f.iface != lastIface || f.alt != lastAlt) {
+                if (!out.empty()) { out += "; "; }
+                std::snprintf(buf, sizeof(buf), "interface %u alt %u%s:",
+                              static_cast<unsigned>(f.interfaceNumber),
+                              static_cast<unsigned>(f.alt), f.current ? " (current)" : "");
+                out += buf;
+                lastIface = f.iface;
+                lastAlt = f.alt;
+            } else {
+                out += ",";
+            }
+            std::snprintf(buf, sizeof(buf), " 0x%02X %s packet %u", static_cast<unsigned>(f.id),
+                          pipeTypeName(f.type), static_cast<unsigned>(f.maxPacket));
+            out += buf;
+        }
+        return out;
+    }
+
+    bool trySetRawIo(WINUSB_INTERFACE_HANDLE h, UCHAR endpoint) {
+        UCHAR raw = TRUE;
+        return api_->setPipePolicy(h, endpoint, RAW_IO, sizeof(raw), &raw) != FALSE;
+    }
+
+    // WinUsb_SetPipePolicy(RAW_IO) was refused with `err`. Settle what to do
+    // and either return true with streamHandle_ / rawIo_ / streamNote_ set, or
+    // false with a lastError() that says what is wrong with the endpoint.
+    bool recoverStreamPipe(UCHAR endpoint, DWORD err) {
+        const std::vector<PipeFact> facts = walkLayout();
+        const std::string layout = layoutText(facts);
+        char head[200];
+        const PipeFact* hit = nullptr;
+        for (const PipeFact& f : facts) {
+            if (f.id != endpoint) { continue; }
+            if (hit == nullptr || (f.current && !hit->current)) { hit = &f; }
+        }
+        if (!facts.empty()) {
+            if (hit == nullptr) {
+                std::snprintf(head, sizeof(head),
+                              "endpoint 0x%02X does not exist on this radio (Windows error %lu); ",
+                              static_cast<unsigned>(endpoint), static_cast<unsigned long>(err));
+                setError(std::string(kLayoutErrorPrefix) + head + layout);
+                return false;
+            }
+            const bool in = (endpoint & 0x80) != 0;
+            const bool streamable = hit->type == 2 /*bulk*/ || hit->type == 3 /*interrupt*/;
+            if (!in || !streamable) {
+                std::snprintf(head, sizeof(head),
+                              "endpoint 0x%02X is %s%s and cannot be read as a bulk or "
+                              "interrupt stream (Windows error %lu); ",
+                              static_cast<unsigned>(endpoint), in ? "" : "an OUT endpoint, ",
+                              pipeTypeName(hit->type), static_cast<unsigned long>(err));
+                setError(std::string(kLayoutErrorPrefix) + head + layout);
+                return false;
+            }
+            // The endpoint exists and is a bulk/interrupt IN pipe, but not
+            // necessarily where the handle in use looks: move to its interface
+            // (a pipe on a later interface needs that interface's own handle,
+            // Microsoft's WinUsb_SetPipePolicy documentation) and select the
+            // alternate setting that carries it.
+            const WINUSB_INTERFACE_HANDLE h = handleOf(hit->iface);
+            if (h != nullptr && (hit->iface != 0 || !hit->current)) {
+                if (!hit->current) {
+                    if (api_->setCurrentAlternateSetting == nullptr ||
+                        api_->setCurrentAlternateSetting(h, hit->alt) == FALSE) {
+                        std::snprintf(head, sizeof(head),
+                                      "endpoint 0x%02X is only in alternate setting %u, which "
+                                      "could not be selected (Windows error %lu); ",
+                                      static_cast<unsigned>(endpoint),
+                                      static_cast<unsigned>(hit->alt),
+                                      static_cast<unsigned long>(::GetLastError()));
+                        setError(std::string(kLayoutErrorPrefix) + head + layout);
+                        return false;
+                    }
+                }
+                streamHandle_ = h;
+                routedEndpoint_ = endpoint;
+                if (trySetRawIo(h, endpoint)) {
+                    std::snprintf(head, sizeof(head),
+                                  "pipe 0x%02X moved to interface %u alt %u after RAW_IO was "
+                                  "refused on the first interface (Windows error %lu): ",
+                                  static_cast<unsigned>(endpoint),
+                                  static_cast<unsigned>(hit->interfaceNumber),
+                                  static_cast<unsigned>(hit->alt), static_cast<unsigned long>(err));
+                    streamNote_ = std::string(head) + layout;
+                    ++rawIoFallbacks_;
+                    return true;
+                }
+            }
+        }
+        // PLAIN OVERLAPPED READS. The pipe exists (or the table could not say),
+        // RAW_IO is only an optimisation, and several queued reads work without
+        // it. The buffers are whole multiples of the packet size either way.
+        rawIo_ = false;
+        ++rawIoFallbacks_;
+        if (hit != nullptr) {
+            std::snprintf(head, sizeof(head),
+                          "RAW_IO refused on pipe 0x%02X (Windows error %lu); plain reads: "
+                          "interface %u alt %u %s packet %u; ",
+                          static_cast<unsigned>(endpoint), static_cast<unsigned long>(err),
+                          static_cast<unsigned>(hit->interfaceNumber),
+                          static_cast<unsigned>(hit->alt), pipeTypeName(hit->type),
+                          static_cast<unsigned>(hit->maxPacket));
+        } else {
+            std::snprintf(head, sizeof(head),
+                          "RAW_IO refused on pipe 0x%02X (Windows error %lu); plain reads: ",
+                          static_cast<unsigned>(endpoint), static_cast<unsigned long>(err));
+        }
+        streamNote_ = std::string(head) + layout;
+        return true;
+    }
+
     bool queueIso(std::size_t index) {
         Request& req = *iso_->requests[index];
         std::memset(&req.overlapped, 0, sizeof(req.overlapped));
@@ -897,7 +1139,7 @@ private:
         ::ResetEvent(req.event);
         req.overlapped.hEvent = req.event;
         ULONG moved = 0;
-        if (api_->readPipe(winusb_, endpoint_, req.buffer.data(),
+        if (api_->readPipe(streamHandle_, endpoint_, req.buffer.data(),
                               static_cast<ULONG>(req.buffer.size()), &moved,
                               &req.overlapped) != FALSE) {
             // Completed synchronously; the event is signalled either way, so
@@ -1018,6 +1260,16 @@ private:
     WINUSB_INTERFACE_HANDLE winusb_ = nullptr;
     std::string path_;
     std::string lastError_;
+
+    // The interface handle the bulk ring reads through: winusb_ unless
+    // recoverStreamPipe() found the endpoint on a later interface.
+    WINUSB_INTERFACE_HANDLE streamHandle_ = nullptr;
+    std::uint8_t routedEndpoint_ = 0;
+    bool rawIo_ = true;
+    std::string streamNote_;
+    unsigned rawIoFallbacks_ = 0;
+    std::vector<WINUSB_INTERFACE_HANDLE> assoc_;
+    bool assocProbed_ = false;
 
     std::mutex controlMutex_;
     std::unique_ptr<Request> control_;  // created on first use; see control()
@@ -1353,9 +1605,14 @@ const WinUsbApi& realWinUsbApi() {
             &::WinUsb_SetPowerPolicy,  &::WinUsb_Free,           &::CancelIoEx,
             &::CloseHandle,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr, nullptr,
         };
         a.writePipe = &::WinUsb_WritePipe;
         a.queryInterfaceSettings = &::WinUsb_QueryInterfaceSettings;
+        a.queryPipe = &::WinUsb_QueryPipe;
+        a.getAssociatedInterface = &::WinUsb_GetAssociatedInterface;
+        a.setCurrentAlternateSetting = &::WinUsb_SetCurrentAlternateSetting;
+        a.getCurrentAlternateSetting = &::WinUsb_GetCurrentAlternateSetting;
         // Windows 8.1 and later only: looked up, not imported (see the table
         // in winusb_device.hpp). winusb.dll is already loaded - the static
         // imports above put it there.

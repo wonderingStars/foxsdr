@@ -9,6 +9,7 @@
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
+#include "source/usb_stream_note.hpp"
 #include "source/rsp_rows.hpp"
 #include "source/sdrplay_source.hpp"
 
@@ -131,9 +132,7 @@ void MiriSdrSource::noteTransportFaultOn(ReaderLink& link, const char* what,
         // transfer on it fails too, and the last message is the least
         // informative one there is.
         if (!link.deviceDead) {
-            link.lastError = std::string("the radio stopped answering while ") + what +
-                             (detail.empty() ? std::string() : (": " + detail)) +
-                             "; unplug it and plug it back in";
+            link.lastError = transportFaultSentence(what, detail);
             link.deadWhat = what;
         }
         link.faulted = true;
@@ -418,6 +417,7 @@ bool MiriSdrSource::open(const std::string& args) {
     dev_ = std::move(dev);
     link_->dev = dev_.get();
     clearError();
+    logUsbLayout(*dev_, "mirisdr");
 
     const msi2500::DeviceModel* model = msi2500::modelFor(info.vid, info.pid);
     // ...and it decides the BAND PLAN too, which is the half that matters: an
@@ -536,6 +536,7 @@ bool MiriSdrSource::startStreamingLocked() {
         noteTransportFault("queueing the sample transfers", dev_->lastError());
         return false;
     }
+    reportStreamNote(*dev_, link_->owner, "mirisdr");
     if (!commandLocked(msi2500::VendorRequest::StartStreaming, "starting the stream")) {
         dev_->endBulkStream();
         return false;
