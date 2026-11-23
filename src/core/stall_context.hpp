@@ -264,6 +264,9 @@ constexpr unsigned stopWaitMs(const char* name) {
 //                                   kControlLockWait + 3 x kVendorCallWait                                          6000 / 6000  (inside the stop's sum, which is why it shares the row set)
 //   a radio's removal               the stop above, then the pipeline's destruction closes the device: kControlLockWait + kRestartGiveBack + kVendorCallWait
 //                                                                                                                  15000 / 12000
+//   a patch radio's stop and removal (engine_patch_radios.cpp patchReconcile and patchStopAll, review of fix/freezes part 3 F9): the source's stop (lock wait, vendor call, give-back), then the
+//                                   reader's join (PatchRadio::kStopWaitMs 3000, the pipeline's kSourceJoinWait's twin), then the destructor's close; ONE radio between two beats, so
+//                                   the same figure as a radio's removal                                           15000 / 12000
 // Every one of them, plus the reserve, must fit under kStopThresholdMs, and the compiler checks it for whatever the rows say.
 constexpr unsigned kRateChangeWorstMs() { return stopWaitMs("kControlLockWait") + 3u * stopWaitMs("kVendorCallWait"); }
 constexpr unsigned kRemovalWorstMs() { return stopBoundedWaitsMs() + stopWaitMs("kControlLockWait") + stopWaitMs("kRestartGiveBack") + stopWaitMs("kVendorCallWait"); }

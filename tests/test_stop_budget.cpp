@@ -16,6 +16,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <chrono>
 #include <cstdio>
+#include <functional>
 #include <cstdlib>
 #include <filesystem>
 #include <algorithm>
@@ -57,6 +58,76 @@ long declared(const std::string& text, const std::string& name) {
         if (line.compare(c, 21, "std::chrono::seconds ") == 0) { return n * 1000; }
     }
     return -1;
+}
+
+// THE SCOPE MUST BE OPEN AT THE CALL (review of fix/freezes part 3, F9). The first version asked whether the text of the function SO FAR contained the scope's declaration, so a scope that sat in a
+// lambda or a block that had already ended (Engine::applyCommand, applyPluginPreset) covered every stop written after it. This reads braces: a scope opens at its declaration and ends with the
+// block that holds it. `lineOk(code)` is called for each line that holds a stop-like call and says whether it is excused by name. Returns the offending lines (empty: all covered).
+std::vector<std::string> uncoveredStops(const std::string& text, const std::set<std::string>& callTokens, const std::function<bool(const std::string& fnLine, const std::string& code)>& excused) {
+    std::vector<std::string> bad;
+    int depth = 0;
+    std::vector<int> scopeDepths;   // the block depth each open Stop scope was declared at
+    std::string fnLine;
+    bool inBlockComment = false;
+    std::size_t s0 = 0;
+    while (s0 <= text.size()) {
+        const std::size_t e = text.find('\n', s0);
+        const std::string line = text.substr(s0, e == std::string::npos ? std::string::npos : e - s0);
+        s0 = (e == std::string::npos) ? text.size() + 1 : e + 1;
+        if (!line.empty() && line[0] != ' ' && line[0] != '\t' && line[0] != '}' && line[0] != '/' && line[0] != '#' && line.find('(') != std::string::npos && line.find("::") != std::string::npos) { fnLine = line; }
+        // the code of the line: no comments, no string or character literals
+        std::string code;
+        for (std::size_t i = 0; i < line.size(); ++i) {
+            if (inBlockComment) {
+                if (line.compare(i, 2, "*/") == 0) { inBlockComment = false; ++i; }
+                continue;
+            }
+            if (line.compare(i, 2, "//") == 0) { break; }
+            if (line.compare(i, 2, "/*") == 0) { inBlockComment = true; ++i; continue; }
+            if (line[i] == '"' || line[i] == '\'') {
+                const char q = line[i];
+                for (++i; i < line.size() && line[i] != q; ++i) { if (line[i] == '\\') { ++i; } }
+                continue;
+            }
+            code.push_back(line[i]);
+        }
+        if (code.find("PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop)") != std::string::npos) { scopeDepths.push_back(depth); }
+        for (const std::string& tok : callTokens) {
+            if (code.find(tok) == std::string::npos) { continue; }
+            // a call is covered while a scope is open; the scope's own declaration line is before the call
+            if (scopeDepths.empty() && !excused(fnLine, line)) { bad.push_back(fnLine + " :: " + line); }
+        }
+        for (const char c : code) {
+            if (c == '{') { ++depth; }
+            if (c == '}') {
+                --depth;
+                while (!scopeDepths.empty() && scopeDepths.back() > depth) { scopeDepths.pop_back(); }
+            }
+        }
+    }
+    return bad;
+}
+
+// The checker held to what it exists for: a scope that has ended covers nothing after it.
+void checkTheWiringCheckerItself() {
+    const std::set<std::string> tokens = {"pipeline_.stop()"};
+    const auto none = [](const std::string&, const std::string&) { return false; };
+    // a stop inside its scope: covered
+    CHECK(uncoveredStops("void Engine::a() {\n    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);\n    rx().pipeline_.stop();\n}\n", tokens, none).empty());
+    // no scope at all: caught
+    CHECK(uncoveredStops("void Engine::a() {\n    rx().pipeline_.stop();\n}\n", tokens, none).size() == 1u);
+    // a call BEFORE the scope: caught
+    CHECK(uncoveredStops("void Engine::a() {\n    rx().pipeline_.stop();\n    const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);\n}\n", tokens, none).size() == 1u);
+    // THE FAULT THE REVIEW FOUND: the scope sits in a lambda that has ended, and a later stop is not covered by it
+    CHECK(uncoveredStops("void Engine::a() {\n    auto f = [&] {\n        const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);\n        x();\n    };\n    rx().pipeline_.stop();\n}\n", tokens, none).size() == 1u);
+    // ...and the same in a plain block
+    CHECK(uncoveredStops("void Engine::a() {\n    {\n        const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);\n        x();\n    }\n    rx().pipeline_.stop();\n}\n", tokens, none).size() == 1u);
+    // a stop inside the lambda's own scope: covered; a scope that is still open in the enclosing block covers a call inside a nested block
+    CHECK(uncoveredStops("void Engine::a() {\n    {\n        const cascade::core::stall::PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop);\n        if (y) {\n            rx().pipeline_.stop();\n        }\n    }\n}\n", tokens, none).empty());
+    // a call in a comment or a string is not a call
+    CHECK(uncoveredStops("void Engine::a() {\n    // rx().pipeline_.stop();\n    log(\"pipeline_.stop()\");\n}\n", tokens, none).empty());
+    // an excused function is excused
+    CHECK(uncoveredStops("void Engine::a() {\n    rx().pipeline_.stop();\n}\n", tokens, [](const std::string& fn, const std::string&) { return fn.find("Engine::a(") != std::string::npos; }).empty());
 }
 
 }  // namespace
@@ -134,53 +205,52 @@ int main() {
             const std::size_t beat = body.rfind("controlWatchdog_.heartbeat();");
             CHECK(beat != std::string::npos && body.find('}', beat) == std::string::npos && body.find("receiverStops_", 0) < beat);
         }
-        // Every call that stops the pipeline or changes the rate of a live source, in every engine file: inside a function above, or named here with the reason it is not the pass's stop.
-        struct Exempt { const char* file; const char* sig; const char* why; };
+        // Every call that stops the pipeline or changes the rate of a live source, in every engine file: with a Stop phase scope OPEN at the call (see uncoveredStops), or named here with the reason
+        // it is not the pass's stop. An exemption is a function (or, with `lineHas`, one call inside it), never a whole file.
+        struct Exempt { const char* file; const char* sig; const char* lineHas; const char* why; };
         const Exempt notThePass[] = {
-            {"src/engine/engine.cpp", "std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(", "opens a device that is not installed yet (no stream to stop)"},
-            {"src/engine/engine.cpp", "void Engine::launchDeviceOpen(", "the device-open worker applies the requested rate to a device that is not installed yet (off the pass)"},
-            {"src/engine/engine.cpp", "void Engine::shutdownStop(", "the teardown: the shutdown budget (HangWatchdog::kShutdownBoundedWaitsMs) judges it, and the control watchdog is stopped"},
-            {"src/engine/engine_patch_radios.cpp", "", "the patch radio's open worker (applySourceRate with \"open\"): a device not yet installed, off the pass"},
+            {"engine.cpp", "std::unique_ptr<cascade::source::DeviceSource> Engine::openDeviceSync(", "", "opens a device that is not installed yet (no stream to stop)"},
+            {"engine.cpp", "void Engine::launchDeviceOpen(", "", "the device-open worker applies the requested rate to a device that is not installed yet (off the pass)"},
+            {"engine.cpp", "void Engine::shutdownStop(", "", "the teardown: the shutdown budget (HangWatchdog::kShutdownBoundedWaitsMs) judges it, and the control watchdog is stopped"},
+            {"engine_patch_radios.cpp", "void Engine::patchReconcile(", "\"open\")", "the patch radio's open worker (applySourceRate with \"open\"): a device not yet installed, off the pass"},
         };
         const std::set<std::string> callTokens = {"pipeline_.stop()", "pipeline_.setSource(", "applySourceRate("};
         for (const auto& entry : fs::directory_iterator(root / "src/engine")) {
             const std::string name = entry.path().filename().string();
             if (entry.path().extension() != ".cpp") { continue; }
-            const std::string text = strip(readFile(entry.path()));
-            std::size_t pos = 0;
-            std::vector<std::string> lines;
-            {
-                std::size_t s = 0;
-                while (s <= text.size()) {
-                    const std::size_t e = text.find('\n', s);
-                    lines.push_back(text.substr(s, e == std::string::npos ? std::string::npos : e - s));
-                    if (e == std::string::npos) { break; }
-                    s = e + 1;
+            const std::vector<std::string> bad = uncoveredStops(strip(readFile(entry.path())), callTokens, [&](const std::string& fnLine, const std::string& line) {
+                for (const Exempt& x : notThePass) {
+                    if (name == x.file && fnLine.find(x.sig) != std::string::npos && (x.lineHas[0] == '\0' || line.find(x.lineHas) != std::string::npos)) { return true; }
                 }
-            }
-            (void)pos;
-            std::string fnLine;   // the last line at column 0 that looks like a function head
-            std::string fnBody;   // the text of the current function so far
-            for (const std::string& line : lines) {
-                if (!line.empty() && line[0] != ' ' && line[0] != '\t' && line[0] != '}' && line[0] != '/' && line[0] != '#' && line.find('(') != std::string::npos && line.find("::") != std::string::npos) {
-                    fnLine = line;
-                    fnBody.clear();
-                }
-                fnBody += line + "\n";
-                const std::size_t c = line.find("//");
-                const std::string code = c == std::string::npos ? line : line.substr(0, c);
-                for (const std::string& tok : callTokens) {
-                    if (code.find(tok) == std::string::npos) { continue; }
-                    bool ok = fnBody.find("PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop)") != std::string::npos;
-                    if (!ok) {
-                        for (const Exempt& x : notThePass) {
-                            if (name == fs::path(x.file).filename().string() && (x.sig[0] == '\0' || fnLine.find(x.sig) != std::string::npos)) { ok = true; }
-                        }
-                    }
-                    if (!ok) { std::printf("FAIL %s: `%s` outside a Stop phase scope, in: %s\n", name.c_str(), tok.c_str(), fnLine.c_str()); }
-                    CHECK(ok);
-                }
-            }
+                return false;
+            });
+            for (const std::string& b1 : bad) { std::printf("FAIL %s: a stop-like call with no Stop phase scope open: %s\n", name.c_str(), b1.c_str()); }
+            CHECK(bad.empty());
+        }
+        // THE PATCH RADIOS' STOPS (engine_patch_radios.cpp, patchReconcile and patchStopAll) are on the pass and make the same bounded waits (PatchRadio::stop(): the source's stop, then the reader's join of
+        // PatchRadio::kStopWaitMs = 3000): inside the scope, one radio per beat.
+        for (const char* sig : {"void Engine::patchReconcile(", "void Engine::patchStopAll("}) {
+            const std::string body = bodyOf(strip(readFile(root / "src/engine/engine_patch_radios.cpp")), sig);
+            std::printf("  wiring %-32s scope %d beat %d\n", sig, body.find("PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop)") != std::string::npos ? 1 : 0,
+                        body.find("controlWatchdog_.heartbeat()") != std::string::npos ? 1 : 0);
+            CHECK(!body.empty());
+            CHECK(body.find("PassPhaseScope inStop(cascade::core::stall::PassPhase::Stop)") != std::string::npos);
+            CHECK(body.find("controlWatchdog_.heartbeat()") != std::string::npos);
+        }
+        checkTheWiringCheckerItself();
+        // THE PATCH RADIO'S WORST BETWEEN TWO BEATS, from the constants READ OUT OF THE SOURCES in A: the source's stop (lock wait + vendor call + the restart give-back) + the reader's join
+        // (PatchRadio::kStopWaitMs, read from patch_radio.hpp) + the close in the destructor (lock wait + give-back + vendor call), as the radio's removal does; it must fit under the Stop threshold.
+        {
+            const long lock = declared(readFile(root / "src/source/soapy_source.cpp"), "kControlLockWait");
+            const long vendor = declared(readFile(root / "src/source/soapy_source.cpp"), "kVendorCallWait");
+            const long giveBack = declared(readFile(root / "src/source/soapy_source.hpp"), "kRestartGiveBack");
+            const std::string pr = readFile(root / "src/core/patch_radio.hpp");
+            const std::size_t k = pr.find("kStopWaitMs = ");
+            const long join = k == std::string::npos ? -1 : std::atol(pr.c_str() + k + 14);
+            const long oneRadio = lock + vendor + giveBack + join + lock + giveBack + vendor;
+            std::printf("  a patch radio's removal: stop %ld + join %ld + close %ld = %ld ms (threshold %u ms)\n", lock + vendor + giveBack, join, lock + giveBack + vendor, oneRadio, stall::kStopThresholdMs);
+            CHECK(lock > 0 && vendor > 0 && giveBack > 0 && join > 0);
+            CHECK(static_cast<unsigned>(oneRadio) + stall::kStopReserveMs < stall::kStopThresholdMs);
         }
     }
     // C. the watchdog
