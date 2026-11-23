@@ -422,8 +422,6 @@ PluginUse Engine::pluginUseOfKeyed(const cascade::core::LoadedPlugin& p, const s
 // --- once a pass ----------------------------------------------------------------------------------------------------------------
 
 void Engine::updatePluginLifecycle() {
-    // STAGE TWO: the builds the start worker has finished are published first (a no-op for a runner that builds synchronously).
-    forEachRunner([](cascade::core::PluginRunner& r) { r.pumpStarts(); });
     // First, before any wake is decided: a plugin the guard switched off since the last pass is put down (and its key let go) now.
     applyPluginQuarantines();
     if (pluginDormantAfterMs_ < 0) { pluginDormantAfterMs_ = dormantAfterMsFromEnvironment(); }

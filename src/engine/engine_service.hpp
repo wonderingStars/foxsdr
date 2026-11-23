@@ -118,9 +118,6 @@ struct ServiceOptions {
     // end of start() and joined at the HEAD of stop(), instead of by the caller's wait loop. True for a host with no loop of its own to call keep()
     // from (the window: its frame loop has gone to the engine's side). False: the caller calls keep() as foxsdr-engine's wait loop does.
     bool keeperThread = false;
-    // Every plugin create() and destroy() runs on the start worker and the pass never waits for one (Engine::setAsyncPluginStart; freeze diagnosis stage two). The window's
-    // real sessions and the headless engine say true; the default keeps the synchronous start every test reads state back from.
-    bool asyncPluginStart = false;
     // TEST SEAM, bounded runs only (the window's CASCADE_DIAG_SHUTDOWN_STALL_MS): wedge the stop for this many ms between the final-state save
     // and the receiver's stop - the stretch where the bounded driver waits are spent - and say so.
     int shutdownStallMs = 0;

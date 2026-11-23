@@ -83,7 +83,6 @@ constexpr RecoveredInfo kRecovered[kRecoveredCount] = {
     {"companionstall", false},
     {"companionbreak", false},
     {"companiongaveup", false},
-    {"pluginslow", true},         // a create() that outlasts the allowance: once a session is the fact (the report names the first plugin)
 };
 
 // The frame timer's own names for the scopes, but for `user-wait`.
@@ -1309,12 +1308,6 @@ void RecoveryWatch::poll(const RecoveryReadings& now) {
     if (const std::uint32_t n = moved(now.pluginOveruses, last_.pluginOveruses)) {
         g->note(tokenRecovered(Recovered::PluginOveruse), n);
         issue::fileIssueReportOffThread(Recovered::PluginOveruse);
-    }
-    if (const std::uint32_t n = moved(now.pluginSlows, last_.pluginSlows)) {
-        // (The report itself - with the plugin's public id, version and the time word - is filed by PluginRunner's slow-start sink the moment the create() passes the
-        // allowance, on the control thread's pump; the once-a-session bit makes this one a no-op. It is here for a session whose sink was not installed.)
-        g->note(tokenRecovered(Recovered::PluginSlow), n);
-        issue::fileIssueReportOffThread(Recovered::PluginSlow);
     }
     last_ = now;
 }

@@ -10082,7 +10082,6 @@ cascade::core::health::RecoveryReadings Engine::recoveryReadings() {
         now.pluginQuarantines = pf.quarantines;
         now.pluginWedges = pf.wedges;
         now.pluginOveruses = pf.overruns;
-        now.pluginSlows = cascade::core::PluginRunner::slowStartCount();
     }
     return now;
 }

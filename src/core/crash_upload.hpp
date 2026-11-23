@@ -135,8 +135,6 @@ struct ParsedReport {
     // is kept on the machine, because it is not a fault in this application;
     // anything else is refused as unreadable.
     std::string kind;
-    // `slow-start:` of an issue report about a plugin's slow create() (stage two): "over-30s" or "over-2min", else empty.
-    std::string slowStart;
     std::string signature;
     // The report's own `reason:` and `code:` lines, verbatim. These are what
     // separate an ABSORBED vendor fault (the guard filed the report and the

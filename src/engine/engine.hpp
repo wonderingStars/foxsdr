@@ -3702,11 +3702,6 @@ public:
     // The first attach (attachPluginUi or setPluginUiApplier) consumes the expectation: a window that goes later leaves a window-less engine, as before.
     // False (the default): the headless engine.
     void expectFrontEnd(bool on) { frontEndExpected_.store(on, std::memory_order_release); }
-    // STAGE TWO (freeze diagnosis host design 7 to 10): every plugin create() and destroy() of every radio's runner runs on the process's one start worker, and the pass
-    // publishes what it has built (updatePluginLifecycle -> PluginRunner::pumpStarts). A slow create() then holds up neither the pass nor any command. Off by default (the
-    // tests, and every caller that reads a plugin's state right after starting it, rely on the synchronous start); ServiceOptions::asyncPluginStart turns it on for the
-    // window's real sessions and the headless engine. Call before any plugin is started (the service's constructor does).
-    void setAsyncPluginStart(bool on);
     cascade::core::PluginDirectiveLink& pluginDirectives() { return pluginLink_; }
     // The engine-owned API core the window builds its PluginUi over.
     const std::shared_ptr<cascade::core::PluginApiCore>& pluginApiShared() const { return pluginApi_; }
@@ -3986,7 +3981,6 @@ public:
     }
 
 private:
-    bool asyncPluginStart_ = false;   // setAsyncPluginStart()
     bool tornDown_ = false;  // teardown() ran (so ~Engine does not run it again)
     // The origin of clockS(). Not const: tests/test_bookmark_save_async.cpp moves it (EngineTestAccess) to put the pass's clock where its debounce
     // cases need it, as the window's version of that test moved ImGui's.

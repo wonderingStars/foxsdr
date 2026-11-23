@@ -20,8 +20,6 @@
 #include <cstdio>
 
 #include "core/diag_log.hpp"
-#include "core/health_events.hpp"
-#include "core/issue_report.hpp"
 #include "core/plugin_run.hpp"
 #include "engine/engine.hpp"
 #include "engine/transmit_radio.hpp"
@@ -76,30 +74,11 @@ void Engine::rebuildAllRunners() {
     for (std::size_t slot = 0; slot < kMaxReceivers; ++slot) { rebuildRunnerOf(slot); }
 }
 
-namespace {
-// The slow-start sink (PluginRunner::setSlowStartSink): the issue report of a plugin whose create() outlasted the allowance - the plugin's PUBLIC id and version and the
-// time as one word (core/issue_report.hpp Blame). Filed from the control thread's pump; the file itself is written by the issue writer's thread.
-void slowStartSink(const cc::PluginRunner::SlowStart& s) {
-    cascade::core::issue::Blame blame;
-    blame.publicId = s.publicId;
-    blame.version = s.version;
-    blame.startTime = s.overTwoMinutes ? "over-2min" : "over-30s";
-    (void)cascade::core::issue::fileIssueReportOffThread(cascade::core::health::Recovered::PluginSlow, &blame);
-}
-}  // namespace
-
-void Engine::setAsyncPluginStart(bool on) {
-    asyncPluginStart_ = on;
-    forEachRunner([on](cc::PluginRunner& r) { r.setAsyncStart(on); });
-    cc::PluginRunner::setSlowStartSink(on ? &slowStartSink : nullptr);
-}
-
 void Engine::createRadioRunner(std::size_t slot) {
     if (slot == 0u || slot >= kMaxReceivers || radioRunners_[slot]) { return; }
     auto r = std::make_unique<cc::PluginRunner>();
     r->setRadio(static_cast<std::uint32_t>(slot) + 1u);
     r->setStreamClock(pluginApi_->streamClock(static_cast<std::uint32_t>(slot) + 1u));
-    r->setAsyncStart(asyncPluginStart_);
     radioRunners_[slot] = std::move(r);
     pushPluginHoldSets();   // the stop and dormant sets, so a plugin the user stopped is not started here
     rebuildRunnerOf(slot);

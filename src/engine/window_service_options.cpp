@@ -60,7 +60,6 @@ ServiceOptions windowServiceOptions(const WindowServiceRun& run) {
         o.receive = true;
         o.heartbeat = true;
         o.stepped = false;
-        o.asyncPluginStart = true;   // a slow plugin create() must never make a real session uncontrollable (freeze diagnosis stage two)
         return o;
     }
 

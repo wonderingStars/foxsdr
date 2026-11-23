@@ -307,8 +307,6 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         // ENGINE FIXES 7: a plugin's companion program failed (plugin_abi.h report_fault); the one site is the switch-guarded mapping of a kind to its word.
         {"CompanionCrash", "src/core/companion_fault.cpp", 1}, {"CompanionStall", "src/core/companion_fault.cpp", 1},
         {"CompanionBreak", "src/core/companion_fault.cpp", 1}, {"CompanionGaveUp", "src/core/companion_fault.cpp", 1},
-        // FREEZE DIAGNOSIS STAGE TWO: a plugin's create() outlasted the allowance on the start worker; the engine's slow-start sink files the report naming the plugin (the poll counts it).
-        {"PluginSlow", "src/engine/engine_plugin_radio.cpp", 1},
         {"SentinelGone", "src/core/sentinel_host_win.cpp", 2}, {"SentinelGone", "src/core/sentinel_host_posix.cpp", 2},
         {"DisplayWatch", "src/gui/win_frame.cpp", 1},
         // THE EARLY-WARNING PAIR (field-early-warning): the window counts the software renderer; the SDRplay source raises the stream-failure latch.
@@ -335,7 +333,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
                                 "now.dspThreadExceptions = static_cast<unsigned long long>(rx().pipeline_.dspThreadExceptions())",
                                 "now.threadWedges = cascade::core::beats::Registry::wedgesFound()",
                                 "now.pluginFaults = pf.faults", "now.pluginQuarantines = pf.quarantines", "now.pluginWedges = pf.wedges",
-                                "now.pluginOveruses = pf.overruns", "now.pluginSlows = cascade::core::PluginRunner::slowStartCount()",
+                                "now.pluginOveruses = pf.overruns",
                                 "recoveryWatch_.poll(recoveryReadings())", "recoveryWatch_.baseline(recoveryReadings())", "cascade::core::health::drainRecovered()"}) {
         if (window.find(reading) == std::string::npos) { std::printf("FAIL the engine's poll lacks %s\n", reading); }
         CHECK(window.find(reading) != std::string::npos);

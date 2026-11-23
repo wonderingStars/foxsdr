@@ -22,11 +22,6 @@
     "a native driver's own producer or helper thread: its consumer, the pipeline's source thread, is registered and reads it with a timeout, so a producer that stops starves a read() that returns 0 and the source thread keeps beating - a silent radio is the no-data lamp's finding, not this watchdog's - NOT COVERED (a stated limit)"
 
 const Row kRows[] = {
-    {"src/core/plugin_start_worker.cpp", 1, 0, 0, 0, "",
-     "the plugin start worker (freeze diagnosis stage two): runs every plugin create() and destroy(), one at a time, and PARKS INSIDE the plugin when one never returns - a heartbeat would be "
-     "wrong by construction, so the work is watched by what it is: each create() is a guarded call with its own budget (CallScope: a 30 s overrun report, a wedge at four budgets), "
-     "and PluginRunner::pumpStarts() on the control thread reads how long the current job has run, says so on the plugin's row, files the `pluginslow` report, abandons the thread at "
-     "120 s and starts a replacement"},
     {"src/core/airband_gate.hpp", 1, 0, 1, 1, "kThreadDiskJob",
      ""},
     {"src/core/audio_open.hpp", 1, 1, 0, 0, "",
