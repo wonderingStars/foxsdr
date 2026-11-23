@@ -6,7 +6,7 @@
 //   A. A PERSISTENT RUN, ASKED TO STOP (SIGTERM on POSIX; the console's Ctrl+Break on Windows - the handler answers
 //      Ctrl+C, Ctrl+Break and a closing console alike): the settings file's marker is FALSE while it runs; after the
 //      request the run says what it was asked and stops in the window's order, exits 0 within seconds (not at the
-//      stop's 64 s bound), and leaves the marker TRUE - one launch, NO crash counted. The next start counts none either.
+//      stop's 61 s bound), and leaves the marker TRUE - one launch, NO crash counted. The next start counts none either.
 //   B. THE CONTRAST, in the same file so the pair reads together: a run that is KILLED leaves the marker FALSE, and
 //      the next start counts the crash (tests/test_engine_main_clean_exit_marker.cpp holds the kill; this is the
 //      pair of A).

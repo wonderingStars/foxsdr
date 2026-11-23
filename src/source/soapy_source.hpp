@@ -689,7 +689,7 @@ private:
     void noteNoSamplesLocked();
     void resetSilenceLocked();
     std::unique_lock<std::timed_mutex> lockForEscape();
-    static constexpr std::chrono::milliseconds kRestartGiveBack{3000};
+    static constexpr std::chrono::milliseconds kRestartGiveBack{1500};
 
     // Releases whatever half-built state exists, swallowing every Soapy
     // exception: teardown runs inside catch blocks and destructors, where a

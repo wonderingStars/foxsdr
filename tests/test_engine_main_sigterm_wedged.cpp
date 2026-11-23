@@ -1,6 +1,6 @@
 // A WEDGED STOP IS ENDED BY ITS BUDGET (engine extraction stage 7d, finding F5 of stage 7c): the headless engine's
 // stop - however it was asked for - runs under the window teardown's own budget (HangWatchdog::kShutdownThresholdMs,
-// 59 s) and, if it has not returned a short grace later, the process is ended with exit code 3, after one line on
+// 56 s) and, if it has not returned a short grace later, the process is ended with exit code 3, after one line on
 // stderr. The window's watchdog never ends anything; a service is the other way round (engine/shutdown_guard.hpp).
 //
 // THE WEDGE is the 7c seam: FOXSDR_ENGINE_UNLOAD_STALL_MS, honoured only with `--seconds`, sleeps right after the
@@ -20,7 +20,7 @@
 //   W5. A HANG REPORT, when a report may be written (FOXSDR_DIAG_DIR names a directory): the watchdog's capture, with the
 //       shutdown budget, is on disk when the process is ended.
 //   W6. THE PRODUCTION BUDGET, no seam: the stop wedged for 120 s is ended at HangWatchdog::kShutdownThresholdMs +
-//       the grace (64 s), measured from the stall's start (between 61 and 76 s) - the number the window's teardown
+//       the grace (61 s), measured from the stall's start (between 58 and 73 s) - the number the window's teardown
 //       is held to is the one in force.
 //
 // Break-it (docs/engine-stage4.md 6.18): the guard not armed (ShutdownGuard::arm() returning at once) -> W1, W2, W3, W5, W6

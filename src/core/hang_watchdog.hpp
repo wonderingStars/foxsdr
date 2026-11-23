@@ -320,10 +320,10 @@ public:
     // 13500 -> 23500, and kShutdownThresholdMs with it.
     //
     // AND THE SOAPY STALL RESTART'S GIVE-BACK IS THE FIFTH: SoapySource::stop() and closeDevice() (lockForEscape) wait kControlLockWait for the
-    // device lock and, when a stall restart is in flight and still holds it, kRestartGiveBack more (3000 ms: two of the restart's bounded
+    // device lock and, when a stall restart is in flight and still holds it, kRestartGiveBack more (1500 ms: one of the restart's bounded
     // steps) for the restart to hand it back instead of condemning a healthy radio. Spent once, on the teardown thread, and only while a restart
-    // really is in flight. 23500 -> 26500, and kShutdownThresholdMs with it.
-    static constexpr unsigned kShutdownBoundedWaitsMs = 26500;
+    // really is in flight. 23500 -> 25000, and kShutdownThresholdMs with it.
+    static constexpr unsigned kShutdownBoundedWaitsMs = 25000;
 
     // What the REST of the teardown gets: the DSP join, the crash-upload
     // cancel, queuing the teardown's two config saves (the WRITE is
@@ -346,9 +346,9 @@ public:
     // (33000 -> 53000 with the web server's stop above: twice (23500 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
     // really wedges is reported 20 s later than it was. The alternative - leaving the threshold and counting 10 s the budget cannot see -
     // is the drift this test exists to stop; a stop that does not wait for a held request is the better cure and is not done.)
-    // (53000 -> 59000 with the Soapy restart's give-back above: twice (26500 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
-    // really wedges is reported 6 s later than it was.)
-    static constexpr unsigned kShutdownThresholdMs = 59000;
+    // (53000 -> 56000 with the Soapy restart's give-back above: twice (25000 + kShutdownReserveMs 3000). THE COST, said plainly: a shutdown that
+    // really wedges is reported 3 s later than it was.)
+    static constexpr unsigned kShutdownThresholdMs = 56000;
 
     HangWatchdog() = default;
     ~HangWatchdog();
