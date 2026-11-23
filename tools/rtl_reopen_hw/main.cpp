@@ -20,6 +20,9 @@
 #include <thread>
 #include <vector>
 
+#include <cstdlib>
+
+#include "core/diag_log.hpp"
 #include "source/rtlsdr_source.hpp"
 
 namespace {
@@ -41,6 +44,8 @@ std::size_t readFor(cascade::source::RtlSdrSource& src, int ms) {
 
 int main() {
     using cascade::source::RtlSdrSource;
+    // The driver's own log lines (the stream account, the re-open's steps with the process clock) go to a folder named by RTL_REOPEN_LOGDIR, when set.
+    if (const char* logDir = std::getenv("RTL_REOPEN_LOGDIR")) { cascade::core::DiagLog::instance().configure(logDir, true); }
     const auto found = cascade::source::enumerateRtlSdr();
     if (found.empty()) {
         std::printf("no RTL-SDR bound to WinUSB\n");
