@@ -843,6 +843,40 @@ bool HangWatchdog::isDisplayPresentationStall(const char* const* frameModules, i
     return false;
 }
 
+namespace {
+// Windows' own modules, for the display-wake rule only: a frame in anything else is the program's, a plugin's, a driver's or unknown, and keeps the stall a freeze.
+bool isSystemWindowModule(const char* name) {
+    return equalsNoCase(name, "win32u.dll") || equalsNoCase(name, "user32.dll") || equalsNoCase(name, "ntdll.dll") || equalsNoCase(name, "kernel32.dll") ||
+           equalsNoCase(name, "kernelbase.dll") || equalsNoCase(name, "imm32.dll") || equalsNoCase(name, "msctf.dll") || equalsNoCase(name, "combase.dll") ||
+           equalsNoCase(name, "rpcrt4.dll");
+}
+}  // namespace
+
+bool HangWatchdog::isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs) {
+    if (frameModules == nullptr || count <= 0) { return false; }
+    if (edgeAgeMs < 0 || edgeAgeMs >= static_cast<long long>(kDisplayGraceMs) + static_cast<long long>(kDisplayWakeCapMs)) { return false; }
+    if (!equalsNoCase(frameModules[0], "win32u.dll") && !equalsNoCase(frameModules[0], "user32.dll")) { return false; }
+    const int scan = (count < kDisplayStallScanFrames) ? count : kDisplayStallScanFrames;
+    for (int i = 0; i < scan; ++i) {
+        if (!isSystemWindowModule(frameModules[i])) { return false; }   // an own, plugin, driver or unnamed frame: filed as a freeze
+    }
+    return true;
+}
+
+void HangWatchdog::noteDisplayEdge() { displayEdgeAtMs_.store(nowMs(), std::memory_order_relaxed); }
+
+long long HangWatchdog::displayEdgeAgeMs() const {
+    const long long forced = displayEdgeAgeForTest_.load(std::memory_order_relaxed);
+    if (forced != -2) { return forced; }
+    const double at = displayEdgeAtMs_.load(std::memory_order_relaxed);
+    if (at < 0.0) { return -1; }
+    return static_cast<long long>(nowMs() - at);
+}
+
+unsigned HangWatchdog::displayWakesRecorded() const { return displayWakes_.load(std::memory_order_acquire); }
+
+void HangWatchdog::setDisplayEdgeAgeForTest(long long ageMs) { displayEdgeAgeForTest_.store(ageMs < 0 ? -1 : ageMs, std::memory_order_relaxed); }
+
 bool HangWatchdog::guiThreadIsPumping() const {
     {
         std::lock_guard<std::mutex> lk(stalledModuleMutex_);
@@ -1510,6 +1544,8 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     // always did. Any other frame 0 - a kernel wait, a vendor driver, an address
     // no module claims - is walked here.
     bool displayStall = false;
+    bool displayWake = false;       // the display-wake rule (isDisplayWakeStall) made it a display stall
+    char wakeModule[64] = {};
     bool guiWalked = false;
 #if defined(_WIN32) && defined(_M_X64)
     if (!stacks.empty() && stacks[0].tid == gui && stacks[0].tid != self &&
@@ -1533,6 +1569,11 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
                                : nullptr;
             }
             displayStall = (wedge == nullptr) && HangWatchdog::isDisplayPresentationStall(names, scan);
+            if (!displayStall && wedge == nullptr && HangWatchdog::isDisplayWakeStall(names, scan, displayEdgeAgeMs())) {
+                displayStall = true;
+                displayWake = true;
+                std::snprintf(wakeModule, sizeof(wakeModule), "%s", names[0] != nullptr ? names[0] : "?");
+            }
         } else {
             // The walk yielded nothing: frame 0 is still the register the
             // signature falls back to, so put it back rather than leaving an
@@ -1566,6 +1607,13 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
     // the machine, and the number is the one thing about it that is reported
     // (HangWatchdog::recordFreezeKind). Nothing is suspended at this point.
     if (wedge == nullptr) { recordFreezeKind(displayStall); }
+    if (displayWake) {
+        // ONE LINE, AND COUNTED (displayWakesRecorded): written here, after every thread has been let go, for the reason the count above is.
+        displayWakes_.fetch_add(1, std::memory_order_release);
+        diagLogf("watchdog: display wake - the window thread sat in the system's window code (%s) with none of FoxSDR's frames above it, "
+                 "%lld ms after the display came back; recorded as a display stall, not filed as a freeze",
+                 wakeModule, displayEdgeAgeMs());
+    }
 
     // THE IDENTIFYING HALF GOES TO DISK FIRST, and is flushed, exactly as
     // crash_handler.cpp does on the fault path. Phase 1 above can no longer

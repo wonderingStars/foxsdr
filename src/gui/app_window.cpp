@@ -1687,6 +1687,8 @@ int AppWindow::run(int frames) {
                 "display: off - Windows says this session's display is off; drawing paused, the "
                 "radio and decoders keep running");
         } else if (displayEdge == cascade::gui::DisplayPause::Edge::Resumed) {
+            // THE AGE OF THIS EDGE IS THE WATCHDOG'S (freeze diagnosis P5): a window thread that then sits in the system's own window code is a display wake, not a freeze.
+            watchdog_.noteDisplayEdge();
             cascade::core::diagLogf(
                 "display: %s - drawing resumed after %.0f s off; %ld frames not drawn",
                 cascade::gui::displayPowerName(cascade::gui::frame::displayPower()),

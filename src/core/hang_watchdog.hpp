@@ -675,6 +675,32 @@ public:
     // drivers. `frameModules` entries may be null; they are skipped.
     static bool isDisplayPresentationStall(const char* const* frameModules, int count);
 
+    // A DISPLAY WAKE (freeze diagnosis P5, report 1338E56F): the display came back after being off and the window thread then sat in the system's own window
+    // and message code (win32u.dll, user32.dll) for 35 to 65 s with nothing of FoxSDR's above the message pump. The program's own pause had done its job while
+    // the display was off, and the present grace (kDisplayGraceMs) covers the first seconds after it comes back; what this covers is the system taking longer
+    // than that to give the thread back, which is the system's stall and not this program's.
+    //
+    // THE WINDOW OF TIME: kDisplayGraceMs plus kDisplayWakeCapMs after the display-on edge. The diagnosis gives no number for the cap (it only says "grace plus
+    // cap"), so the cap is 120 s, a judgement and not a measurement; the report that motivated it stalled for 35 to 65 s. Outside it the stall is filed.
+    static constexpr unsigned kDisplayWakeCapMs = 120000;
+
+    // THE PURE DECISION, over module names (top frame first) and the age of the last display-on edge in milliseconds (negative: there has been none).
+    // True ONLY when ALL of these hold: an edge is known and is younger than kDisplayGraceMs + kDisplayWakeCapMs; frame 0 is win32u.dll or user32.dll; and EVERY
+    // frame in the first kDisplayStallScanFrames is one of Windows' own modules (win32u, user32, ntdll, kernel32, kernelbase, imm32, msctf, combase, rpcrt4). A
+    // frame of the program's own image, of a plugin, of a driver, of an OpenGL stack (that is the older display-stall rule's), or a frame the module table
+    // cannot name, means the stall is NOT excused here and is filed as before. The walk ends at the frames it could take, so a short list of system frames
+    // counts; an empty list does not.
+    static bool isDisplayWakeStall(const char* const* frameModules, int count, long long edgeAgeMs);
+
+    // The window's loop calls this when the display comes back on (the off-to-on edge, the code that already notes it); the age is read at the capture.
+    void noteDisplayEdge();
+    // Milliseconds since the last noteDisplayEdge(), or -1 when there has been none.
+    long long displayEdgeAgeMs() const;
+    // Stalls recorded as a display wake since start(), for this watchdog only.
+    unsigned displayWakesRecorded() const;
+    // TESTS ONLY: pretend the last edge was `ageMs` ago (negative: never).
+    void setDisplayEdgeAgeForTest(long long ageMs);
+
     // Pauses taken by this PROCESS, counted from process start rather than
     // from start(): the first blocking work in a session - the plugin scan -
     // happens while the window is still being built, before the frame loop and
@@ -757,6 +783,9 @@ private:
     std::atomic<bool> reported_{false};
     std::atomic<unsigned> reports_{0};
     std::atomic<unsigned> displayStalls_{0};
+    std::atomic<unsigned> displayWakes_{0};
+    std::atomic<double> displayEdgeAtMs_{-1.0};        // steady-clock ms of the last display-on edge, or -1
+    std::atomic<long long> displayEdgeAgeForTest_{-2}; // -2: not set; otherwise the age the test wants
     std::atomic<bool> forceDisplayStall_{false};  // setForceDisplayStallForTest
     // Guards the sink's pointer only; the sink itself is called outside it.
     mutable std::mutex sinkMutex_;
