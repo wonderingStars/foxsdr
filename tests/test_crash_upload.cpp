@@ -754,6 +754,59 @@ static void issueSweepBlock() {
     }
 }
 
+// A FREEZE THIS PROCESS FILED AND HAS NOT SEEN THE END OF IS NOT SENT YET (freeze diagnosis section 7): its header says `outcome: pending` until the watchdog appends
+// the outcome. The same file left by an EARLIER process is sent, as `not-recovered`.
+static void pendingFreezeSweepBlock() {
+    const fs::path dir = scratchDir("pending");
+    const std::string body =
+        "kind: hang\nstalled-ms: 7213\nthreshold-ms: 5000\nsignature: FEDCBA9876543210\nthreads: 1\nframe-scope: other\nwatchdog: control\nthread-role: control\n"
+        "pass-phase: plugins\noutcome: pending\n"
+        "--- context ---\nversion: 0.99.112\ncommit: abc123def456\nos: Windows 10.0.22631\narch: x64\n"
+        "--- modules ---\n  cascade.exe base=0x00007FF700000000 size=0x2C8000 pdb=cascade.pdb build=651FD5EB776649E7B91461B1EB1EB8C525\n"
+        "--- thread 100 (gui, stalled) ---\n  cascade.exe+0x9999\n--- log (last 1 of 1 lines) ---\nwatchdog armed\n";
+    const unsigned long myPid = static_cast<unsigned long>(::GetCurrentProcessId());
+    writeFile(dir / ("hang-" + std::to_string(myPid) + "-1.txt"), body);                    // this process's, still pending
+    std::string other = body;
+    other.replace(other.find("FEDCBA9876543210"), 16, "0123456789ABCDEF");                  // (another signature: not a duplicate of the first)
+    writeFile(dir / ("hang-" + std::to_string(myPid + 1000u) + "-1.txt"), other);           // an earlier process's, never recovered
+    StubServer srv;
+    CHECK(srv.start(StubServer::Mode::Accept204));
+    SweepParams p;
+    p.crashDir = dir.string();
+    p.url = srv.url();
+    p.enabled = true;
+    p.installId = "4f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5";
+    p.nowEpoch = 1'700'000'000ull;
+    auto cancel = std::make_shared<UploadCancel>();
+    const SweepOutcome out = sweepCrashDir(p, cancel);
+    CHECK(out.sent == 1);                       // only the earlier process's
+    const std::vector<std::string> bodies = srv.bodies();
+    CHECK(bodies.size() == 1);
+    if (bodies.size() == 1) {
+        const nlohmann::json j = nlohmann::json::parse(bodies[0], nullptr, false);
+        CHECK(!j.is_discarded());
+        CHECK(j["context"].value("outcome", std::string()) == "not-recovered");
+        CHECK(j["context"].value("watchdog", std::string()) == "control");
+        CHECK(j.value("signature", std::string()) == "0123456789ABCDEF");
+    }
+    // The pending one is still there, unmarked, and is sent when its outcome has been appended.
+    CHECK(fs::exists(dir / ("hang-" + std::to_string(myPid) + "-1.txt")));
+    {
+        std::ofstream o(dir / ("hang-" + std::to_string(myPid) + "-1.txt"), std::ios::binary | std::ios::app);
+        o << "--- outcome ---\nrecovered-after-ms: 7300\n";
+    }
+    const SweepOutcome later = sweepCrashDir(p, cancel);
+    CHECK(later.sent == 1);
+    const std::vector<std::string> bodies2 = srv.bodies();
+    CHECK(bodies2.size() == 2);
+    if (bodies2.size() == 2) {
+        const nlohmann::json j = nlohmann::json::parse(bodies2[1], nullptr, false);
+        CHECK(!j.is_discarded() && j["context"].value("outcome", std::string()) == "recovered:7300");
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 // A SWEEP STARTED MID-SESSION SEES WHAT THE START-UP SWEEP COULD NOT (0.99.101): running()
 // says when a sweep has finished without a join, stop() then joins at once, and a second
 // start() on the same uploader sweeps the folder again - and finds the issue report filed
@@ -924,6 +977,101 @@ int main() {
         CHECK(hj.contains("context"));
         CHECK(hj["context"].value("uptimeSec", 99ull) == 0ull);
         CHECK(hj["context"].value("faultThreadOwn", std::string("x")).empty());
+    }
+
+    // --- WHO STALLED AND WHAT IT WAITED FOR (freeze diagnosis section 7) ----------
+    //
+    // The freeze header's new lines go up as closed words and numbers, each validated where the file is parsed and again where the request is built. A line that is
+    // anything else - a path, a host, free text, a number with a unit - is dropped, never forwarded: the file is read back off the disk of a machine we do not control.
+    {
+        auto withLines = [](const std::string& lines) {
+            std::string text = hangReportText();
+            const std::string anchor = "threads: 2\n";
+            const std::size_t at = text.find(anchor);
+            CHECK(at != std::string::npos);
+            if (at != std::string::npos) { text.insert(at + anchor.size(), lines); }
+            return text;
+        };
+        // A control thread's freeze that waited for the plugin runner's lock, held by the control thread inside dvb-receiver's create(), and later recovered.
+        const std::string good =
+            "frame-scope: other\n"
+            "watchdog: control\n"
+            "thread-role: control\n"
+            "pass-phase: plugins\n"
+            "outcome: pending\n"
+            "waiting-lock: plugin-runner\n"
+            "lock-holder-role: control\n"
+            "lock-site: start\n"
+            "lock-held-ms: 5012\n"
+            "blamed-plugin: dvb-receiver\n"
+            "blamed-plugin-entry: create\n"
+            "blamed-plugin-version: 0.4.0\n"
+            "blamed-plugin-how: lock-holder\n";
+        ParsedReport r;
+        CHECK(parseReportText(withLines(good) + "--- outcome ---\nrecovered-after-ms: 7300\n", r));
+        CHECK(r.watchdog == "control" && r.threadRole == "control" && r.passPhase == "plugins");
+        CHECK(r.stalledMs == "7213" && r.thresholdMs == "5000");
+        CHECK(r.lockWait == "plugin-runner|control|start|5012");
+        CHECK(r.blamedPlugin == "dvb-receiver" && r.blamedPluginVersion == "0.4.0" && r.blamedPluginHow == "lock-holder:create");
+        CHECK(r.recoveredAfterMs == 7300 && !r.outcomePending);   // (the header said pending; the section followed: not pending any more)
+        CHECK(r.reason == std::string(kFreezeControlReasonPrefix) + "plugins");
+        nlohmann::json j = parseOrEmpty(uploadJson(r, std::string()));
+        const nlohmann::json ctx = j.contains("context") ? j["context"] : nlohmann::json::object();
+        CHECK(ctx.value("watchdog", std::string()) == "control");
+        CHECK(ctx.value("threadRole", std::string()) == "control");
+        CHECK(ctx.value("passPhase", std::string()) == "plugins");
+        CHECK(ctx.value("stalledMs", 0ll) == 7213 && ctx.value("thresholdMs", 0ll) == 5000);
+        CHECK(ctx.value("outcome", std::string()) == "recovered:7300");
+        CHECK(ctx.value("lockWait", std::string()) == "plugin-runner|control|start|5012");
+        CHECK(ctx.value("blamedPlugin", std::string()) == "dvb-receiver");
+        CHECK(ctx.value("blamedPluginVersion", std::string()) == "0.4.0");
+        CHECK(ctx.value("blamedPluginHow", std::string()) == "lock-holder:create");
+        // a file with `pending` and no section: the process ended while stalled
+        ParsedReport pend;
+        CHECK(parseReportText(withLines(good), pend));
+        CHECK(pend.outcomePending && pend.recoveredAfterMs < 0);
+        CHECK(parseOrEmpty(uploadJson(pend, std::string()))["context"].value("outcome", std::string()) == "not-recovered");
+        // an older build's file has no outcome line at all: nothing is claimed
+        ParsedReport old;
+        CHECK(parseReportText(hangReportText(), old));
+        CHECK(!old.outcomePending);
+        CHECK(parseOrEmpty(uploadJson(old, std::string()))["context"].value("outcome", std::string("x")).empty());
+
+        // NOTHING THAT IS NOT A WORD OF THE LIST OR A FIGURE LEAVES: each hostile line is dropped (empty), the rest of the report is untouched.
+        const std::string hostile =
+            "watchdog: C:\\Users\\bob\\foxsdr\n"
+            "thread-role: my.host.example.com\n"
+            "pass-phrase: x\n"
+            "pass-phase: 14.2 MHz\n"
+            "waiting-lock: plugin-runner\n"
+            "lock-holder-role: control\n"
+            "lock-site: secret site name\n"
+            "lock-held-ms: 12 s\n"
+            "blamed-plugin: dvb-receiver\n"
+            "blamed-plugin-entry: C:\\x\n"
+            "blamed-plugin-version: 0.4.0\n"
+            "blamed-plugin-how: whatever the user typed\n";
+        ParsedReport h;
+        CHECK(parseReportText(withLines(hostile), h));
+        CHECK(h.watchdog.empty() && h.threadRole.empty() && h.passPhase.empty());
+        CHECK(h.lockWait.empty());   // one bad part (the site, the number) drops the whole string
+        CHECK(h.blamedPluginHow.empty());
+        const nlohmann::json hctx = parseOrEmpty(uploadJson(h, std::string()))["context"];
+        CHECK(hctx.value("watchdog", std::string("x")).empty() && hctx.value("threadRole", std::string("x")).empty() && hctx.value("passPhase", std::string("x")).empty());
+        CHECK(hctx.value("lockWait", std::string("x")).empty() && hctx.value("blamedPluginHow", std::string("x")).empty());
+        const std::string body = uploadJson(h, std::string());
+        CHECK(body.find("bob") == std::string::npos && body.find("example.com") == std::string::npos && body.find("MHz") == std::string::npos &&
+              body.find("secret") == std::string::npos && body.find("typed") == std::string::npos);
+        // and the same filter at the second place: a member set by hand (a later reader, a test) is re-validated as the request is built
+        ParsedReport forged = r;
+        forged.watchdog = "C:\\Users\\bob";
+        forged.passPhase = "14.2 MHz";
+        forged.lockWait = "plugin-runner|control|start|5012 ms";
+        forged.blamedPluginHow = "in-call:C:\\x";
+        const nlohmann::json fctx = parseOrEmpty(uploadJson(forged, std::string()))["context"];
+        CHECK(fctx.value("watchdog", std::string("x")).empty() && fctx.value("passPhase", std::string("x")).empty() && fctx.value("lockWait", std::string("x")).empty());
+        CHECK(fctx.value("blamedPluginHow", std::string("x")) == "in-call");   // the how is a word of its list; the entry that was not is dropped
+        CHECK(parseOrEmpty(uploadJson(forged, std::string())).dump().find("bob") == std::string::npos);
     }
 
     // --- A freeze's reason is the part of the frame it was in (0.99.64) ------
@@ -2309,6 +2457,7 @@ int main() {
 
     sentinelSweepBlock();
     issueSweepBlock();
+    pendingFreezeSweepBlock();
     uploaderRestartBlock();
 
     return testSummary("test_crash_upload");

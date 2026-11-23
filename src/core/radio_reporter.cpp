@@ -4,6 +4,7 @@
 #include "core/radio_reporter.hpp"
 
 #include "core/radio_message.hpp"
+#include "core/stall_context.hpp"
 #include "core/report_send_guard.hpp"
 
 #include <algorithm>
@@ -233,7 +234,7 @@ struct Reporter::Impl {
     fs::path dir;
     std::shared_ptr<UploadCancel> cancel = std::make_shared<UploadCancel>();
 
-    mutable std::mutex mu;       // all state and all file work
+    mutable stall::TaggedMutex mu{"radio-reporter"};   // all state and all file work; tagged: a freeze report names who holds it (core/stall_context.hpp)
     std::mutex batchMu;          // one batch at a time
     Identity id;
     std::string sessionId;
@@ -769,7 +770,7 @@ struct Reporter::Impl {
         std::lock_guard<std::mutex> batchLock(batchMu);
         if (!on) { return 0; }
         if (!o.liveSend) {
-            std::lock_guard<std::mutex> lk(mu);
+            std::lock_guard<stall::TaggedMutex> lk(mu);
             ++st.suppressedByBuild;
             return 0;
         }
@@ -777,7 +778,7 @@ struct Reporter::Impl {
         std::vector<Item> items;
         std::int64_t t = 0;
         {
-            std::lock_guard<std::mutex> lk(mu);
+            std::lock_guard<stall::TaggedMutex> lk(mu);
             t = now();
             if (t < backoffUntil) { return 0; }
             items = collect(t, o.maxBatch);
@@ -787,7 +788,7 @@ struct Reporter::Impl {
             if (cancel->cancelled()) { break; }
             std::int64_t sendNow = 0;
             {
-                std::lock_guard<std::mutex> lk(mu);
+                std::lock_guard<stall::TaggedMutex> lk(mu);
                 sendNow = now();
                 if (!it.env.is_object()) { advance(it); continue; }
                 if (sendNow - it.eventEpoch > o.maxAgeSec) { ++st.expired; advance(it); continue; }
@@ -799,7 +800,7 @@ struct Reporter::Impl {
                 env["age"] = std::clamp<std::int64_t>(sendNow - it.eventEpoch, 0, kMaxT);
                 const std::string text = fitSize(env);
                 const PostResult res = transport(o.endpoint, text);
-                std::lock_guard<std::mutex> lk(mu);
+                std::lock_guard<stall::TaggedMutex> lk(mu);
                 ++st.posts;
                 const std::int64_t after = now();
                 if (!res.attempted || res.status == 0 || res.status >= 500) { backoff(after); return accepted; }
@@ -1009,7 +1010,7 @@ Reporter::~Reporter() { shutdown(); }
 
 void Reporter::configure(const Options& options) {
     shutdown();
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     s.o = options;
     s.id = options.identity;
@@ -1075,10 +1076,10 @@ void Reporter::configure(const Options& options) {
     }
 }
 
-bool Reporter::active() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->on; }
+bool Reporter::active() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->on; }
 
 void Reporter::setIdentity(const Identity& idn) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     const bool hadId = !s.id.installId.empty();
     s.id = idn;
@@ -1107,24 +1108,24 @@ void Reporter::setIdentity(const Identity& idn) {
 }
 
 void Reporter::setLiveSend(bool on) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->o.liveSend = on && kRadioReportsLiveSend;
 }
 
 void Reporter::setNowSource(std::function<std::int64_t()> now) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->o.nowEpoch = std::move(now);
 }
 
 void Reporter::setDiagOn(bool on) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->id.diagOn = on;
 }
 
-Identity Reporter::identity() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->id; }
+Identity Reporter::identity() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->id; }
 
 void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {   // before the queue is opened (the start-up restore runs first): kept in memory and filed at configure
         if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now(), s.preOrder++}); }
@@ -1135,7 +1136,7 @@ void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string
 
 void Reporter::countDropped(const std::string& radioKey, long long n) {
     if (radioKey.empty() || n <= 0) { return; }
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     if (!p_->on || p_->id.installId.empty()) { return; }
     p_->dropped[radioKey] += n;
     ++p_->st.boundDropped;
@@ -1147,7 +1148,7 @@ void Reporter::event(const Event& ev) {
     if ((ev.kind == "radio_found" || ev.kind == "radio_open") && !ev.radio.key.empty()) {
         radiomessage::noteRadio(ev.radio.key, ev.radio.model, ev.radio.serial);
     }
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.configuredOnce) {
         if (s.preEvents.size() < 64) { s.preEvents.push_back(Impl::PreEvent{ev, s.now(), s.preOrder++}); }
@@ -1157,7 +1158,7 @@ void Reporter::event(const Event& ev) {
 }
 
 void Reporter::firstSession(const std::string& usageJson, const std::string& trigger) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
     if (!s.on || s.id.installId.empty() || s.id.launches != 1) { return; }
     if (trigger != "after-minute" && trigger != "on-failure") { return; }
@@ -1188,15 +1189,15 @@ void Reporter::firstSession(const std::string& usageJson, const std::string& tri
 }
 
 void Reporter::setOpenRadios(const std::vector<std::string>& keys) {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     p_->openKeys = keys;
     if (p_->openKeys.size() > 8) { p_->openKeys.resize(8); }
 }
 
-std::vector<std::string> Reporter::openRadios() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->openKeys; }
+std::vector<std::string> Reporter::openRadios() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->openKeys; }
 
 int Reporter::streamWindowSec(const std::string& radioKey) const {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     auto it = p_->streamToday.find(radioKey);
     return (it != p_->streamToday.end() && it->second >= p_->o.streamWidenAfter) ? 300 : 60;
 }
@@ -1210,7 +1211,7 @@ void Reporter::poll() {
     Impl& s = *p_;
     // TRY, NEVER WAIT: the batch thread holds `mu` while it collects (directory listings, file reads), and a pass that waited behind a slow disk is the
     // freeze this exists to end (A488498B). A poll that finds the lock taken is the next pass's.
-    std::unique_lock<std::mutex> lk(s.mu, std::try_to_lock);
+    std::unique_lock<stall::TaggedMutex> lk(s.mu, std::try_to_lock);
     if (!lk.owns_lock()) { return; }
     if (!s.on) { return; }
     s.reapWorker();
@@ -1228,7 +1229,7 @@ int Reporter::runBatchNow() { return p_->runBatch(); }
 
 void Reporter::flushAtQuit(int maxMs) {
     {
-        std::lock_guard<std::mutex> lk(p_->mu);
+        std::lock_guard<stall::TaggedMutex> lk(p_->mu);
         if (!p_->on) { return; }
         p_->releaseHeld();
         p_->saveState();
@@ -1259,7 +1260,7 @@ void Reporter::shutdown() {
 }
 
 Stats Reporter::stats() const {
-    std::lock_guard<std::mutex> lk(p_->mu);
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Stats st = p_->st;
     if (p_->on) {
         st.failFilesOnDisk = p_->listFailFiles().size();
@@ -1270,10 +1271,10 @@ Stats Reporter::stats() const {
     return st;
 }
 
-std::string Reporter::sessionId() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->sessionId; }
+std::string Reporter::sessionId() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->sessionId; }
 std::int64_t Reporter::nowEpoch() const { return p_->now(); }
-std::string Reporter::dir() const { std::lock_guard<std::mutex> lk(p_->mu); return utf8Of(p_->dir); }
-std::size_t Reporter::heldCount() const { std::lock_guard<std::mutex> lk(p_->mu); return p_->held.size(); }
+std::string Reporter::dir() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return utf8Of(p_->dir); }
+std::size_t Reporter::heldCount() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->held.size(); }
 
 Reporter& global() {
     static Reporter r;

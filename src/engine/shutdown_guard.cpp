@@ -68,6 +68,7 @@ void ShutdownGuard::arm() {
     // the budget as its threshold (not the 5 s default raised a moment later) so no poll can judge the stop against the
     // frame threshold; beginShutdown() restarts its stall clock and logs the budget, as the window's teardown does.
     if (!options_.reportDir.empty()) {
+        watchdog_.setRole(cascade::core::HangWatchdog::Role::Shutdown);
         watchdog_.start(options_.reportDir, options_.budgetMs);
         watchdog_.beginShutdown(options_.budgetMs);
     }

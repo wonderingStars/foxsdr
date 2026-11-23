@@ -27,6 +27,7 @@
 // finish(), the service's stop(), closed() (tests/test_slint_duties.cpp holds this file's order from its text).
 
 #include <algorithm>
+#include "core/stall_context.hpp"
 #include "safe_text.hpp"
 #include <array>
 #include "frame_meter.hpp"
@@ -4404,6 +4405,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "foxsdr-slint: FOXSDR_SLINT_SIZE=%s is not <w>x<h> within 624x400..8192x8192 - the default size stays\n", sizeEnv);
             }
         }
+        cascade::core::stall::registerThreadRole(cascade::core::stall::Role::Window);   // (what a freeze report says this thread is: core/stall_context.hpp)
         duties.windowUp();
         slint::run_event_loop();
     }

@@ -1511,6 +1511,7 @@ int AppWindow::run(int frames) {
     // 0.99.105 on the first frame (shader compile, font texture, a software renderer) was judged against the 5 s steady threshold: two field freeze
     // reports. tests/test_watchdog_startup_wired.cpp fails if this line goes again.
     watchdog_.beginStartup();
+    cascade::core::stall::registerThreadRole(cascade::core::stall::Role::Window);   // (what a freeze report says this thread is: core/stall_context.hpp)
     // ...and, on the same healthy path, anything the LAST run left on disk.
     // Started here rather than in telemetryStartup because it needs the answer
     // to "may this run touch the disk at all", which is diagCrashDir_ and is

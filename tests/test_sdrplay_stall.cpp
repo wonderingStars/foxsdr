@@ -130,7 +130,7 @@ void testTheStreamCallbackNeverWaitsOnTheDiagnosticLog() {
 
     unsigned long long blocksWhileHeld = 0;
     {
-        std::unique_lock<std::mutex> held = cascade::core::DiagLog::instance().lockForTest();
+        auto held = cascade::core::DiagLog::instance().lockForTest();   // (a unique_lock of the file's tagged mutex)
         fake.startService(kBlock, kPeriod, kWedgeAfter);
         const auto t0 = Clock::now();
         std::this_thread::sleep_for(std::chrono::milliseconds(400));
@@ -363,7 +363,7 @@ void testTheEventCallbackNeverWaitsOnTheDiagnosticLog() {
 
     long long firedMs = -1;
     {
-        std::unique_lock<std::mutex> held = cascade::core::DiagLog::instance().lockForTest();
+        auto held = cascade::core::DiagLog::instance().lockForTest();   // (a unique_lock of the file's tagged mutex)
         std::thread service([&]() {
             const auto t0 = Clock::now();
             fake.fireOverload(true);

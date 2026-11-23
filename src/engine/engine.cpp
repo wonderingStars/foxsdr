@@ -11684,6 +11684,7 @@ void Engine::startControlThread(const ControlThreadOptions& options) {
     // THE SENTINEL'S HEARTBEAT IS THE FRAME LOOP'S, and this thread's is that only when no window follows (ControlThreadOptions::sentinelHeartbeat; deep review of
     // engine/stage4, batch A, docs/engine-stage4.md 6.31): the watcher outside the process must not read this thread's 62 beats a second as a window that is alive.
     controlWatchdog_.setSentinelHeartbeat(options.sentinelHeartbeat);
+    controlWatchdog_.setRole(cascade::core::HangWatchdog::Role::Control);   // its reports say `watchdog: control` and the pass's phase, not the window's frame scope
     controlWatchdog_.start(options.watchdogReportDir, options.watchdogThresholdMs);
     if (options.startupBudget) { controlWatchdog_.beginStartup(); }   // the first passes get the start-up budget (ControlThreadOptions::startupBudget)
     {
@@ -11787,30 +11788,49 @@ void Engine::controlPass() {
 }
 
 void Engine::runPassPart(PassPart part) {
+    // THE PHASE, for a freeze report about this thread (core/stall_context.hpp): one relaxed store a step, a word from a closed list.
+    using cascade::core::stall::PassPhase;
+    using cascade::core::stall::setPassPhase;
     switch (part) {
         case PassPart::Front:
+            setPassPhase(PassPhase::Gps);
             pollGpsReader();
+            setPassPhase(PassPhase::Frame);
             pumpFrameBegin();
+            setPassPhase(PassPhase::Inputs);
             pumpInputs();
+            setPassPhase(PassPhase::Remote);
             pumpRemoteControls();
+            setPassPhase(PassPhase::Plugins);
             pumpPlugins();
+            setPassPhase(PassPhase::Patch);
             pumpPatch();
+            setPassPhase(PassPhase::Publish);
             (void)pumpPublish();
             break;
         case PassPart::Mute:
+            setPassPhase(PassPhase::Mute);
             pumpAudioMute();
             break;
         case PassPart::Back:
+            setPassPhase(PassPhase::Workers);
             pumpWorkers();
+            setPassPhase(PassPhase::Audio);
             pumpAudio();
             // THE ADDED RADIOS' OWN HOUSEKEEPING (stage 4): each under its own scope, after the first radio's.
+            setPassPhase(PassPhase::Extra);
             pumpExtraReceivers();
+            setPassPhase(PassPhase::Schedule);
             pumpSchedule();   // (timed recordings: engine_schedule.cpp)
+            setPassPhase(PassPhase::Macros);
             pumpMacros();     // (a macro being played: engine_macros.cpp)
             forEachReceiver([this] { recplayPump(); });   // screen lane S3: rollover, clips and the replay buffer (engine_recplay.cpp)
+            setPassPhase(PassPhase::Wire);
             pumpWireB();      // (wire-b: the limit mask of every open radio: engine_wire_b.cpp)
             pumpWireC();      // wire-c (engine_wire_c.cpp)
+            setPassPhase(PassPhase::Smeter);
             pollSmeterCal();  // (a calibration being measured: engine_smeter.cpp)
+            setPassPhase(PassPhase::Idle);
             break;
     }
 }
@@ -11825,6 +11845,7 @@ void Engine::runPassPart(PassPart part) {
 // the queue the pass drains afterwards. Clearing it after the wait would eat exactly that wake.
 void Engine::controlLoop(std::chrono::milliseconds period, std::chrono::milliseconds floor, bool stepped) {
     controlThreadId_.store(std::this_thread::get_id());
+    cascade::core::stall::registerThreadRole(cascade::core::stall::Role::Control);   // (what a freeze report says this thread is: core/stall_context.hpp)
     using SteadyClock = std::chrono::steady_clock;
     SteadyClock::time_point passStart{};
     bool first = true;

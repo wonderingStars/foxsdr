@@ -9,7 +9,9 @@
 #include "core/foreign_modules.hpp"
 #include "core/frame_timing.hpp"
 #include "core/plugin_reload_phases.hpp"
+#include "core/plugin_fault.hpp"
 #include "core/sentinel.hpp"
+#include "core/stall_context.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -188,6 +190,66 @@ std::string cleanBlamedField(const std::string& value, std::size_t maxLen, bool 
     return v;
 }
 
+// A number the freeze header wrote: digits only, at most nine of them, else empty. This is where a figure becomes bytes that leave the machine.
+std::string cleanDigits(const std::string& value) {
+    const std::string v = trimSpace(value);
+    if (v.empty() || v.size() > 9) { return std::string(); }
+    for (const char c : v) {
+        if (c < '0' || c > '9') { return std::string(); }
+    }
+    return v;
+}
+
+// One word of a closed list, else empty.
+std::string cleanWord(const std::string& value, bool (*isMember)(const char*)) {
+    const std::string v = trimSpace(value);
+    return (!v.empty() && isMember(v.c_str())) ? v : std::string();
+}
+bool isWatchdogWord(const char* w) {
+    for (const char* k : {"window", "control", "shutdown", "worker", "plugin-call"}) { if (std::strcmp(w, k) == 0) { return true; } }
+    return false;
+}
+bool isRoleWord(const char* w) { stall::Role r; return stall::roleFromWord(w, r); }
+bool isPassPhaseWord(const char* w) { stall::PassPhase p; return std::strcmp(w, "none") != 0 && stall::passPhaseFromWord(w, p); }
+bool isEntryWord(const char* w) {
+    for (std::size_t i = 0; i < fault::kEntryCount; ++i) {
+        if (std::strcmp(w, fault::entryWord(static_cast<fault::Entry>(i))) == 0) { return true; }
+    }
+    return false;
+}
+
+// The lock the stalled thread waited for as one string, "<lock>|<holder role>|<site>|<held ms>", or empty - every part validated against its list.
+std::string composeLockWait(const std::string& lock, const std::string& holder, const std::string& site, const std::string& heldMs) {
+    const std::string l = cleanWord(lock, &stall::isLockName);
+    const std::string h = cleanWord(holder, &isRoleWord);
+    const std::string s = cleanWord(site, &stall::isLockSite);
+    const std::string m = cleanDigits(heldMs);
+    if (l.empty() || h.empty() || s.empty() || m.empty()) { return std::string(); }
+    return l + "|" + h + "|" + s + "|" + m;
+}
+
+// The composed string again, split and re-validated (the payload builder's own look; the member may have been set by a hand or a test).
+std::string cleanLockWait(const std::string& s) {
+    std::string parts[4];
+    std::size_t at = 0;
+    for (int i = 0; i < 4; ++i) {
+        const std::size_t bar = s.find('|', at);
+        if (i < 3 && bar == std::string::npos) { return std::string(); }
+        parts[i] = s.substr(at, bar == std::string::npos ? std::string::npos : bar - at);
+        at = bar == std::string::npos ? s.size() : bar + 1;
+    }
+    return composeLockWait(parts[0], parts[1], parts[2], parts[3]);
+}
+
+// "in-call:create" / "lock-holder:create" (the how and the entry), else empty.
+std::string composeBlameHow(const std::string& how, const std::string& entry) {
+    const std::string h = trimSpace(how);
+    const std::string e = trimSpace(entry);
+    if (h != "in-call" && h != "lock-holder") { return std::string(); }
+    if (e.empty() || !isEntryWord(e.c_str())) { return h; }
+    return h + ":" + e;
+}
+
 std::string moduleStem(const std::string& fileName) {
     const std::size_t dot = fileName.find_last_of('.');
     return (dot == std::string::npos) ? fileName : fileName.substr(0, dot);
@@ -217,11 +279,12 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
     if (text.empty()) { return false; }
 
     const std::vector<std::string> lines = splitLines(text);
-    enum class Section { Header, Context, Process, Modules, Stack, Log, Ignore };
+    enum class Section { Header, Context, Process, Modules, Stack, Log, Outcome, Ignore };
     Section section = Section::Header;
     std::string addressText;
     std::string frameScopeText;
     std::string reloadPhaseText;
+    std::string blamedEntryText, blamedHowText, lockNameText, lockHolderText, lockSiteText, lockHeldText;
     bool sawKind = false;
 
     for (const std::string& raw : lines) {
@@ -234,6 +297,8 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 section = Section::Modules;
             } else if (raw.rfind("--- log", 0) == 0) {
                 section = Section::Log;
+            } else if (raw.rfind("--- outcome ---", 0) == 0) {
+                section = Section::Outcome;
             } else if (raw.find("thread") != std::string::npos) {
                 if (out.threads.size() < kMaxThreads) {
                     ReportThread t;
@@ -253,11 +318,19 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
         }
 
         if (section == Section::Header || section == Section::Context ||
-            section == Section::Process) {
+            section == Section::Process || section == Section::Outcome) {
             const std::size_t colon = raw.find(':');
             if (colon == std::string::npos) { continue; }
             const std::string k = trimSpace(raw.substr(0, colon));
             const std::string v = trimSpace(raw.substr(colon + 1));
+            if (section == Section::Outcome) {
+                // THE STALL ENDED (freeze diagnosis section 7): how long it lasted, appended by the watchdog to the file it wrote.
+                if (k == "recovered-after-ms") {
+                    const std::string d = cleanDigits(v);
+                    if (!d.empty()) { out.recoveredAfterMs = std::strtoll(d.c_str(), nullptr, 10); }
+                }
+                continue;
+            }
             if (section == Section::Process) {
                 if (k == "uptime-sec") {
                     out.uptimeSec = static_cast<std::uint64_t>(std::strtoull(v.c_str(), nullptr, 10));
@@ -300,6 +373,32 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                 } else if (k == "blamed-plugin") {
                     // A freeze report that is about a call into a plugin (6.28): the plugin's public id.
                     out.blamedPlugin = cleanBlamedField(v, 40, false);
+                } else if (k == "blamed-plugin-version") {
+                    out.blamedPluginVersion = cleanBlamedField(v, 24, true);
+                } else if (k == "blamed-plugin-entry") {
+                    blamedEntryText = v;
+                } else if (k == "blamed-plugin-how") {
+                    blamedHowText = v;
+                } else if (k == "watchdog") {
+                    out.watchdog = cleanWord(v, &isWatchdogWord);
+                } else if (k == "thread-role") {
+                    out.threadRole = cleanWord(v, &isRoleWord);
+                } else if (k == "pass-phase") {
+                    out.passPhase = cleanWord(v, &isPassPhaseWord);
+                } else if (k == "stalled-ms") {
+                    out.stalledMs = cleanDigits(v);
+                } else if (k == "threshold-ms") {
+                    out.thresholdMs = cleanDigits(v);
+                } else if (k == "outcome") {
+                    out.outcomePending = (v == "pending");
+                } else if (k == "waiting-lock") {
+                    lockNameText = v;
+                } else if (k == "lock-holder-role") {
+                    lockHolderText = v;
+                } else if (k == "lock-site") {
+                    lockSiteText = v;
+                } else if (k == "lock-held-ms") {
+                    lockHeldText = v;
                 } else if (k == "frame-scope") {
                     // A freeze report's own line (0.99.64). Kept aside until the
                     // kind is known - see below, where it becomes the reason.
@@ -310,9 +409,10 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
                     // the closed list of reload step names.
                     reloadPhaseText = v;
                 }
-                // thread, stalled-ms, threshold-ms and threads are
-                // deliberately not carried: the rest is either in the stack
-                // or meaningless outside the dead process.
+                // thread, thread-phase, thread-wait and threads are deliberately
+                // not carried: the rest is either in the stack or meaningless
+                // outside the dead process. (stalled-ms and threshold-ms are carried
+                // since the freeze diagnosis: how long, against which budget.)
                 continue;
             }
             if (k == "version") {
@@ -400,6 +500,15 @@ bool parseReportText(const std::string& text, ParsedReport& out) {
         return false;
     }
 
+    // The words that need two lines to say: which lock the stalled thread waited for and who held it; which plugin call, through which entry.
+    out.lockWait = composeLockWait(lockNameText, lockHolderText, lockSiteText, lockHeldText);
+    if (out.recoveredAfterMs >= 0) { out.outcomePending = false; }   // the stall ended and said so: not pending any more
+    out.blamedPluginHow = composeBlameHow(blamedHowText, blamedEntryText);
+    if (out.blamedPlugin.empty()) { out.blamedPluginHow.clear(); }
+    // A CONTROL THREAD'S FREEZE SAYS WHERE THE PASS WAS, in one sentence of its own, with the lock if it waited for one (freeze diagnosis section 7).
+    if (out.kind == "hang" && out.reason.empty() && out.watchdog == "control" && !out.passPhase.empty()) {
+        out.reason = std::string(kFreezeControlReasonPrefix) + out.passPhase;
+    }
     // A FREEZE'S REASON IS WHERE THE FRAME WAS (0.99.64). A freeze report has no
     // `reason:` line; it has `frame-scope:`, the part of the frame the window's
     // thread was stalled in. That goes up in the field the receiving end already
@@ -564,6 +673,31 @@ nlohmann::json buildPayload(const ParsedReport& r, const std::string& installId,
     ctx["updateChannel"] = (r.updateChannel == "stable" || r.updateChannel == "beta")
                                ? r.updateChannel
                                : std::string();
+    // WHO STALLED AND WHAT IT WAITED FOR (freeze diagnosis section 7). Each is a word of a closed list or a figure, re-validated here as the request is built (this is
+    // the one place it becomes bytes that leave the machine), always present and empty when the report did not say: the inventory is exact both ways. The site keeps
+    // 24 context keys (crash.go crashMaxContextKeys, sorted by name): this is the 22nd.
+    ctx["watchdog"] = cleanWord(r.watchdog, &isWatchdogWord);
+    ctx["threadRole"] = cleanWord(r.threadRole, &isRoleWord);
+    ctx["passPhase"] = cleanWord(r.passPhase, &isPassPhaseWord);
+    ctx["stalledMs"] = cleanDigits(r.stalledMs).empty() ? 0LL : std::strtoll(cleanDigits(r.stalledMs).c_str(), nullptr, 10);
+    ctx["thresholdMs"] = cleanDigits(r.thresholdMs).empty() ? 0LL : std::strtoll(cleanDigits(r.thresholdMs).c_str(), nullptr, 10);
+    {
+        // recovered:<ms> when the stall ended, not-recovered when the report was written and nothing followed (the process ended, or the stall was not over), else empty.
+        std::string outcome;
+        if (r.kind == "hang") {
+            if (r.recoveredAfterMs >= 0) { outcome = "recovered:" + std::to_string(std::min<long long>(r.recoveredAfterMs, 999999999LL)); }
+            else if (r.outcomePending) { outcome = "not-recovered"; }
+        }
+        ctx["outcome"] = outcome;
+    }
+    ctx["lockWait"] = cleanLockWait(r.lockWait);
+    {
+        // "<how>[:<entry>]" again, split and checked: the how from its two words, the entry from the fault entries' own list.
+        const std::size_t colon = r.blamedPluginHow.find(':');
+        const std::string how = r.blamedPluginHow.substr(0, colon);
+        const std::string entry = colon == std::string::npos ? std::string() : r.blamedPluginHow.substr(colon + 1);
+        ctx["blamedPluginHow"] = composeBlameHow(how, entry);
+    }
     j["context"] = std::move(ctx);
 
     nlohmann::json log = nlohmann::json::array();
@@ -666,7 +800,9 @@ const std::vector<std::string>& uploadContextFieldNames() {
                                                    "deviceOpen", "sdrModel", "uptimeSec",
                                                    "faultThreadOwn", "foreignModules",
                                                    "reloadPhase", "blamedPlugin", "blamedPluginVersion",
-                                                   "blamedPluginOrigin", "trail", "updateChannel"};
+                                                   "blamedPluginOrigin", "trail", "updateChannel",
+                                                   "watchdog", "threadRole", "passPhase", "stalledMs", "thresholdMs",
+                                                   "outcome", "lockWait", "blamedPluginHow"};
     return names;
 }
 
@@ -1422,6 +1558,22 @@ bool isReportName(const std::string& name) {
 
 }  // namespace
 
+namespace {
+// `hang-<pid>-...` written by THIS process (the watchdogs' file names, hang_watchdog.cpp).
+bool reportIsOfThisProcess(const std::string& name) {
+    if (name.rfind("hang-", 0) != 0) { return false; }
+    unsigned long pid = 0;
+    std::size_t i = 5;
+    if (i >= name.size() || name[i] < '0' || name[i] > '9') { return false; }
+    for (; i < name.size() && name[i] >= '0' && name[i] <= '9'; ++i) { pid = pid * 10u + static_cast<unsigned long>(name[i] - '0'); }
+#if defined(_WIN32)
+    return pid == static_cast<unsigned long>(::GetCurrentProcessId());
+#else
+    return false;
+#endif
+}
+}  // namespace
+
 SweepOutcome sweepCrashDir(const SweepParams& params,
                            const std::shared_ptr<UploadCancel>& cancel) {
     SweepOutcome out;
@@ -1471,6 +1623,14 @@ SweepOutcome sweepCrashDir(const SweepParams& params,
             writeSidecar(path, "refused", sc.attempts, std::string(), params.nowEpoch,
                          "not a readable report; it was not sent and will not be retried");
             out.notes.push_back(p.filename().string() + ": refused (unreadable)");
+            continue;
+        }
+
+        // A FREEZE THIS PROCESS FILED AND HAS NOT SEEN THE END OF waits (freeze diagnosis section 7): its header says `outcome: pending` and the watchdog appends the
+        // outcome when the stall ends. Sent now it would go without the answer to "did it come back, and after how long"; it is left for the next sweep, which comes
+        // after the stall has ended or never (a process that ends while stalled leaves the file for the next start, and it is sent then as `not-recovered`).
+        if (r.kind == "hang" && r.outcomePending && reportIsOfThisProcess(p.filename().string())) {
+            out.notes.push_back(p.filename().string() + ": freeze not over yet, kept for a later sweep");
             continue;
         }
 

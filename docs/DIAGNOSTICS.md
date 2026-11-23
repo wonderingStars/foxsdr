@@ -5731,6 +5731,37 @@ unwind and byte-identically to `crash_handler.cpp`'s, and
 every fault this product has actually shipped was a hang rather than a crash,
 this was the readable half missing from the half that matters most.
 
+### Who stalled and what it waited for (the freeze diagnosis, 2026-11-23)
+
+The 17 field freeze reports of 19-23 November could not name their cause: the engine's control thread has a `HangWatchdog` of its own, and every `HangWatchdog`
+wrote `thread: gui`, the WINDOW's frame scope and "the gui thread did not complete a frame", whichever thread it watched; a thread stalled on a lock showed a kernel
+stub and nothing about the holder; the pass had no phase; and the trail line sat after the `--- beats ---` heading, which the uploader skips, so `context.trail` was
+empty in every freeze. The freeze report's header now carries (all closed words and numbers; `core/stall_context.hpp`, written by `hang_watchdog.cpp`):
+
+| line | words | meaning |
+|---|---|---|
+| `watchdog:` | `window`, `control`, `shutdown`, `worker`, `plugin-call` | which watchdog filed it (`HangWatchdog::setRole`; the thread monitor's reports say `worker` or `plugin-call`) |
+| `thread-role:` | `window`, `control`, `dsp`, `source`, `other` | the stalled thread's kind, from the table each thread registers in (`stall::registerThreadRole`) |
+| `frame-scope:` | the frame timer's list | written only for the window's report; `other` for the control and worker reports |
+| `pass-phase:` | `gps frame inputs remote plugins patch publish mute workers audio extra schedule macros wire smeter idle`, `none` | the control pass's step (`Engine::runPassPart`), for the control watchdog's report only |
+| `stalled-ms:`, `threshold-ms:` | numbers | already written; now uploaded (digits, at most nine) |
+| `outcome:` | `pending` | the watchdog appends `--- outcome ---` / `recovered-after-ms: N` to the file when the stall ends |
+| `waiting-lock:`, `lock-holder-role:`, `lock-site:`, `lock-held-ms:` | `plugin-runner`, `radio-reporter`, `diag-log-file`; a role; a site (`rebuild start stop clear process-iq process-audio audio-chain poll-images press other`); a number | the tagged lock (`stall::TaggedMutex`: three relaxed stores per acquisition, no lock of its own) the stalled thread was waiting for, and who held it |
+| `blamed-plugin:`, `blamed-plugin-entry:`, `blamed-plugin-version:`, `blamed-plugin-how:` | the plugin's public id, an entry word, its version, `in-call` / `lock-holder` / `none` | for EVERY freeze: the plugin when the stalled thread is inside a declared call into it (`beats::callOfThread`), or waits for a tagged lock whose holder is |
+
+**Upload.** Eight new `context` keys (`watchdog`, `threadRole`, `passPhase`, `stalledMs`, `thresholdMs`, `outcome`, `lockWait`, `blamedPluginHow`), each validated against
+its list where the file is parsed and again where the request is built (`crash_upload.cpp`); the inventories that tests compare both ways (`uploadContextFieldNames`,
+`hangReportFieldNames`) and `PRIVACY.md` list them. A control-thread freeze's `reason` is `freeze: the engine pass was in <phase>`. `outcome` is `recovered:<ms>`,
+`not-recovered` (the file says `pending` and no section followed: the process ended, or was ended, while stalled) or empty. A `hang` file written by the CURRENT process
+that still says `pending` is not uploaded yet (the sweep leaves it for the next sweep); the same file found by the next process is uploaded as `not-recovered`.
+
+**What the site does with them (read from `foxsdr-site` `crash.go`, read-only).** The decoder is `json.Unmarshal` into `CrashReport` with no `DisallowUnknownFields`; `Context` is a
+`map[string]any`; `storedFromReport` keeps at most `crashMaxContextKeys = 24` of them, SORTED BY NAME, each key clipped to 48 characters and each value to 200. Unknown context
+keys are therefore ACCEPTED AND STORED, and shown in the report page's context table; nothing refuses them. The limit is the one to watch: the application now sends 22
+context keys. A 25th would silently drop the alphabetically last (`watchdog`, then `updateChannel`...). The site reads a freeze `reason` strictly against the frame sentence
+(`freezeScopeOf`, `sentinel.go`): the control sentence is not recognised there and shows no frame scope, which is correct for it. What the site could add (not needed for the
+application to send these): show `watchdog`, `passPhase`, `lockWait` and `blamedPluginHow` on the report page, group by them, and recognise `freeze: the engine pass was in <phase>`.
+
 ### A freeze or crash report carries the window's last-known state
 
 Field report 6A586D4DAD464BB8 (0.99.73, a Raspberry Pi 5, Linux

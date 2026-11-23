@@ -448,6 +448,15 @@ public:
     void setSentinelHeartbeat(bool on) { sentinelBeat_.store(on, std::memory_order_relaxed); }
     bool sentinelHeartbeat() const { return sentinelBeat_.load(std::memory_order_relaxed); }
 
+    // WHICH WATCHDOG THIS IS, for the report (freeze diagnosis section 7). Every HangWatchdog used to write "thread: gui", the window's frame scope and "the gui thread
+    // did not complete a frame", whichever thread it watched: the engine's control thread's reports named where the WINDOW was. The role is set once, before start(),
+    // where each is started: the window's (the default), the engine's control thread, the teardown's (engine/shutdown_guard). It selects the `watchdog:` word, whether
+    // the frame scope or the control pass's phase is written, the note's sentence and the recovery line. A closed list: nothing else can be written.
+    enum class Role : std::uint8_t { Window = 0, Control, Shutdown };
+    void setRole(Role r) { role_.store(static_cast<std::uint8_t>(r), std::memory_order_relaxed); }
+    Role role() const { return static_cast<Role>(role_.load(std::memory_order_relaxed)); }
+    static const char* roleWord(Role r);   // "window" | "control" | "shutdown"
+
     bool running() const;
 
     // Bracket blocking work the application enters deliberately. Nested calls
@@ -737,6 +746,9 @@ private:
     std::atomic<unsigned> wedgeCaptureDelayMs_{0};               // setWedgeCaptureDelayForTest
     // setSentinelHeartbeat: whether heartbeat() is also the breadcrumb's. Set by the owner before start(), and not reset by it.
     std::atomic<bool> sentinelBeat_{true};
+    std::atomic<std::uint8_t> role_{0};
+    // When the stall that was reported began (steady-clock milliseconds), so that the recovery can write how long it lasted into the file that was written for it.
+    std::atomic<double> reportedStallStartMs_{0.0};
     // NOT reset by start(), unlike everything above it: see pausesTaken().
     std::atomic<unsigned> pauses_{0};
 
@@ -784,6 +796,8 @@ private:
 
     mutable std::mutex pathMutex_;
     std::string lastPath_;
+    // The file written for the stall now reported, so that its recovery can say how long it lasted (guarded by pathMutex_); empty when no file was written.
+    std::string outcomePath_;
 
     // Rule 2c's test injection. Guarded for the same reason reportDir_ is: a
     // test sets it on its own thread and the watchdog thread reads it.

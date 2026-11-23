@@ -49,6 +49,8 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+
+#include "core/stall_context.hpp"
 #include <string>
 #include <vector>
 
@@ -710,7 +712,7 @@ private:
     // correctly finds nothing to feed - the lock is dropped, destroy() runs on
     // the moved-out copies, and the lock is retaken before returning, so a
     // caller sees exactly the state a function that never let go would leave.
-    void destroyInstances(std::unique_lock<std::mutex>& lock);
+    void destroyInstances(std::unique_lock<stall::TaggedMutex>& lock);
     // WHAT ONE PLUGIN'S BUILD PRODUCES, held OUTSIDE the runner until it is published (freeze diagnosis P1/P6, stage A). The create() calls are third-party code
     // of unbounded duration; they used to run with mutex_ held, which stopped the window (pollImages) and the sound (processIq) behind them. buildPlugin() fills
     // one of these without the lock - nobody else can see it, so nothing can call into a handle it holds - and publishLocked() appends it to the runner's vectors
@@ -733,11 +735,11 @@ private:
     // Lock held on entry and on return; DROPPED while the creates run. Every plugin in `wanted` has been marked starting. Builds each into a Stage with the lock
     // dropped, then publishes the ones still wanted (or builds again against the new rates when a rebuild() came meanwhile; discards when stopped, switched off or
     // cleared) and takes the marks off. The body rebuild() and startPlugin() share.
-    void buildAndPublishLocked(std::vector<const LoadedPlugin*> wanted, std::unique_lock<std::mutex>& lock);
+    void buildAndPublishLocked(std::vector<const LoadedPlugin*> wanted, std::unique_lock<stall::TaggedMutex>& lock);
     // The per-plugin counterpart of destroyInstances(): moves ONE plugin's
     // instances out (the rest stay, with their status rows re-indexed), drops
     // the lock, destroys them, retakes it.
-    void removePluginLocked(const std::string& key, std::unique_lock<std::mutex>& lock);
+    void removePluginLocked(const std::string& key, std::unique_lock<stall::TaggedMutex>& lock);
     void pollLocked();
     void pollIqLocked();
     // Status text from the image decoders fed by `inputKind`, into the same
@@ -797,7 +799,7 @@ private:
     static constexpr std::size_t kChainReserveFrames = 16384;
 
     std::atomic<std::uint32_t> radio_{1};
-    mutable std::mutex mutex_;
+    mutable stall::TaggedMutex mutex_{"plugin-runner"};   // tagged: a freeze report names who holds it (core/stall_context.hpp)
     // The keys whose create() is running right now, outside the lock (see Stage). Under mutex_. A key here is not started a second time and is not built by a
     // rebuild(); the thread that builds it publishes it, or builds it again when the rates changed meanwhile.
     std::vector<std::string> starting_;

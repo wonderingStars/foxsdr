@@ -111,6 +111,9 @@ namespace cascade::core {
 // follows it, one name from core/frame_timing.hpp's closed list. Fixed, so the
 // receiving end can tell it from a crash's reason by its first word.
 inline constexpr const char* kFreezeReasonPrefix = "freeze: the frame was in ";
+// ...and a freeze the ENGINE'S CONTROL THREAD's watchdog filed (freeze diagnosis section 7) says where the PASS was, not the window's frame: the sentence ends in one
+// phase word from core/stall_context.hpp's closed list. The receiving end ignores a reason it does not know (it reads the frame sentence strictly).
+inline constexpr const char* kFreezeControlReasonPrefix = "freeze: the engine pass was in ";
 
 struct ReportFrame {
     std::string module;   // "cascade.exe", or empty when the address resolved
@@ -184,6 +187,18 @@ struct ParsedReport {
     // them (trail::sanitise) - so EMPTY for `none`, for a report without the line (an older
     // build's, a sentinel's) and for any value that is not made of those entries.
     std::string trail;
+
+    // WHO STALLED AND WHAT IT WAITED FOR (freeze diagnosis section 7): the freeze header's closed words and numbers, each validated where it is parsed against its list
+    // and again where it becomes the payload; EMPTY for anything that is not on the list, for a crash and for an older build's report.
+    //   watchdog      window | control | shutdown | worker | plugin-call      threadRole  window | control | dsp | source | other
+    //   passPhase     a word of core/stall_context.hpp's list (control reports)   stalledMs, thresholdMs  digits, at most nine
+    //   lockWait      "<lock>|<holder role>|<site>|<held ms>" when the stalled thread waited for a tagged lock, else empty
+    //   blamedPluginHow  "in-call:<entry>" or "lock-holder:<entry>" next to blamedPlugin / blamedPluginVersion
+    //   outcomePending  the header said `outcome: pending` and no `--- outcome ---` section followed (the process ended, or has not yet seen the stall end)
+    //   recoveredAfterMs  the outcome section's number, -1 when there is none
+    std::string watchdog, threadRole, passPhase, stalledMs, thresholdMs, lockWait, blamedPluginHow;
+    bool outcomePending = false;
+    long long recoveredAfterMs = -1;
 
     // The context block's `update-channel:` line (field-early-warning): "stable" or "beta", the
     // Updates section's setting, and EMPTY for anything else - `(not recorded)`, a report from

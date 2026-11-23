@@ -149,6 +149,7 @@ struct Slot;
 Slot* slotFor(const std::string& pluginKeyOrId);
 const char* idOf(const Slot* s);        // the run id, lower-cased: "pocsag-decoder"
 const char* publicIdOf(const Slot* s);  // what may leave the machine: the id of an official plugin, "site-<hash>" for any other
+const char* versionOf(const Slot* s);   // the version the load recorded (setIdentity), "" when none: the plugin's own version string, which may leave the machine with its public id
 // The same name for a plugin known only by its containment id (core::containmentId: a marker slot's, a strike record's) and where it came from: an official
 // plugin's id as it is, "site-<hash>" for every other origin - including one nobody recorded. For the lines a log or a report carries about a plugin that is
 // not (yet) a slot's (deep review of engine/stage4, batch A; docs/engine-stage4.md 6.31): the log ring is copied into every report, and an id that is not an

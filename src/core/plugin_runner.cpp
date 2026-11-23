@@ -132,28 +132,28 @@ PluginRunner::CurrentRadioScope::CurrentRadioScope(std::uint32_t radio) : previo
 PluginRunner::CurrentRadioScope::~CurrentRadioScope() { t_currentRadio = previous_; }
 
 void PluginRunner::setStopped(std::vector<std::string> keys) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     stopped_.set(std::move(keys));
 }
 
 bool PluginRunner::isStopped(const std::string& pluginKey) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return stopped_.contains(pluginKey);
 }
 
 void PluginRunner::setDormant(std::vector<std::string> keys) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     dormant_.set(std::move(keys));
 }
 
 bool PluginRunner::isDormant(const std::string& pluginKey) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return dormant_.contains(pluginKey);
 }
 
 bool PluginRunner::hasInstances(const std::string& pluginKey) const {
     if (pluginKey.empty()) { return false; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     for (const Instance& i : instances_) {
         if (i.key == pluginKey) { return true; }
     }
@@ -172,7 +172,8 @@ bool PluginRunner::hasInstances(const std::string& pluginKey) const {
 void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audioRateHz,
                            double iqRateHz, double centreHz) {
     const CurrentRadioScope radioScope(radio());
-    std::unique_lock<std::mutex> lock(mutex_);
+    const stall::SiteScope lockSite("rebuild");   // (what a freeze report says this thread held the runner's lock for)
+    std::unique_lock<stall::TaggedMutex> lock(mutex_);
     // Drops the lock while the OLD instances' destroy() runs and retakes it
     // before returning - see its declaration.
     destroyInstances(lock);
@@ -222,7 +223,8 @@ void PluginRunner::rebuild(const std::vector<LoadedPlugin>& plugins, double audi
 
 bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
     const CurrentRadioScope radioScope(radio());
-    std::unique_lock<std::mutex> lock(mutex_);
+    const stall::SiteScope lockSite("start");   // (what a freeze report says this thread held the runner's lock for)
+    std::unique_lock<stall::TaggedMutex> lock(mutex_);
     if (!lp.loaded) { return false; }
     // A stop is a decision; only the owner's setStopped() reverses it.
     if (stopped_.contains(lp)) { return false; }
@@ -266,7 +268,8 @@ bool PluginRunner::startPlugin(const LoadedPlugin& lp) {
 
 void PluginRunner::stopPlugin(const std::string& pluginKey) {
     const CurrentRadioScope radioScope(radio());
-    std::unique_lock<std::mutex> lock(mutex_);
+    const stall::SiteScope lockSite("stop");   // (what a freeze report says this thread held the runner's lock for)
+    std::unique_lock<stall::TaggedMutex> lock(mutex_);
     // Down until startPlugin(): a rebuild() in between must not bring it back.
     std::vector<std::string> keys = dormant_.keys();
     keys.push_back(pluginKey);
@@ -681,7 +684,7 @@ void PluginRunner::discardStage(Stage& s) {
     s.instances.clear(); s.iqInstances.clear(); s.imageInstances.clear(); s.processors.clear(); s.status.clear();
 }
 
-void PluginRunner::buildAndPublishLocked(std::vector<const LoadedPlugin*> wanted, std::unique_lock<std::mutex>& lock) {
+void PluginRunner::buildAndPublishLocked(std::vector<const LoadedPlugin*> wanted, std::unique_lock<stall::TaggedMutex>& lock) {
     // THE CREATES RUN WITH THE LOCK DROPPED (freeze diagnosis P1/P6). What the lock protected, and how each is kept:
     //  I1 a handle is in one call at a time: the stage is private until published, so nothing else can call into it.
     //  I2 destroy() runs once, after the last other call: a published instance is destroyed by the existing paths; a discarded stage is destroyed here, never published.
@@ -751,7 +754,7 @@ bool PluginRunner::isFeeding(const std::string& pluginKey) const {
     // record with no path yields "", and one path-less plugin must not answer
     // for every other.
     if (pluginKey.empty()) { return false; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     for (const DecoderStatus& s : status_) {
         if (s.key == pluginKey && s.reason == DecoderIdleReason::Running) { return true; }
     }
@@ -760,8 +763,9 @@ bool PluginRunner::isFeeding(const std::string& pluginKey) const {
 
 void PluginRunner::processIq(const float* interleaved, std::size_t frames) {
     const CurrentRadioScope radioScope(radio());
+    const stall::SiteScope lockSite("process-iq");   // (what a freeze report says this thread held the runner's lock for)
     if (interleaved == nullptr || frames == 0) { return; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     // A RETUNE THAT FOUND THE LOCK BUSY lands here, between two blocks and before
     // this one's samples are handed out, so a decoder never sees half a block at
     // each centre. Before the early return below: the centre has to move even when
@@ -795,7 +799,7 @@ void PluginRunner::retune(double centreHz) {
     const CurrentRadioScope radioScope(radio());
     // TRY, never wait: see the declaration. A destroy()-time re-entry arrives here
     // with the lock dropped and takes whichever branch the DSP thread leaves it.
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock<stall::TaggedMutex> lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
         pendingCentreHz_.store(centreHz, std::memory_order_relaxed);
         pendingCentre_.store(true, std::memory_order_release);
@@ -835,7 +839,8 @@ void PluginRunner::retuneLocked(double centreHz) {
 
 void PluginRunner::clear() {
     const CurrentRadioScope radioScope(radio());
-    std::unique_lock<std::mutex> lock(mutex_);
+    const stall::SiteScope lockSite("clear");   // (what a freeze report says this thread held the runner's lock for)
+    std::unique_lock<stall::TaggedMutex> lock(mutex_);
     // The modules are about to be unloaded: a create() still running on another thread is stale for good (its stage is destroyed, never rebuilt or published).
     ++clearEpoch_;
     starting_.clear();
@@ -847,14 +852,15 @@ void PluginRunner::clear() {
 }
 
 void PluginRunner::setStreamClock(std::shared_ptr<StreamClock> clock) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     clock_ = std::move(clock);
 }
 
 void PluginRunner::processAudioChain(float* left, float* right, std::size_t frames) {
     const CurrentRadioScope radioScope(radio());
+    const stall::SiteScope lockSite("audio-chain");   // (what a freeze report says this thread held the runner's lock for)
     if (left == nullptr || right == nullptr || frames == 0) { return; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (processors_.empty()) { return; }
     // Reserved at rebuild; only a block larger than any before grows it.
     if (chainBuf_.size() < 2u * frames) { chainBuf_.resize(2u * frames); }
@@ -882,7 +888,7 @@ void PluginRunner::processAudioChain(float* left, float* right, std::size_t fram
 }
 
 std::vector<std::string> PluginRunner::processorTitles() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     std::vector<std::string> out;
     for (const ProcessorInstance& p : processors_) {
         out.push_back(p.title + " (" + p.name + ")");
@@ -891,11 +897,11 @@ std::vector<std::string> PluginRunner::processorTitles() const {
 }
 
 std::uint64_t PluginRunner::processorNonFinite() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return processorNonFinite_;
 }
 
-void PluginRunner::destroyInstances(std::unique_lock<std::mutex>& lock) {
+void PluginRunner::destroyInstances(std::unique_lock<stall::TaggedMutex>& lock) {
     // FIRST, BEFORE ANY destroy(). An AudioInstance holds no handle of its
     // own: it borrows a decoder instance's. Dropping these after the loops
     // below would leave a borrowed pointer to a destroyed instance in the
@@ -975,7 +981,7 @@ void moveOutKey(std::vector<T>& live, const std::string& key, std::vector<T>& de
 }  // namespace
 
 void PluginRunner::removePluginLocked(const std::string& key,
-                                      std::unique_lock<std::mutex>& lock) {
+                                      std::unique_lock<stall::TaggedMutex>& lock) {
     if (key.empty()) { return; }
 
     // THE SPEAKERS FIRST, as destroyInstances does it: an AudioInstance borrows
@@ -1075,8 +1081,9 @@ void PluginRunner::removePluginLocked(const std::string& key,
 
 void PluginRunner::processAudio(const float* mono, std::size_t frames) {
     const CurrentRadioScope radioScope(radio());
+    const stall::SiteScope lockSite("process-audio");   // (what a freeze report says this thread held the runner's lock for)
     if (mono == nullptr || frames == 0) { return; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (clock_ && !rebuilding_) { clock_->addAudio(frames); }  // see processIq
     if (instances_.empty() && audioImageCount_ == 0) { return; }
     // NOTHING IS HANDED TO AN INSTANCE THAT HAS FAILED PERMANENTLY, and the
@@ -1241,7 +1248,7 @@ void PluginRunner::pullAudioLocked(AudioInstance& a, float* left, float* right,
 bool PluginRunner::pullPluginAudio(float* left, float* right, std::size_t frames) {
     const CurrentRadioScope radioScope(radio());
     if (left == nullptr || right == nullptr || frames == 0) { return false; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (audioInstances_.empty()) { return false; }
 
     // EVERY INSTANCE IS ASKED EVERY BLOCK, including ones not being pulled
@@ -1307,24 +1314,24 @@ bool PluginRunner::pullPluginAudio(float* left, float* right, std::size_t frames
 }
 
 std::string PluginRunner::playingPlugin() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (playing_ == kNoAudio) { return std::string(); }
     return audioInstances_[playing_].name;
 }
 
 std::string PluginRunner::playingPluginKey() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (playing_ == kNoAudio) { return std::string(); }
     return audioInstances_[playing_].key;
 }
 
 std::uint64_t PluginRunner::audioGaps() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return audioGaps_;
 }
 
 std::uint64_t PluginRunner::audioGapFrames() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return audioGapFrames_;
 }
 
@@ -1332,7 +1339,7 @@ bool PluginRunner::audioPathSnapshot(std::uint64_t& gaps, std::uint64_t& gapFram
                                      std::size_t cap) const {
     bool any = false;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<stall::TaggedMutex> lock(mutex_);
         gaps = audioGaps_;
         gapFrames = audioGapFrames_;
         any = playing_ != kNoAudio;
@@ -1356,7 +1363,7 @@ bool PluginRunner::audioPathSnapshot(std::uint64_t& gaps, std::uint64_t& gapFram
 }
 
 void PluginRunner::setPlayingForTest(const std::string& name, std::uint64_t gaps, std::uint64_t gapFrames) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     audioGaps_ = gaps;
     audioGapFrames_ = gapFrames;
     audioInstances_.clear();
@@ -1375,12 +1382,12 @@ void PluginRunner::setPlayingForTest(const std::string& name, std::uint64_t gaps
 // ---------------------------------------------------------------------------
 
 void PluginRunner::setTxLink(std::shared_ptr<TxAudioLink> link) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     txLink_ = std::move(link);
 }
 
 void PluginRunner::setTxGranted(std::vector<std::string> keys) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     txGranted_ = std::move(keys);
     // A GRANT TAKEN BACK TAKES THE HOLDER WITH IT AT ONCE, not at the next audio block: the
     // GUI thread reads who holds the transmitter every frame, and a holder it was told about
@@ -1397,13 +1404,13 @@ void PluginRunner::setTxKeyed(bool keyed) {
     // UNDER THE LOCK, which is the point. pollTxAudio holds it for the whole of a block
     // including the pull(), so once this returns false no pull is in flight and none
     // will start: the caller can then empty the ring knowing nothing is still arriving.
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (txLink_) { txLink_->setKeyed(keyed); }
 }
 
 void PluginRunner::pollTxAudio() {
     const CurrentRadioScope radioScope(radio());
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     pollTxAudioLocked();
 }
 
@@ -1497,7 +1504,7 @@ void PluginRunner::foldTxAskedLocked() {
 PluginRunner::TxPluginState PluginRunner::txState(const std::string& pluginKey) const {
     TxPluginState s;
     if (pluginKey.empty()) { return s; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     s.asked = std::find(txAsked_.begin(), txAsked_.end(), pluginKey) != txAsked_.end();
     for (std::size_t i = 0; i < txInstances_.size(); ++i) {
         const TxInstance& t = txInstances_[i];
@@ -1517,7 +1524,7 @@ PluginRunner::TxPluginState PluginRunner::txState(const std::string& pluginKey) 
 
 std::uint32_t PluginRunner::txBits(const std::string& pluginKey) const {
     if (pluginKey.empty()) { return 0u; }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     std::uint32_t bits = 0u;
     if (std::find(txAsked_.begin(), txAsked_.end(), pluginKey) != txAsked_.end()) { bits |= kTxAsked; }
     for (std::size_t i = 0; i < txInstances_.size(); ++i) {
@@ -1536,7 +1543,7 @@ std::uint32_t PluginRunner::txBits(const std::string& pluginKey) const {
 }
 
 bool PluginRunner::txHolderKeyInto(std::string& out) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     if (txHolder_ == kNoTx) {
         out.clear();
         return false;
@@ -1546,7 +1553,7 @@ bool PluginRunner::txHolderKeyInto(std::string& out) const {
 }
 
 std::vector<std::string> PluginRunner::txAskers() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     std::vector<std::string> out = txAsked_;
     for (const TxInstance& t : txInstances_) {
         if (t.asked && std::find(out.begin(), out.end(), t.key) == out.end()) {
@@ -1557,17 +1564,17 @@ std::vector<std::string> PluginRunner::txAskers() const {
 }
 
 std::string PluginRunner::txHolderName() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return txHolder_ == kNoTx ? std::string() : txInstances_[txHolder_].name;
 }
 
 std::string PluginRunner::txHolderKey() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return txHolder_ == kNoTx ? std::string() : txInstances_[txHolder_].key;
 }
 
 std::string PluginRunner::txFirstGrantedName() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     for (const TxInstance& t : txInstances_) {
         if (std::find(txGranted_.begin(), txGranted_.end(), t.key) != txGranted_.end()) {
             return t.name;
@@ -1588,7 +1595,7 @@ void PluginRunner::pollAudioDiagnostics() {
     double sinkRate = 0.0;
     std::string playing;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<stall::TaggedMutex> lock(mutex_);
         events = audioEvents_;
         count = audioEventCount_;
         audioEventCount_ = 0;
@@ -1765,10 +1772,11 @@ void PluginRunner::pollImageTextLocked(std::uint32_t inputKind) {
 
 void PluginRunner::pollImages(std::vector<HostImage>& out) {
     const CurrentRadioScope radioScope(radio());
+    const stall::SiteScope lockSite("poll-images");   // (what a freeze report says this thread held the runner's lock for)
     // TRY, NEVER WAIT (freeze diagnosis P1): the window calls this every frame, and the lock is held across every I/Q decoder's process() and every other poll. A frame
     // that finds it taken keeps the pictures it has (`out` is left exactly as it stands, which is what "the last picture stands" below already means) and asks again next
     // frame.
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock<stall::TaggedMutex> lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) { return; }
 
     // Re-seed `out` whenever the instance set changed under it - a rescan, a
@@ -1883,8 +1891,9 @@ void PluginRunner::pollImages(std::vector<HostImage>& out) {
 
 bool PluginRunner::imagePress(const std::string& plugin, std::uint32_t x, std::uint32_t y) {
     const CurrentRadioScope radioScope(radio());
+    const stall::SiteScope lockSite("press");   // (what a freeze report says this thread held the runner's lock for)
     // TRY, NEVER WAIT, as pollImages: a press the lock is too busy for is dropped (the caller sees false) and the person presses again.
-    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    std::unique_lock<stall::TaggedMutex> lock(mutex_, std::try_to_lock);
     if (!lock.owns_lock()) { return false; }
     for (const ImageInstance& image : imageInstances_) {
         if (image.name == plugin && !image.failed && image.input != nullptr &&
@@ -1903,29 +1912,29 @@ std::vector<DecodedLine> PluginRunner::drainText() {
     // call site. Taken BEFORE the lock below, because it takes the lock
     // itself.
     pollAudioDiagnostics();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     std::vector<DecodedLine> out(pending_.begin(), pending_.end());
     pending_.clear();
     return out;
 }
 
 std::vector<DecoderStatus> PluginRunner::status() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return status_;
 }
 
 std::size_t PluginRunner::audioFramesFed() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return audioFed_;
 }
 
 std::size_t PluginRunner::iqFramesFed() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     return iqFed_;
 }
 
 std::size_t PluginRunner::activeCount() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     // INSTANCES STILL BEING FED, which is what the header promises. One that
     // reported permanent failure is kept only so its handle can be destroyed
     // in the right order; counting it would keep "DECODING" on the waterfall
@@ -1945,7 +1954,7 @@ std::size_t PluginRunner::activeCount() const {
 }
 
 void PluginRunner::feedSnapshot(std::size_t& active, std::vector<std::string>& feedingKeys) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<stall::TaggedMutex> lock(mutex_);
     // activeCount()'s count, inline (it takes the same lock).
     std::size_t n = 0;
     for (const Instance& i : instances_) {
