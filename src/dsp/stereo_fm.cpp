@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/stereo_fm.hpp"
 
+#include "dsp/dsp_substep.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -194,12 +196,16 @@ std::size_t StereoFm::process(const float* mpx, std::size_t n, float* left,
         // Stage 1: pilot to complex baseband. osc_[k] = e^{-j*2pi*19k*k/fs};
         // the real composite times it puts the pilot at DC (and its negative-
         // frequency image at -38 kHz, which the low-pass removes outright).
+        DSP_STEP_BEGIN(stepPilotMix, "stereo.pilot_mix");
         pilotNco_.generate(osc_.data(), n);
         for (std::size_t i = 0; i < n; ++i) {
             mix_[i] = osc_[i] * mpx[i];
         }
+        DSP_STEP_END(stepPilotMix);
+        DSP_STEP_BEGIN(stepPilotFilter, "stereo.pilot_filter");
         [[maybe_unused]] const std::size_t np =
             pilotLpf_.process(mix_.data(), n, pilotBb_.data());
+        DSP_STEP_END(stepPilotFilter);
         // Decimation 1: every input yields exactly one output.
         assert(np == n);
     }
@@ -209,6 +215,7 @@ std::size_t StereoFm::process(const float* mpx, std::size_t n, float* left,
     // rather than several because every quantity here is causal in the sample
     // index — splitting it into per-block passes would make the result depend
     // on where the caller chose to cut the stream.
+    DSP_STEP_BEGIN(stepPll, "stereo.pll");
     for (std::size_t i = 0; i < n; ++i) {
         const double x = static_cast<double>(mpx[i]);
 
@@ -313,8 +320,11 @@ std::size_t StereoFm::process(const float* mpx, std::size_t n, float* left,
                        static_cast<float>(2.0 * carrier38 * x * gate_)};
     }
 
+    DSP_STEP_END(stepPll);
+    DSP_STEP_BEGIN(stepAudioFilter, "stereo.audio_filter");
     [[maybe_unused]] const std::size_t na =
         audioLpf_.process(audioIn_.data(), n, audioOut_.data());
+    DSP_STEP_END(stepAudioFilter);
     assert(na == n);
 
     // Stage 3: matrix, then de-emphasis per channel.

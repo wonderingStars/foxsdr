@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "dsp/demod.hpp"
 
+#include "dsp/dsp_substep.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -259,7 +261,10 @@ std::size_t Demodulator::process(const std::complex<float>* in, std::size_t n,
     switch (mode_) {
         case DemodMode::NFM:
         case DemodMode::WFM: {
-            quad_.process(in, out, n);
+            {
+                DSP_SUBSTEP("demod.discriminator");
+                quad_.process(in, out, n);
+            }
             // In-place one-pole deemphasis over the discriminator output.
             //
             // BOTH FM modes run it, from the one time constant. NFM used to
@@ -270,7 +275,10 @@ std::size_t Demodulator::process(const std::complex<float>* in, std::size_t n,
             // WFM, where StereoFm applies the network after the stereo matrix):
             // a pole of exactly 0 makes g == 1 and the loop an exact
             // pass-through, so no signal is ever de-emphasised twice.
-            deemph_.process(out, n);
+            {
+                DSP_SUBSTEP("demod.deemph");
+                deemph_.process(out, n);
+            }
             break;
         }
 
@@ -311,12 +319,18 @@ void Demodulator::processSsb(const std::complex<float>* in, std::size_t n,
                              float* out) {
     work_.resize(n);
     filtered_.resize(ssbFilter_.outputCapacity(n));
+    DSP_STEP_BEGIN(stepShiftDown, "ssb.shift_down");
     shiftDown_.mix(in, work_.data(), n);
+    DSP_STEP_END(stepShiftDown);
     // Decimation 1 => the grid phase is always 0 and every input yields one
     // output, so m == n and the 1:1 process() contract holds.
+    DSP_STEP_BEGIN(stepSsbFilter, "ssb.filter");
     const std::size_t m = ssbFilter_.process(work_.data(), n, filtered_.data());
+    DSP_STEP_END(stepSsbFilter);
     assert(m == n);
+    DSP_STEP_BEGIN(stepShiftUp, "ssb.shift_up");
     shiftUp_.mix(filtered_.data(), filtered_.data(), m);
+    DSP_STEP_END(stepShiftUp);
     for (std::size_t i = 0; i < m; ++i) { out[i] = filtered_[i].real(); }
 }
 
