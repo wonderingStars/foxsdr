@@ -7,6 +7,9 @@
 +1 type "rtl_tcp" "127.0.0.1:9"
 +2 click "Add rtl_tcp"
 +60 state workspace.radios == 2
-+60 state workspace.r.2.notice contains "is rtl_tcp running there?"
+# 3f510fbe (2026-11-23) retries a refused rtl_tcp connect for 6 s (a real server refuses during its teardown) before it says so: an absent server now answers in about 7 s, not 2 s, so the notice is waited for
+# 600 ticks (10 s at the 60 Hz frame cap the drive runs use; the run has 1500 ticks).
+# The same commit rewords the hint to "...accepted the connection - is rtl_tcp running there, is the port right, and has the server finished with its previous client?..." (no question mark after "there").
++600 state workspace.r.2.notice contains "is rtl_tcp running there, is the port right"
 state workspace.r.2.notice contains "127.0.0.1:9"
 +1 shot "pane-notice-whole.png"
