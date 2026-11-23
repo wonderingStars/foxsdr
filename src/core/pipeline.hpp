@@ -368,6 +368,11 @@ public:
     // TEST SEAM (never set by the application): every DSP thread start waits this long before its first ring read, with the thread
     // counted as absent - so the window "the source is writing and the DSP thread is not there yet" can be made on demand. Process-wide.
     static void setDspStartDelayForTest(int ms);
+    // The DSP thread sets flush-to-zero and denormals-are-zero on ITSELF when it starts (x86 only; the control register is per thread, so no
+    // other thread is touched). It is ON because tests/test_dsp_denormal_cost.cpp measured a block of denormal-valued samples at 5.7 times the
+    // time without it. TEST SEAM: false makes the next DSP threads leave the register alone, which is how that test measures the cost.
+    // Process-wide; never set by the application.
+    static void setDspFlushDenormalsForTest(bool on);
     // True when a worker thread aborted on an exception — a USB SDR pulled
     // mid-stream being the case that motivated it. Latched until start().
     bool faulted() const;

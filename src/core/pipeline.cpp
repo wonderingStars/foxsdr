@@ -31,6 +31,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+#include <xmmintrin.h>   // _mm_setcsr: the flush-to-zero test seam
+#endif
 
 #include "core/recorder.hpp"
 #include "core/replay_ring.hpp"   // screen lane S3
@@ -40,6 +43,10 @@ namespace cascade::core {
 namespace {
 
 constexpr double kTwoPi = 6.283185307179586476925286766559;
+
+// See Pipeline::setDspFlushDenormalsForTest: ON by default (the measurement in tests/test_dsp_denormal_cost.cpp: a block whose samples are
+// denormal floats takes 5.7 times as long without it).
+std::atomic<bool> g_dspFlushDenormals{true};
 
 // See Pipeline::setDspStartDelayForTest and setDspBlockDelayForTest.
 std::atomic<int> g_dspStartDelayMs{0};
@@ -810,6 +817,7 @@ std::size_t Pipeline::ringCapacity() {
 
 void Pipeline::setDspStartDelayForTest(int ms) { g_dspStartDelayMs.store(ms, std::memory_order_relaxed); }
 void Pipeline::setDspBlockDelayForTest(int ms) { g_dspBlockDelayMs.store(ms, std::memory_order_relaxed); }
+void Pipeline::setDspFlushDenormalsForTest(bool on) { g_dspFlushDenormals.store(on, std::memory_order_relaxed); }
 
 std::uint64_t Pipeline::takeDspGapLongest(const char** phase) {
     const std::uint64_t packed = dspGapLongestPacked_.exchange(0, std::memory_order_relaxed);
@@ -2673,6 +2681,12 @@ void Pipeline::dspThreadBody() {
     if (const int delayMs = g_dspStartDelayMs.load(std::memory_order_relaxed); delayMs > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
     }
+    // FLUSH-TO-ZERO AND DENORMALS-ARE-ZERO, ON THIS THREAD ONLY (2026-11-23, tests/test_dsp_denormal_cost.cpp: a denormal-heavy input makes a
+    // block 5.7 times slower without it, 1.2 times for exact silence, none for ordinary signal). The control register is per thread, so
+    // nothing else changes; it also covers every plugin's process(), which runs here. x86 only; see setDspFlushDenormalsForTest.
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+    if (g_dspFlushDenormals.load(std::memory_order_relaxed)) { _mm_setcsr(_mm_getcsr() | 0x8040u); }   // FTZ (bit 15) and DAZ (bit 6)
+#endif
     // FROM HERE THE DSP THREAD READS THE RING: what the source cannot write from now on is a consumer that fell behind.
     dspAbsent_.store(false, std::memory_order_relaxed);
     // THE FIRST DRAIN, once per pipeline: the engine's digest minutes start from here (never 0: 0 means "not yet").
