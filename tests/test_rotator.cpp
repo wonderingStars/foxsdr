@@ -267,6 +267,22 @@ void testRotctldLink() {
     peer.rx_.clear();
     peer.feed("+12.50\r\n 3.25 \r\n");
     CHECK(link.getPosition(&p) && p.az == 12.5 && p.el == 3.25);
+    // R4-08 (network review of 2026-11-24): a reply is a finite number but may be absurd (1e300). The engine turns a position into an int for its change
+    // signature, which is undefined for such values. A position outside what any rotator reports is refused as malformed; the bounds are the
+    // GS-232 path's own (az up to 450, el up to 180) and, below, a negative minimum (hamlib's dummy rotator reports -180) stays accepted.
+    for (const char* bad : {"1e300\n5\n", "5\n1e300\n", "-1e300\n5\n", "5\n-1e300\n", "450.5\n0\n", "0\n180.5\n", "-360.5\n0\n", "0\n-90.5\n", "1e10\n1e10\n"}) {
+        peer.rx_.clear();
+        peer.feed(bad);
+        Position q;
+        CHECK(!link.getPosition(&q) && link.lastError() == "malformed position");
+        CHECK(!q.valid());   // and nothing was handed back
+    }
+    for (const char* good : {"450\n180\n", "0\n0\n", "-180\n-45\n", "-360\n-90\n", "359.99\n89.5\n"}) {
+        peer.rx_.clear();
+        peer.feed(good);
+        Position q;
+        CHECK(link.getPosition(&q) && q.valid());
+    }
 }
 
 // A real socket: a rotctld stand-in on 127.0.0.1.

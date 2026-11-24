@@ -204,6 +204,10 @@ public:
         if (!t_.readUntil('\n', &l2, timeoutMs_)) { return fail("no elevation line"); }
         Position p;
         if (!detail::parseNumber(l1, &p.az) || !detail::parseNumber(l2, &p.el)) { return fail("malformed position"); }
+        // R4-08: finite is not enough. The engine turns a position into an int for its change signature (undefined for 1e300), and no rotator
+        // reports such an angle. The upper bounds are the GS-232 path's own (az 450, el 180); a negative minimum is legal in hamlib (its dummy
+        // rotator reports -180), so the lower bounds are -360 and -90.
+        if (p.az < -360.0 || p.az > 450.0 || p.el < -90.0 || p.el > 180.0) { return fail("malformed position"); }
         *out = p;
         return true;
     }
