@@ -172,7 +172,15 @@ std::string Engine::patchReceiverRadioKey() const {
 // THE DEVICE LEDGER, REBUILT (engine/device_ledger.hpp). Every receiver slot is a holder (it is an open radio whether it is on a device or on the generator),
 // holding the radio it has open - or nothing while it has lent it to the patch, which the ledger records as a loan. Then every patch Radio node that names a
 // device claims it, in graph order and whether or not it is switched on (a node that is off still names the device: the plan's DeviceTwice rule); a node counts
-// toward the limit on open radios only while it is on and the patch runs. A refused claim is kept, in words that name the holder, and the node is never opened.
+// toward the limit on open radios only while it is OPEN (see below). A refused claim is kept, in words that name the holder, and the node is never opened.
+//
+// A PATCH NODE THAT IS NOT OPEN ONLY NAMES ITS DEVICE (radio holder fix, 0.99.114, device_ledger.hpp): it does not hold the radio against a receiver. Three things keep that
+// from putting two opens of one radio on the bus at once, and each is on the books here:
+//   1. "OPEN" IS WHAT IS TRUE, not the switch: a node is open while the patch runs and it is on, OR while its radio exists (patchRadios_) or is being opened
+//      (patchRadioPending_) - STOP, or a part switched off, closes the radio later in the same pass than the commands are applied;
+//   2. THE FIRST RADIO'S OPEN THAT IS STILL ON ITS WORKER holds its radio (Receiver::pendingOpenKey_); the radios after the first already keep claimedKey_ through theirs;
+//   3. AN OPEN STILL IN FLIGHT AFTER ITS ASKER LET GO holds it too: a patch open STOP handed to a detached thread (inFlightPatchOpens_) and an open a receiver set aside
+//      for another (Receiver::retiredOpens_). They are held as InFlight holders, described as whoever asked, and do not count toward the limit.
 void Engine::rebuildDeviceLedger() {
     // The first radio's books are read as the first radio's, whichever radio's work this is called from (a command addressed to radio 3 asks the ledger).
     SlotScope firstRadio(this, 0);
@@ -186,7 +194,11 @@ void Engine::rebuildDeviceLedger() {
                 // What the receiver would lend (the same question the loan asks, with the patch taken as running): its device, or its sound card.
                 const cascade::gui::ReceiverLoan held = cascade::gui::receiverSourceForPatch(true, rx().sourceKind_, rx().device_ != nullptr, rx().deviceOpenPending_, rx().deviceArgs_,
                                                                                             soundCardOpenPending_, soundCardLive_);
-                if (held.take) { key = pc::makeDeviceKey(held.kind, held.args); }
+                if (held.take) {
+                    key = pc::makeDeviceKey(held.kind, held.args);
+                } else if (rx().deviceOpenPending_) {
+                    key = rx().pendingOpenKey_;   // its open is on the worker: the radio is already its (the loan waits for the answer, the ledger does not)
+                }
             }
         }
         // A radio other than the first holds what it asked for when it was added or last pointed at a device (Receiver::claimedKey_, cleared by its own
@@ -197,9 +209,27 @@ void Engine::rebuildDeviceLedger() {
     if (patchMainKeep_.valid) {
         deviceLedger_.lend(DeviceHolder::receiver(0), pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args));
     }
+    // OPENS STILL IN FLIGHT AFTER THEIR ASKER LET GO: held, ahead of the nodes (so a node that names the radio is refused in words until the worker has returned). Not open
+    // radios: they do not count toward the limit.
+    std::uint32_t seq = 0;
+    for (auto it = inFlightPatchOpens_.begin(); it != inFlightPatchOpens_.end();) {
+        if (it->done && it->done->load()) {
+            it = inFlightPatchOpens_.erase(it);
+            continue;
+        }
+        deviceLedger_.claim(it->key, DeviceHolder::inFlight(DeviceHolder::patchNode(it->node), ++seq), false);
+        ++it;
+    }
+    for (std::size_t slot = 0; slot < receivers_.size(); ++slot) {
+        if (!receivers_[slot]) { continue; }
+        for (const Receiver::RetiredOpen& ro : receivers_[slot]->retiredOpens_) {
+            if (ro.open.valid() && !ro.key.empty()) { deviceLedger_.claim(ro.key, DeviceHolder::inFlight(DeviceHolder::receiver(slot), ++seq), false); }
+        }
+    }
     for (const pc::Node& n : patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Radio || n.device.empty()) { continue; }
-        const DeviceLedger::Claim c = deviceLedger_.claim(n.device, DeviceHolder::patchNode(n.id), patchRunning_ && n.on);
+        const bool open = (patchRunning_ && n.on) || patchRadios_.count(n.id) != 0 || patchRadioPending_.count(n.id) != 0;
+        const DeviceLedger::Claim c = deviceLedger_.claim(n.device, DeviceHolder::patchNode(n.id), open);
         if (!c.granted()) { patchLedgerRefusal_[n.id] = c.refusal; }
     }
 }
@@ -313,6 +343,7 @@ void Engine::patchReconcile() {
         const std::string as = patchRadioPendingAs_[id];
         it = patchRadioPending_.erase(it);
         patchRadioPendingAs_.erase(id);
+        patchRadioPendingKey_.erase(id);
         const pc::Node* n = patchGraph_.find(id);
         if (n == nullptr || openedAs(*n) != as || !n->on || !patchRunning_) {
             // The node went, was changed or switched off while the device
@@ -517,6 +548,7 @@ void Engine::patchReconcile() {
                     ? cascade::core::radioFromAir(conv, centre)
                     : 0.0;
             patchRadioPendingAs_[id] = as;
+            patchRadioPendingKey_[id] = n->device;
             patchRadioError_.erase(id);
             const auto hook = diskHook();
             patchRadioPending_[id] = std::async(std::launch::async, [device = n->device, radioHz, hook]() {
@@ -576,6 +608,7 @@ void Engine::patchReconcile() {
         }
         const std::string label = patchDeviceLabel(n->device);
         patchRadioPendingAs_[id] = as;
+        patchRadioPendingKey_[id] = n->device;
         patchRadioError_.erase(id);
         // Converted HERE, on the GUI thread that owns the remembered settings;
         // the worker only ever sees the radio's own figure. No value = "leave
@@ -865,14 +898,20 @@ void Engine::patchStopAll(bool restoreMain) {
     // An open still in flight is NOT waited on here - a USB walk can take
     // seconds and this is the GUI thread. Its future moves to a thread of its
     // own that waits for the answer and drops it, which closes the device.
+    // THE RADIO IS STILL BEING OPENED until that thread returns, so the ledger keeps it held (inFlightPatchOpens_): a receiver may not open it a second time beside it.
     for (auto& [id, fut] : patchRadioPending_) {
-        (void)id;
-        std::thread([f = std::move(fut)]() mutable {
-            if (f.valid()) { (void)f.get(); }
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        if (const auto key = patchRadioPendingKey_.find(id); key != patchRadioPendingKey_.end() && !key->second.empty()) {
+            inFlightPatchOpens_.push_back({id, key->second, done});
+        }
+        std::thread([f = std::move(fut), done]() mutable {
+            if (f.valid()) { (void)f.get(); }   // (the result, and the device it opened, are destroyed here)
+            done->store(true);
         }).detach();
     }
     patchRadioPending_.clear();
     patchRadioPendingAs_.clear();
+    patchRadioPendingKey_.clear();
 
     if (!restoreMain || !patchMainKeep_.valid) { return; }
     // --- the receiver gets its radio back ---------------------------------------

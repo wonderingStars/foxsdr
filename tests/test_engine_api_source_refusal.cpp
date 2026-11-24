@@ -1,7 +1,8 @@
 // test_engine_api_source_refusal.cpp - A REFUSED RADIO CHOICE SAYS WHY (0.99.113), in the real engine through the C table and its own passes, on a fake radio.
 //
-// Choosing a radio the device ledger says somebody holds (the owner's case: a Radio part of a saved, STOPPED patch names his B200) is refused FOXAPI_BUSY "in use by
-// patch radio N". Before this change nothing was shown and nothing logged. Now (WHO MAY HOLD A RADIO is not touched: the radio is still refused):
+// Choosing a radio the device ledger says somebody holds is refused FOXAPI_BUSY "in use by patch radio N". Before 0.99.113 nothing was shown and nothing logged.
+// (0.99.114 changed WHO MAY HOLD A RADIO - a patch part that is not open no longer holds it, tests/test_engine_api_radio_holder.cpp - so the part in tests A and E
+// is a RUNNING one, which still does; the same choice against a part of a stopped patch is accepted, and that test is in test_engine_api_radio_holder.cpp.)
 //
 //   A  A PATCH PART HOLDS IT: still BUSY with the API's unchanged words, the answer carries the holder as data (applied[0] = 2, applied[1] = the part), the Source error
 //      line (fact.status.sourceError, which both windows and remote clients read) carries the sentence naming the part, and one log line says what was refused and
@@ -56,14 +57,16 @@ struct AppWindowTestAccess {
         Engine::testHooks_.nativeScan = nullptr;
         Engine::testHooks_.soapyScan = nullptr;
     }
-    // A Radio node on the patch graph, switched off and the patch stopped (the owner's saved, stopped patch), naming `device`.
+    // A Radio node on the patch graph naming `device`, switched on, with the patch RUNNING (the part holds the radio only while it is open).
     static std::uint32_t addRadio(Engine& e, const std::string& device, const std::string& caption = "Radio") {
         const pc::NodeId id = e.patchGraph_.addNode(pc::NodeKind::Radio, caption);
         pc::Node* n = e.patchGraph_.mutableNode(id);
         n->device = device;
-        n->on = false;
+        n->on = true;
+        e.patchRunning_ = true;
         return id;
     }
+    static std::size_t patchRadiosOpen(const Engine& e) { return e.patchRadios_.size(); }
     static std::uint64_t openFailures(const Engine& e) { return e.radioOpenFailures_; }
 };
 }  // namespace cascade::gui
@@ -205,7 +208,7 @@ void testAPatchPartHoldsTheRadio() {
     CHECK(s.ok());
     CHECK(scanFakeRadio(d, s));
     const std::uint32_t part = Access::addRadio(d.eng, kKey, "Aerial B200");
-    passes(d.eng, 3);
+    CHECK(passUntil(d.eng, [&] { return Access::patchRadiosOpen(d.eng) == 1u; }));
     const std::uint64_t failsBefore = Access::openFailures(d.eng);
     const auto queuedBefore = cascade::core::radioreport::global().stats().failuresQueued;
     const int refusalsBefore = logCount("was refused: the radio is held by");
@@ -236,7 +239,8 @@ void testAPatchPartHoldsTheRadio() {
     CHECK_EQ(fact(s, "radio.handoffMoved"), std::string());
 
     // C: the next ACCEPTED choice that changes the source (the I/Q file row; the generator is what this radio is on, and picking the row a radio is on is a no-op that
-    // clears nothing - the engine's own rule, unchanged) clears the line, as it clears any other.
+    // clears nothing - the engine's own rule, unchanged) clears the line, as it clears any other. (Windows: the new window's Source line and the classic window's both
+    // read this one fact, status.sourceError: signal_logic.cpp and the state's sourceError; tests 24, 25, 26 and 27 of the review are A, C and D here.)
     const testing::Outcome ok = pumped(d.eng, s, testing::cmd(FOXAPI_OP_SELECT_SOURCE, 0, 0, "row:iqfile"));
     CHECK_EQ(ok.result.status, static_cast<int32_t>(FOXAPI_OK));
     passes(d.eng, 5);
@@ -274,7 +278,7 @@ void testRadioAddForAPartsDevice() {
     CHECK(s.ok());
     CHECK(scanFakeRadio(d, s));
     const std::uint32_t part = Access::addRadio(d.eng, kKey, "Aerial B200");
-    passes(d.eng, 3);
+    CHECK(passUntil(d.eng, [&] { return Access::patchRadiosOpen(d.eng) == 1u; }));
     const testing::Outcome o = pumped(d.eng, s, testing::cmd(FOXAPI_OP_RADIO_ADD, 0, 2, engine_api_test::kFakeRadioId));
     CHECK(o.landed);
     CHECK_EQ(o.result.status, static_cast<int32_t>(FOXAPI_BUSY));

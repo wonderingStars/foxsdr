@@ -1,6 +1,7 @@
 // test_refusal_popup_app.cpp - A REFUSED RADIO CHOICE SAYS WHY, in the CLASSIC window (0.99.113): the window's side, against the real engine on a fake radio.
 //
-// The saved patch has a Radio part that names the radio, the patch is stopped (the owner's case: his B200). The window's Source list click (AppWindow::submitSourceChoice - the
+// The patch has a Radio part that names the radio, switched on, and the patch RUNS (0.99.114: a part of a STOPPED patch no longer holds its radio, so the owner's saved patch
+// no longer refuses his B200 - tests/test_engine_api_radio_holder.cpp; a part that is open still does). The window's Source list click (AppWindow::submitSourceChoice - the
 // Selectable's own call) is refused FOXAPI_BUSY. This holds that:
 //   A  the Source error line (fact.status.sourceError, which the window letters in the Source section) carries the sentence naming the part;
 //   B  the window raises its popup ONCE, for the answer to ITS OWN click, with the radio's label, the part's number and the two keys' words, and the modal draws in a frame
@@ -78,7 +79,8 @@ struct AppWindowTestAccess {
             id = eng(a).patchGraph_.addNode(pc::NodeKind::Radio, "Aerial B200");
             pc::Node* n = eng(a).patchGraph_.mutableNode(id);
             n->device = device;
-            n->on = false;
+            n->on = true;
+            eng(a).patchRunning_ = true;   // the part holds its radio only while it is open
         });
         return id;
     }

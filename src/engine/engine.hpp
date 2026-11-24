@@ -2345,6 +2345,17 @@ private:
     };
     std::map<cascade::core::patch::NodeId, std::future<PatchRadioOpen>> patchRadioPending_;
     std::map<cascade::core::patch::NodeId, std::string> patchRadioPendingAs_;
+    // The device key each pending open of a patch radio is opening (the node's own device when it was launched: the node may be changed while it opens).
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioPendingKey_;
+    // PATCH OPENS STILL IN FLIGHT AFTER THE PATCH LET GO (radio holder fix, 0.99.114): patchStopAll hands a pending open to a detached thread, which waits for the
+    // answer and drops it (closing the device). The radio is still being opened until that thread has returned, so the ledger keeps it held; the thread raises `done`
+    // (a shared flag, no lock) when it has, and the next rebuildDeviceLedger forgets the entry.
+    struct InFlightPatchOpen {
+        cascade::core::patch::NodeId node = 0;
+        std::string key;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+    std::vector<InFlightPatchOpen> inFlightPatchOpens_;
     // Why a radio is not running, when it tried and failed; drawn on its face
     // and turned into Problem::RadioFailed for the plan.
     std::map<cascade::core::patch::NodeId, std::string> patchRadioError_;

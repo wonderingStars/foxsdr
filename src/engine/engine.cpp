@@ -1943,7 +1943,7 @@ void Engine::retirePendingOpen() {
     }
     // The worker returns within ~50 ms of its next look at the flag (a name lookup in progress cannot be interrupted); nobody waits for it here.
     if (rx().openCancel_) { rx().openCancel_->store(true); }
-    rx().retiredOpens_.push_back(std::move(rx().deviceOpenFuture_));
+    rx().retiredOpens_.push_back({std::move(rx().deviceOpenFuture_), rx().pendingOpenKey_});
     rx().deviceOpenPending_ = false;
     rx().deviceBusyLabel_.clear();
     cascade::core::diagLogf("source: the pending open was set aside for a new one");
@@ -1951,12 +1951,12 @@ void Engine::retirePendingOpen() {
 
 void Engine::reapRetiredOpens() {
     constexpr auto kNoWait = std::chrono::seconds(0);
-    std::vector<std::future<DeviceOpenResult>>& v = rx().retiredOpens_;
+    std::vector<Receiver::RetiredOpen>& v = rx().retiredOpens_;
     for (std::size_t i = 0; i < v.size();) {
-        if (!v[i].valid()) {
+        if (!v[i].open.valid()) {
             v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
-        } else if (v[i].wait_for(kNoWait) == std::future_status::ready) {
-            drainDeviceOpen(v[i]);   // destroys the result: a device the retired open managed to open is closed
+        } else if (v[i].open.wait_for(kNoWait) == std::future_status::ready) {
+            drainDeviceOpen(v[i].open);   // destroys the result: a device the retired open managed to open is closed
             v.erase(v.begin() + static_cast<std::ptrdiff_t>(i));
         } else {
             ++i;
@@ -1968,8 +1968,8 @@ void Engine::reapPendingDeviceOpen() {
     // THE OPENS SET ASIDE (retirePendingOpen) go first, whatever is pending now: each one that is finished is drained here, each one that is not goes
     // to a detached reaper like the pending open below - no wait for any of them, so quitting adds nothing to the shutdown budget.
     reapRetiredOpens();
-    for (std::future<DeviceOpenResult>& f : rx().retiredOpens_) {
-        std::thread([g = std::move(f)]() mutable { drainDeviceOpen(g); }).detach();
+    for (Receiver::RetiredOpen& f : rx().retiredOpens_) {
+        std::thread([g = std::move(f.open)]() mutable { drainDeviceOpen(g); }).detach();
     }
     rx().retiredOpens_.clear();
     if (!rx().deviceOpenPending_ || !rx().deviceOpenFuture_.valid()) { return; }
@@ -2413,6 +2413,9 @@ void Engine::launchDeviceOpen(DeviceOpenResult r, const std::string& busyLabel) 
     }
     rx().deviceBusyLabel_ = busyLabel;
     rx().deviceOpenPending_ = true;
+    // THE RADIO THIS OPEN IS OPENING, on the ledger's books from now (set AFTER the first open was set aside above, which kept the key it had): until it lands, nothing
+    // else may open the same radio beside it (rebuildDeviceLedger, radio holder fix 0.99.114).
+    rx().pendingOpenKey_ = cascade::core::patch::makeDeviceKey(r.kind, r.args);
     // THE FLAG THAT ABANDONS THIS OPEN (an rtl_tcp connect or header wait looks at it); raised by selectSource and at quit.
     r.openCancel = std::make_shared<std::atomic<bool>>(false);
     rx().openCancel_ = r.openCancel;
@@ -8931,7 +8934,11 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 if (kind != "file" && kind != "open-pluto" && kind != "open-rtltcp" && kind != "open-kiwisdr" && kind != "open-rawiq" && kind != "row" && kind != "soundcard" && wireb::findSourceByOpenWord(kind) == nullptr /* wire-b */) {
                     const std::string key = cascade::core::patch::makeDeviceKey(kind, text.substr(colon + 1));
                     rebuildDeviceLedger();
-                    const DeviceHolder holder = deviceLedger_.holderOf(key);
+                    // WHO HOLDS IT AGAINST A RECEIVER (radio holder fix, 0.99.114): a patch part that is not open - the patch is stopped, or the part's switch is off - only names the
+                    // radio and does not hold it; an open part, another radio, the transmitter and an open still in flight do. THE FIRST RADIO WHILE A PATCH RUNS keeps the stricter
+                    // answer: the running patch takes whatever radio the first radio holds on its next pass (the loan, engine_patch_radios.cpp), so a part that names the radio
+                    // holds it for the first radio open or not.
+                    const DeviceHolder holder = (scopedSlot() == 0u && patchRunning_) ? deviceLedger_.holderOf(key) : deviceLedger_.blockerOf(key);
                     if (!holder.none() && holder != DeviceHolder::receiver(scopedSlot())) {
                         // A REFUSED CHOICE SAYS WHY (0.99.113, core/radio_refusal.hpp). The API answer and its text are unchanged (remote clients and tests read them); the person is told on the
                         // Source section's error line, in both windows and for remote clients, in the neighbouring branches' own way (a sentence through tr() written to sourceError_, which the
@@ -8939,7 +8946,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                         // window can offer more without reading a sentence. NOTHING here counts a failed open, files a report or raises the hand-off question: the radio never failed to open.
                         const RefusalHolder who = refusalHolderOf(holder);
                         const std::string args = text.substr(colon + 1);
-                        const cascade::core::patch::Node* holdingPart = holder.kind == DeviceHolder::Kind::PatchNode ? patchGraph_.find(static_cast<cascade::core::patch::NodeId>(holder.id)) : nullptr;   // named by its caption: what the Patch page shows
+                        const DeviceHolder owner = holder.owner();   // (an open still in flight is named as whoever asked for it)
+                        const cascade::core::patch::Node* holdingPart = owner.kind == DeviceHolder::Kind::PatchNode ? patchGraph_.find(static_cast<cascade::core::patch::NodeId>(owner.id)) : nullptr;   // named by its caption: what the Patch page shows
                         rx().sourceError_ = cascade::core::refusal::sourceSentence(who.kind, who.number, holdingPart != nullptr ? holdingPart->name : std::string());
                         std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args) : modelFromNativeLabel(nativeLabelFor(kind, args));
                         if (label.empty() || label == args) { label = kind; }

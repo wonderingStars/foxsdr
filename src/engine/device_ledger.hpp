@@ -7,8 +7,14 @@
 // core::patch::sameDevice's, unchanged - including the serial match across driver stacks.
 //
 // THE LIMIT. At most `limit` radios open in total, receivers and patch radios together (the owner's rule: eight, kMaxReceivers). A holder counts
-// toward it when it is OPEN; a patch node that merely names a device (its switch is off, or the patch is stopped) reserves the device but does not
+// toward it when it is OPEN; a patch node that merely names a device (its switch is off, or the patch is stopped) names the device but does not
 // count. Past the limit a claim is refused with a sentence that states the limit and names every holder.
+//
+// WHO MAY BE REFUSED BY A PATCH NODE (0.99.114). A patch node that is not OPEN only NAMES a device: it does not hold it against a RECEIVER, so a stopped patch (or
+// a part switched off) never takes a radio from the person who chose it as Source or added it as another radio. Against another PATCH NODE it holds as it always
+// did - the plan's DeviceTwice rule, "named twice", and its words, are not touched - and an OPEN node, a receiver, the transmitter and an open still in flight
+// (see InFlight) hold against everyone. The rule is ONE: DeviceLedger::claim() applies it to a receiver that asks, and blockerOf() answers the same question for a
+// choice that is judged before it is made (FOXAPI_OP_SELECT_SOURCE).
 //
 // THE LOAN. A receiver that lends its radio to the patch page (the page takes it while the patch runs, the receiver runs on the generator meanwhile)
 // is recorded with lend(): the radio is then free for a patch node to claim, and lent() says the receiver is waiting to get it back.
@@ -29,18 +35,28 @@
 namespace cascade::engine {
 
 struct DeviceHolder {
-    enum class Kind : std::uint8_t { None, Receiver, PatchNode, Transmitter };
+    // InFlight: a driver open that is still running on a worker after the one who asked for it let go of it (a patch open handed to a detached thread by STOP, an open
+    // the first radio set aside for another). The radio is being opened all the same, and nobody may open it a second time beside that open; it is named as whoever
+    // asked for it (describe() and owner()), and it is held against every asker, a receiver included.
+    enum class Kind : std::uint8_t { None, Receiver, PatchNode, Transmitter, InFlight };
     Kind kind = Kind::None;
-    // Receiver: the slot, from 0 (it is spelled Radio <slot + 1>). PatchNode: the node's id. Transmitter: 0.
+    // Receiver: the slot, from 0 (it is spelled Radio <slot + 1>). PatchNode: the node's id. Transmitter: 0. InFlight: a number that tells this open from the others.
     std::uint32_t id = 0;
+    // InFlight only: who asked for the open (a Receiver or a PatchNode).
+    Kind ofKind = Kind::None;
+    std::uint32_t ofId = 0;
 
     static DeviceHolder receiver(std::size_t slot) { return {Kind::Receiver, static_cast<std::uint32_t>(slot)}; }
     static DeviceHolder patchNode(std::uint32_t node) { return {Kind::PatchNode, node}; }
     static DeviceHolder transmitter() { return {Kind::Transmitter, 0}; }
+    static DeviceHolder inFlight(const DeviceHolder& of, std::uint32_t seq) { return {Kind::InFlight, seq, of.kind, of.id}; }
 
     bool operator==(const DeviceHolder& o) const { return kind == o.kind && id == o.id; }
     bool operator!=(const DeviceHolder& o) const { return !(*this == o); }
     bool none() const { return kind == Kind::None; }
+
+    // WHO IT IS TO A PERSON: the holder itself, or for an open still in flight the one that asked for it.
+    DeviceHolder owner() const { return kind == Kind::InFlight ? DeviceHolder{ofKind, ofId} : *this; }
 
     // The words a person is told: "Radio 2", "patch radio 3" (the node's number), "the transmitter".
     std::string describe() const {
@@ -48,6 +64,7 @@ struct DeviceHolder {
             case Kind::Receiver: return "Radio " + std::to_string(id + 1u);
             case Kind::PatchNode: return "patch radio " + std::to_string(id);
             case Kind::Transmitter: return "the transmitter";
+            case Kind::InFlight: return owner().describe();
             case Kind::None: break;
         }
         return "nobody";
@@ -81,15 +98,24 @@ public:
     // `who` asks to hold `key`. `open`: the holder is a radio that is open now, counted toward the limit (false: it only names the device, as a patch
     // node with its switch off does). A holder holds ONE device: asking again replaces what it held. An empty key and the generator are never held
     // against anyone (the generator is exempt; an empty key is no device at all) but the holder is still recorded, and still counts if open.
+    //
+    // A RECEIVER that asks is not refused by a patch node that is not open (see the head of this file): it is granted the radio, and each such node that held it
+    // is then named as blocked by the receiver ("in use by Radio 1" when it asks again). Everyone else is judged as before.
     Claim claim(const std::string& key, DeviceHolder who, bool open = true) {
         remove(who);
         Claim c;
         const bool exempt = key.empty() || cascade::core::patch::isGeneratorKey(key);
+        std::vector<std::size_t> displaced;   // the not-open nodes that held this radio and let a receiver have it
         if (!exempt) {
             // The first entry, in the order the claims were made, that names this radio: a node that was itself refused still counts as naming it
             // (the plan's rule, so the plan and the engine always agree), and a refusal names the holder behind it.
-            for (const Entry& e : entries_) {
+            for (std::size_t i = 0; i < entries_.size(); ++i) {
+                const Entry& e = entries_[i];
                 if (!e.exempt && cascade::core::patch::sameDevice(e.key, key)) {
+                    if (who.kind == DeviceHolder::Kind::Receiver && !blocksReceiver(e)) {
+                        if (e.held) { displaced.push_back(i); }
+                        continue;
+                    }
                     if (e.held || !e.blockedBy.none()) {
                         c.verdict = Verdict::Held;
                         c.holder = e.held ? e.who : e.blockedBy;
@@ -106,6 +132,12 @@ public:
         if (c.verdict == Verdict::Granted && open && countOpen() >= limit_) {
             c.verdict = Verdict::LimitReached;
             c.refusal = limitSentence();
+        }
+        if (c.verdict == Verdict::Granted) {
+            for (const std::size_t i : displaced) {
+                entries_[i].held = false;
+                entries_[i].blockedBy = who;
+            }
         }
         Entry e;
         e.key = key;
@@ -157,6 +189,16 @@ public:
         return {};
     }
 
+    // Who holds the radio `key` AGAINST A RECEIVER, or nobody: holderOf without the patch nodes that are not open (the question of a source choice, asked before the
+    // claim is made - claim() gives a receiver the same answer).
+    DeviceHolder blockerOf(const std::string& key) const {
+        if (key.empty() || cascade::core::patch::isGeneratorKey(key)) { return {}; }
+        for (const Entry& e : entries_) {
+            if (!e.exempt && e.held && blocksReceiver(e) && cascade::core::patch::sameDevice(e.key, key)) { return e.who; }
+        }
+        return {};
+    }
+
     // The device `who` holds ("" for none, the generator or a holder that is not there).
     std::string keyOf(DeviceHolder who) const {
         for (const Entry& e : entries_) {
@@ -204,6 +246,9 @@ private:
         bool open = false;
         bool held = false;       // granted: this is the holder of the radio (a refused claim only names it)
     };
+    // A patch node holds a radio against a receiver only while it holds it AND is open: not-open (the patch stopped, the part switched off) and refused nodes only
+    // name it. Every other holder - a receiver, the transmitter, an open in flight - holds against a receiver as against anyone.
+    static bool blocksReceiver(const Entry& e) { return e.who.kind != DeviceHolder::Kind::PatchNode || (e.held && e.open); }
     struct Loan {
         DeviceHolder from;
         std::string key;

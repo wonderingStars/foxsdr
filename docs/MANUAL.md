@@ -1230,7 +1230,7 @@ to several radios at once, and no other real radio has been tried.*
 **How many.** The main window opens up to **eight** radios at once, numbered Radio 1 to Radio 8. That limit counts every
 open radio, including the radios of a patch: the ninth is refused with "at most 8 radios can be open at once", followed by
 who holds the others. A given physical radio can be open on one radio at a time ("in use by Radio 2"); any number of the
-eight can be signal generators. Choosing a radio that is held elsewhere is refused, and the Source section says who holds it; when a Radio part of the patch names it, a notice also says which part and offers to open the Patch page. **The patch canvas is a separate limit:** a patch holds at most **five** Radio nodes (see
+eight can be signal generators. Choosing a radio that is held elsewhere is refused, and the Source section says who holds it; when a Radio part of the patch names it, a notice also says which part and offers to open the Patch page. A Radio part only holds its radio while it is open: with the patch stopped, or the part switched off, you can choose the radio as Source or add it as another radio, and the part then shows that the radio is in use by that radio. **The patch canvas is a separate limit:** a patch holds at most **five** Radio nodes (see
 [The patch view](#the-patch-view)).
 
 **Opening a second radio.** The **Add a radio** key at the right of the status bar, or the same card drawn in an empty pane,

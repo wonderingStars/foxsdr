@@ -17,12 +17,15 @@ struct RefusalHolder {
     int number = 0;
 };
 
-inline RefusalHolder refusalHolderOf(const DeviceHolder& h) {
+inline RefusalHolder refusalHolderOf(const DeviceHolder& holder) {
     namespace rf = cascade::core::refusal;
+    // an open still in flight is described as the one that asked for it (DeviceHolder::owner)
+    const DeviceHolder h = holder.owner();
     switch (h.kind) {
         case DeviceHolder::Kind::Receiver: return {rf::kHolderReceiver, static_cast<int>(h.id) + 1};
         case DeviceHolder::Kind::PatchNode: return {rf::kHolderPatchPart, static_cast<int>(h.id)};
         case DeviceHolder::Kind::Transmitter: return {rf::kHolderTransmitter, 0};
+        case DeviceHolder::Kind::InFlight:
         case DeviceHolder::Kind::None: break;
     }
     return {};

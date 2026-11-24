@@ -196,7 +196,16 @@ struct Receiver {
     // future is PARKED HERE instead of being assigned over - a std::async future's destructor waits for its worker, and that wait is the control
     // thread's. Reaped without waiting (pollDeviceOpen: a ready one is drained, which closes any device it opened) and at quit (reapPendingDeviceOpen:
     // the unfinished ones go to detached reapers, no wait).
-    std::vector<std::future<DeviceOpenResult>> retiredOpens_;
+    // Each carries the key of the radio it is opening (core::patch::makeDeviceKey), so the device ledger keeps that radio held until the worker has returned and the
+    // result has been drained: the radio is still being opened by it (radio holder fix, 0.99.114).
+    struct RetiredOpen {
+        std::future<DeviceOpenResult> open;
+        std::string key;
+    };
+    std::vector<RetiredOpen> retiredOpens_;
+    // THE KEY OF THE OPEN THAT IS PENDING (read only while deviceOpenPending_): the device ledger holds the radio for this receiver from the moment its open is
+    // launched, not from the moment it lands - a second open of the one radio beside it is what the ledger exists to prevent (radio holder fix, 0.99.114).
+    std::string pendingOpenKey_;
     // What the PENDING open closed to make its attempt (DeviceOpenResult::closedRadio and its label), kept so that an open that replaces it while it is
     // still pending carries the radio the user had before both: a failed second open must still remember it for the exit save (0.99.36).
     cascade::gui::RememberedSource pendingClosedRadio_;

@@ -49,9 +49,37 @@ inline std::atomic<bool>& fakeRadioThrows() {
     return on;
 }
 
+// WHAT THE ENGINE DID WITH THE RADIO, for the tests that ask whether one physical radio was ever open twice at once (tests/test_engine_api_radio_holder.cpp): every
+// successful open() counts, every close (closeDevice() or the radio's destruction, whichever comes first) ends one, and the highest number open at the same moment is
+// kept. A test resets them before it starts. `fakeRadioOpenDelayMs` makes open() take that long (a B200 takes seconds), so a test can act while an open is in flight.
+// Nothing here changes how the radio behaves for any other test: with the delay at 0 the counters only count.
+inline std::atomic<int>& fakeRadioOpens() {
+    static std::atomic<int> n{0};
+    return n;
+}
+inline std::atomic<int>& fakeRadioLive() {
+    static std::atomic<int> n{0};
+    return n;
+}
+inline std::atomic<int>& fakeRadioPeak() {
+    static std::atomic<int> n{0};
+    return n;
+}
+inline std::atomic<int>& fakeRadioOpenDelayMs() {
+    static std::atomic<int> n{0};
+    return n;
+}
+inline void resetFakeRadioCounters() {
+    fakeRadioOpens() = 0;
+    fakeRadioLive() = 0;
+    fakeRadioPeak() = 0;
+    fakeRadioOpenDelayMs() = 0;
+}
+
 class FakeRadio final : public cascade::source::DeviceSource {
 public:
     explicit FakeRadio(std::string kind) : kind_(std::move(kind)) {}
+    ~FakeRadio() override { closeDevice(); }
     bool start() override {
         abort_ = false;
         return true;
@@ -90,10 +118,22 @@ public:
             lastError_ = "no such device";
             return false;
         }
-        open_ = true;
+        if (const int delay = fakeRadioOpenDelayMs().load(); delay > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delay)); }
+        if (!open_) {
+            open_ = true;
+            fakeRadioOpens().fetch_add(1);
+            const int live = fakeRadioLive().fetch_add(1) + 1;
+            int peak = fakeRadioPeak().load();
+            while (live > peak && !fakeRadioPeak().compare_exchange_weak(peak, live)) {}
+        }
         return true;
     }
-    void closeDevice() override { open_ = false; }
+    void closeDevice() override {
+        if (open_) {
+            open_ = false;
+            fakeRadioLive().fetch_sub(1);
+        }
+    }
     bool isOpen() const override { return open_; }
     std::vector<cascade::source::GainInfo> gains() const override {
         cascade::source::GainInfo g;

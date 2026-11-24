@@ -9,10 +9,12 @@
 //   C  the generator and an empty key are never held against anyone;
 //   D  a holder holds ONE device: asking again replaces what it held, and the old one is free; release frees it too;
 //   E  THE LIMIT: the claim that would be the limit-plus-first open radio is refused, the sentence states the limit and names every open holder;
-//      a holder that merely NAMES a device (not open) reserves it without counting;
+//      a holder that merely NAMES a device (not open) does not count (and, if it is a patch node, does not hold the device against a receiver: H);
 //   F  THE ORDER IS THE PLAN'S: a claim that was refused still names its device (the plan's DeviceTwice rule, which looks at every earlier radio),
 //      and a refusal names the holder behind it, never the refused claimant;
-//   G  THE LOAN: a receiver's loan is recorded, and the radio is free for a patch radio to claim.
+//   G  THE LOAN: a receiver's loan is recorded, and the radio is free for a patch radio to claim;
+//   H  A PATCH NODE THAT IS NOT OPEN DOES NOT HOLD A RADIO AGAINST A RECEIVER (0.99.114): a stopped part names the device and no more; node against node ("named twice"),
+//      an open node, a receiver and the transmitter hold as they did.
 //
 // Each test was shown red against a mutant of the ledger (see docs/multi-radio-records/engine-stages-1-3.md).
 //
@@ -128,7 +130,7 @@ void testTheLimitStatesItselfAndNamesTheHolders() {
     CHECK(l.holderOf(kHackrf) == DeviceHolder{});
     // A holder that is already one of them is not refused by the limit.
     CHECK(l.claim(kRtl, DeviceHolder::receiver(0)).granted());
-    // A node that only NAMES a device (switch off, patch stopped) reserves it and does not count.
+    // A node that only NAMES a device (switch off, patch stopped) does not count (against another NODE it still holds the device: F; against a receiver it does not: H).
     const std::string kSdrplay = pc::makeDeviceKey("sdrplay", "serial=1234567890");
     CHECK(l.claim(kSdrplay, DeviceHolder::patchNode(10), /*open=*/false).granted());
     CHECK_EQ(l.countOpen(), static_cast<std::size_t>(3));
@@ -204,6 +206,136 @@ void testARecordingIsDecidedByItsFile() {
     CHECK_EQ(c.refusal, std::string("in use by patch radio 1"));
 }
 
+// ---- H: WHO MAY BE REFUSED BY A PATCH NODE (radio holder fix, 0.99.114) -------------------------------------------------------------------------------
+//
+// A patch Radio node that is not OPEN (the patch is stopped, or its switch is off) only NAMES a device: it does not hold it against a RECEIVER. Node against node
+// (the plan's DeviceTwice rule, "named twice") is unchanged, and so is everything else that is open: a receiver, the transmitter, an open node.
+
+void testStoppedNodeDoesNotBlockAReceiver() {
+    DeviceLedger l(8);
+    CHECK(l.claim(kB200, DeviceHolder::patchNode(1), /*open=*/false).granted());
+    // the owner's case: a stopped part names the B200, and Radio 1 asks for it
+    const DeviceLedger::Claim c = l.claim(kB200, DeviceHolder::receiver(0));
+    CHECK(c.granted());
+    CHECK(c.verdict == DeviceLedger::Verdict::Granted);
+    CHECK(c.refusal.empty());
+    CHECK(l.holderOf(kB200) == DeviceHolder::receiver(0));
+    CHECK_EQ(l.countOpen(), static_cast<std::size_t>(1));   // the node never counted; the receiver does
+    // the node, asking again, now reads who has the radio
+    const DeviceLedger::Claim node = l.claim(kB200, DeviceHolder::patchNode(1), /*open=*/false);
+    CHECK(!node.granted());
+    CHECK(node.verdict == DeviceLedger::Verdict::Held);
+    CHECK_EQ(node.refusal, std::string("in use by Radio 1"));
+    CHECK(node.holder == DeviceHolder::receiver(0));
+}
+
+void testOpenNodeStillBlocksAReceiver() {
+    DeviceLedger l(8);
+    CHECK(l.claim(kB200, DeviceHolder::patchNode(7), /*open=*/true).granted());
+    const DeviceLedger::Claim c = l.claim(kB200, DeviceHolder::receiver(0));
+    CHECK(!c.granted());
+    CHECK(c.verdict == DeviceLedger::Verdict::Held);
+    CHECK_EQ(c.refusal, std::string("in use by patch radio 7"));
+    CHECK(l.holderOf(kB200) == DeviceHolder::patchNode(7));
+    // the same through the other driver stack's spelling
+    CHECK(l.claim(kRtl, DeviceHolder::patchNode(8), true).granted());
+    CHECK_EQ(l.claim(kRtlViaSoapy, DeviceHolder::receiver(1)).refusal, std::string("in use by patch radio 8"));
+}
+
+void testTwoStoppedNodesStillNameTwice() {
+    DeviceLedger l(8);
+    CHECK(l.claim(kB200, DeviceHolder::patchNode(1), false).granted());
+    const DeviceLedger::Claim second = l.claim(kB200, DeviceHolder::patchNode(2), false);
+    CHECK(!second.granted());
+    CHECK(second.verdict == DeviceLedger::Verdict::Held);
+    CHECK_EQ(second.refusal, std::string("in use by patch radio 1"));   // the node's words, never the limit's
+    CHECK(second.refusal.find("at most") == std::string::npos);
+    // and a receiver arriving later takes the radio from the first of them, which the second still depends on only by name
+    CHECK(l.claim(kB200, DeviceHolder::receiver(0)).granted());
+    CHECK(l.holderOf(kB200) == DeviceHolder::receiver(0));
+}
+
+void testStoppedFamilyNodeBlocksNoDongle() {
+    // a part that names "any RTL-SDR" through SoapySDR (no serial) matches every dongle of the family; stopped, it must hold none of them
+    DeviceLedger l(8);
+    const std::string family = pc::makeDeviceKey("soapy", "driver=rtlsdr");
+    const std::string a = pc::makeDeviceKey("rtlsdr", "serial=A0000001");
+    const std::string b = pc::makeDeviceKey("rtlsdr", "serial=B0000002");
+    CHECK(l.claim(family, DeviceHolder::patchNode(1), false).granted());
+    CHECK(l.claim(a, DeviceHolder::receiver(0)).granted());
+    CHECK(l.claim(b, DeviceHolder::receiver(1)).granted());
+    CHECK(l.holderOf(a) == DeviceHolder::receiver(0));
+    CHECK(l.holderOf(b) == DeviceHolder::receiver(1));
+    // ...and the same family node, OPEN, holds either dongle against a receiver
+    DeviceLedger open(8);
+    CHECK(open.claim(family, DeviceHolder::patchNode(1), true).granted());
+    CHECK(!open.claim(a, DeviceHolder::receiver(0)).granted());
+    CHECK(!open.claim(b, DeviceHolder::receiver(1)).granted());
+}
+
+void testReceiverStillBlocksReceiverAcrossStacks() {
+    DeviceLedger l(8);
+    CHECK(l.claim(kRtl, DeviceHolder::receiver(0)).granted());
+    const DeviceLedger::Claim c = l.claim(kRtlViaSoapy, DeviceHolder::receiver(1));
+    CHECK(!c.granted());
+    CHECK_EQ(c.refusal, std::string("in use by Radio 1"));
+    // a stopped node naming it changes nothing for the second receiver
+    CHECK(!l.claim(kRtl, DeviceHolder::patchNode(3), false).granted());
+    CHECK_EQ(l.claim(kRtlViaSoapy, DeviceHolder::receiver(1)).refusal, std::string("in use by Radio 1"));
+}
+
+void testSameSerialInTwoFamiliesIsOneRadio() {
+    // PINS TODAY'S ANSWER (review F9, for the owner to decide): sameDevice compares serial strings without the driver family, so two radios of two families that
+    // happen to carry one serial (a default, an all-zero one) are one radio to the ledger. Not changed by the holder fix.
+    const std::string rtl = pc::makeDeviceKey("rtlsdr", "serial=00000001");
+    const std::string hack = pc::makeDeviceKey("hackrf", "serial=00000001");
+    CHECK(pc::sameDevice(rtl, hack));
+    DeviceLedger l(8);
+    CHECK(l.claim(rtl, DeviceHolder::receiver(0)).granted());
+    const DeviceLedger::Claim c = l.claim(hack, DeviceHolder::receiver(1));
+    CHECK(!c.granted());
+    CHECK_EQ(c.refusal, std::string("in use by Radio 1"));
+}
+
+void testDisplacedNodeDoesNotCountTowardTheLimit() {
+    DeviceLedger l(2);
+    CHECK(l.claim(kRtl, DeviceHolder::receiver(0)).granted());
+    CHECK(l.claim(kB200, DeviceHolder::patchNode(5), false).granted());
+    CHECK_EQ(l.countOpen(), static_cast<std::size_t>(1));
+    // the receiver takes the node's device: the node is displaced, and the count is the receivers' alone
+    CHECK(l.claim(kB200, DeviceHolder::receiver(1)).granted());
+    CHECK_EQ(l.countOpen(), static_cast<std::size_t>(2));
+    CHECK(l.holderOf(kB200) == DeviceHolder::receiver(1));
+    // the limit is judged on open radios only: a third receiver is refused with the limit's words naming the two, not the stopped node
+    const DeviceLedger::Claim third = l.claim(kHackrf, DeviceHolder::receiver(2));
+    CHECK(third.verdict == DeviceLedger::Verdict::LimitReached);
+    CHECK_EQ(third.refusal, std::string("at most 2 radios can be open at once; open now: Radio 1, Radio 2"));
+    CHECK_EQ(l.countOpen(), static_cast<std::size_t>(2));
+}
+
+void testTransmitterEntryAlwaysBlocks() {
+    // the transmitter is no patch node: open or not, it is never skipped by the holder fix
+    for (const bool open : {true, false}) {
+        DeviceLedger l(8);
+        CHECK(l.claim(kB200, DeviceHolder::transmitter(), open).granted());
+        const DeviceLedger::Claim c = l.claim(kB200, DeviceHolder::receiver(0));
+        CHECK(!c.granted());
+        CHECK_EQ(c.refusal, std::string("in use by the transmitter"));
+        CHECK(l.holderOf(kB200) == DeviceHolder::transmitter());
+    }
+}
+
+void testPlutoStoppedNodeDoesNotBlockAReceiverAndARunningOneDoes() {
+    // a Pluto is held by the address as typed; the holder fix is the same for it as for a scanned radio
+    const std::string pluto = pc::makeDeviceKey("pluto", "uri=ip:192.168.2.1");
+    DeviceLedger stopped(8);
+    CHECK(stopped.claim(pluto, DeviceHolder::patchNode(1), false).granted());
+    CHECK(stopped.claim(pluto, DeviceHolder::receiver(1)).granted());
+    DeviceLedger running(8);
+    CHECK(running.claim(pluto, DeviceHolder::patchNode(1), true).granted());
+    CHECK_EQ(running.claim(pluto, DeviceHolder::receiver(1)).refusal, std::string("in use by patch radio 1"));
+}
+
 }  // namespace
 
 int main() {
@@ -217,5 +349,14 @@ int main() {
     testARefusedClaimStillNamesItsDevice();
     testALoanIsRecordedAndTheRadioIsFree();
     testARecordingIsDecidedByItsFile();
+    testStoppedNodeDoesNotBlockAReceiver();
+    testOpenNodeStillBlocksAReceiver();
+    testTwoStoppedNodesStillNameTwice();
+    testStoppedFamilyNodeBlocksNoDongle();
+    testReceiverStillBlocksReceiverAcrossStacks();
+    testSameSerialInTwoFamiliesIsOneRadio();
+    testDisplacedNodeDoesNotCountTowardTheLimit();
+    testTransmitterEntryAlwaysBlocks();
+    testPlutoStoppedNodeDoesNotBlockAReceiverAndARunningOneDoes();
     return testSummary("test_device_ledger");
 }
