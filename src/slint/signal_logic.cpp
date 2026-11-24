@@ -662,6 +662,16 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         m.sdrplay_key_label = tr("RESTART SDRPLAY SERVICE");
         m.sdrplay_line = o.sdrplay_restarting ? std::string(tr("Restarting the SDRplay API Service - answer the Windows prompt.")) : o.sdrplay_note;
     }
+    // INSTALL DRIVER, beside a failed open that says the RTL-SDR is on the wrong Windows driver, and ONLY then: the engine's fact says which sentence the error line is, the window's bus check
+    // supplies the interface (and only the reviewed policy's RTL-SDR interface 0 ever is one), and the install itself is the Radio setup page's.
+    if (factOf(t, "fact.source.fix") == "rtl-driver") {
+        m.rtl_line = o.setup_install_status;   // the install's own words stay under the sentence after it ends ("Driver installed ..."), when the key has gone
+        if (!o.rtl_fix_target.empty()) {
+            m.rtl_key_shown = true;
+            m.rtl_key_enabled = !o.setup_installing;
+            m.rtl_key_label = tr("INSTALL DRIVER");
+        }
+    }
 
     // ---- the row's chip and lamp ----
     m.chip = sourceChip(st.deviceName, o.patch_held);

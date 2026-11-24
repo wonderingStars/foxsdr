@@ -63,6 +63,8 @@ export struct SourceModel {
     converter-error: string, converter-on-air: string,
     // RESTART SDRPLAY SERVICE (slint-gaps.md item 9; the classic's Source section key): shown while the driver has trouble reaching the service; the line is the busy sentence or the last outcome
     sdrplay-key-shown: bool, sdrplay-key-enabled: bool, sdrplay-key-label: string, sdrplay-line: string,
+    // INSTALL DRIVER beside the failed-open sentence "an RTL-SDR is plugged in, but Windows has not given it the WinUSB driver" (core/rtl_open_case.hpp): the Radio setup page's one-click install; the line is its status
+    rtl-key-shown: bool, rtl-key-enabled: bool, rtl-key-label: string, rtl-line: string,
 }
 
 export struct RadioExtrasModel { wfm: bool, stereo: bool, stereo-word: string, stereo-tone: ChipTone, rds-shown: bool, rds-ps: string, rds-rt: string, rds-pi: string,
@@ -119,6 +121,7 @@ export global SignalEvents {
     callback iq-open();
     callback iq-browse();                          // ADDED (docs 6.63): the system's file dialog; a choice is opened
     callback sdrplay-restart();                    // slint-gaps.md item 9: asks Windows to restart the SDRplay API Service (a UAC prompt)
+    callback rtl-driver-install();                 // INSTALL DRIVER beside the failed-open sentence: the Radio setup page's one-click WinUSB install (a UAC prompt), for the interface the bus check found
     callback iq-paste() -> bool;                   // ADDED: Ctrl+V with a FILE on the clipboard; true = the host took its path into the box
     callback pluto-address-committed(string);
     callback pluto-open();
@@ -732,6 +735,8 @@ export component SourceBody inherits VerticalLayout {
     iq-browse() => { SignalEvents.iq-browse(); }
     callback sdrplay-restart();
     sdrplay-restart() => { SignalEvents.sdrplay-restart(); }
+    callback rtl-driver-install();
+    rtl-driver-install() => { SignalEvents.rtl-driver-install(); }
     callback iq-paste() -> bool;
     iq-paste() => { return SignalEvents.iq-paste(); }
     callback pluto-address-committed(string);
@@ -1142,6 +1147,10 @@ export component SourceBody inherits VerticalLayout {
     // ---- what the last attempt said ----
     if root.model.mismatch-note != "" : Note { text: root.model.mismatch-note; tone: ChipTone.warn; }
     if root.model.error-line != "" : Note { text: root.model.error-line; tone: ChipTone.err; }
+    if root.model.rtl-key-shown : Line {
+        Key { label: root.model.rtl-key-label != "" ? root.model.rtl-key-label : @tr("INSTALL DRIVER"); xs: true; min-w: 0px; enabled: root.model.rtl-key-enabled; clicked => { root.rtl-driver-install(); } }
+    }
+    if root.model.rtl-line != "" : Note { text: root.model.rtl-line; tone: ChipTone.warn; }
 }
 
 // ================================================ Radio extras (WFM) ================================================

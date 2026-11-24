@@ -213,6 +213,11 @@ struct SourceModel {
     // THE KEY THAT RESTARTS THE SDRPLAY API SERVICE (app_window_sdrplay.cpp): the process-local state is the publisher's (ReadOptions::sdrplay_*); pressing it is [local] (an elevated helper)
     bool sdrplay_key_shown = false, sdrplay_key_enabled = true;
     std::string sdrplay_key_label, sdrplay_line;
+    // THE INSTALL DRIVER KEY BESIDE THE FAILED-OPEN SENTENCE (core/rtl_open_case.hpp): offered only while the engine says the error line is "an RTL-SDR is plugged in on the wrong
+    // Windows driver" (fact.source.fix == "rtl-driver") AND the window's own bus check found the interface the reviewed driver policy lets the installer bind (ReadOptions::rtl_fix_target).
+    // The line under it is the install's own status sentence (the Radio setup page's).
+    bool rtl_key_shown = false, rtl_key_enabled = true;
+    std::string rtl_key_label, rtl_line;
 };
 
 struct RadioExtrasModel {
@@ -369,6 +374,7 @@ struct ReadOptions {
     // the Radio setup page
     bool setup_shown = false, setup_checking = false, setup_have_answer = false, setup_show_page = false, setup_installing = false, setup_dont_show = false;
     std::string setup_install_status;
+    std::string rtl_fix_target;            // the instance id of the RTL-SDR interface the one-click install may bind (the Radio setup finding's install_target); "" none found
     std::vector<SetupFinding> findings;
     // the import dialog
     bool import_shown = false;

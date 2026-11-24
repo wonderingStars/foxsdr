@@ -162,9 +162,63 @@ Rig airspy(bool free) {
     return r;
 }
 
+// INSTALL DRIVER BESIDE A FAILED OPEN (core/rtl_open_case.hpp; docs 0.99.114): the key is on the Source card only while the engine's fact says the error line is "an RTL-SDR is
+// plugged in on the wrong Windows driver" AND the window's bus check found the interface the reviewed policy lets the installer bind. Every other state shows no key.
+void testTheInstallDriverKey() {
+    const std::string wrong = "RTL2838UHIDIR did not open: An RTL-SDR is plugged in, but Windows has not given it the WinUSB driver. The receiver is running on the signal generator.";
+    // (a) the engine says wrong driver and the bus check found the interface: the key, enabled, the same label as the Radio setup page's key
+    {
+        Rig r = rtlOpen();
+        r.t.facts["fact.status.sourceError"] = wrong;
+        r.t.facts["fact.source.fix"] = "rtl-driver";
+        r.o.rtl_fix_target = "USB\\VID_0BDA&PID_2838&MI_00\\7&38A180A5&0&0000";
+        const SourceModel m = readSource(r.t, r.s, r.o);
+        CHECK(m.rtl_key_shown && m.rtl_key_enabled && m.rtl_key_label == "INSTALL DRIVER");
+        CHECK(m.error_line == wrong);   // the sentence itself is still the engine's
+        CHECK(m.rtl_line.empty());
+        // while the install runs the key is dead and its own status line is under it
+        r.o.setup_installing = true;
+        r.o.setup_install_status = "Installing the driver - answer the Windows permission prompt...";
+        const SourceModel busy = readSource(r.t, r.s, r.o);
+        CHECK(busy.rtl_key_shown && !busy.rtl_key_enabled && busy.rtl_line == "Installing the driver - answer the Windows permission prompt...");
+        // a finished install clears the target (the publisher does): no key, the status stays so the person reads what happened
+        r.o.setup_installing = false;
+        r.o.rtl_fix_target.clear();
+        r.o.setup_install_status = "Driver installed.";
+        const SourceModel done = readSource(r.t, r.s, r.o);
+        CHECK(!done.rtl_key_shown && done.rtl_line == "Driver installed.");
+    }
+    // the engine says wrong driver but the bus check found no interface the policy allows (a device the installer may never touch, or the check has not answered): NO key
+    {
+        Rig r = rtlOpen();
+        r.t.facts["fact.status.sourceError"] = wrong;
+        r.t.facts["fact.source.fix"] = "rtl-driver";
+        const SourceModel m = readSource(r.t, r.s, r.o);
+        CHECK(!m.rtl_key_shown && m.rtl_key_label.empty());
+    }
+    // (b) and (c), and any other failure: the engine's fact is empty - NO key, even with a target in hand and an install status left over
+    for (const char* fix : {"", "something-else"}) {
+        Rig r = rtlOpen();
+        r.t.facts["fact.status.sourceError"] = "RTL-SDR did not open: No RTL-SDR is plugged into this computer. Plug it in, then pick it again. The receiver is running on the signal generator.";
+        r.t.facts["fact.source.fix"] = fix;
+        r.o.rtl_fix_target = "USB\\VID_0BDA&PID_2838&MI_00\\7&38A180A5&0&0000";
+        r.o.setup_install_status = "Driver installed.";
+        const SourceModel m = readSource(r.t, r.s, r.o);
+        CHECK(!m.rtl_key_shown && m.rtl_key_label.empty() && m.rtl_line.empty());
+    }
+    // no fact at all (an engine without it): no key
+    {
+        Rig r = rtlOpen();
+        r.o.rtl_fix_target = "USB\\VID_0BDA&PID_2838&MI_00\\7&38A180A5&0&0000";
+        const SourceModel m = readSource(r.t, r.s, r.o);
+        CHECK(!m.rtl_key_shown && m.rtl_line.empty());
+    }
+}
+
 }  // namespace
 
 int main() {
+    testTheInstallDriverKey();
     // ---- an RTL-SDR that is open ----
     {
         Rig r = rtlOpen();

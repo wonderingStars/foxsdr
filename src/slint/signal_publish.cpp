@@ -157,6 +157,8 @@ struct SignalPublisher::SetupState {
     rs::Probe probe;
     bool started = false;
     bool autoWanted = true, autoStarted = false, autoRun = false;   // the automatic first-run check: wanted (a real window), started once, and its answer still to be counted
+    bool fixOn = false, fixPending = false;                         // the failed open names the wrong Windows driver: the bus check was started for this failure / its answer is still to come
+    unsigned fixBase = 0;                                           // probe.finished() when that check was started: the answer is the first finish after it
     std::string fake;   // FOXSDR_FAKE_RADIO_SETUP: a synthetic machine (bounded runs)
     struct Install {
         std::atomic<bool> done{false};
@@ -260,7 +262,21 @@ void SignalPublisher::pollSetup() {
         if (r.outcome == wu::Outcome::Installed || r.outcome == wu::Outcome::AlreadyWinUsb) {
             if (s.fake.empty()) { send(opSetupCheckAgain()); }
             startProbe();
+            opts_.rtl_fix_target.clear();   // the key beside the failed-open sentence has done its job; the person picks the radio again (the status sentence stays under it until then)
         }
+    }
+    // THE FAILED-OPEN SENTENCE SAYS "WRONG WINDOWS DRIVER" (the engine's fact, core/rtl_open_case.hpp): look at the bus ONCE for this failure, off this thread, to find the interface the install may bind.
+    // The page is not raised by it; the offer is the key beside the sentence (signal_logic.cpp readSource).
+    const bool fixWanted = fact("fact.source.fix") == "rtl-driver";
+    if (fixWanted && !s.fixOn) {
+        s.fixOn = true;
+        s.fixPending = true;
+        s.fixBase = s.probe.finished();
+        startProbe();
+    } else if (!fixWanted && s.fixOn) {
+        s.fixOn = false;   // the sentence is gone (another pick, or a fix): re-armed for the next failure
+        s.fixPending = false;
+        opts_.rtl_fix_target.clear();
     }
     if (s.probe.poll() && s.probe.state() == rs::Probe::State::TimedOut) {
         cascade::core::diagWarnf("radio setup: the probe did not finish in %lld s - not waiting for it any longer", static_cast<long long>(rs::kProbeBudget.count() / 1000));
@@ -271,7 +287,8 @@ void SignalPublisher::pollSetup() {
     opts_.setup_install_status = s.installStatus;
     opts_.findings.clear();
     opts_.setup_show_page = false;
-    if ((!opts_.setup_shown && !s.autoRun) || !opts_.setup_have_answer) { return; }
+    const bool fixReady = s.fixPending && s.probe.finished() > s.fixBase;
+    if ((!opts_.setup_shown && !s.autoRun && !fixReady) || !opts_.setup_have_answer) { return; }
     // what the probe saw, plus what the application's own lists hold now (app_window_radio_setup.cpp radioSetupInventory)
     rs::Inventory inv = s.probe.inventory();
     if (s.fake.empty() && inv.probed && inv.usbListed) {
@@ -306,6 +323,17 @@ void SignalPublisher::pollSetup() {
     const rs::Findings f = rs::assess(inv);
     if (s.fake.empty()) { rs::noteFindings(f); }   // the setup.* count and the radio_found event for a radio present with no usable driver (once a session each; a synthetic machine says nothing)
     s.autoRun = false;
+    if (fixReady || s.fixOn) {
+        // The interface the one-click install may bind: assess() gives a target only to an RTL-SDR interface 0 that driver_policy.hpp allows (InstallWinUsb), on the wrong driver.
+        if (fixReady) { s.fixPending = false; }
+        opts_.rtl_fix_target.clear();
+        if (s.fixOn) {
+            for (const rs::Finding& x : f.items) {
+                if (!x.installTarget.empty()) { opts_.rtl_fix_target = x.installTarget; break; }
+            }
+        }
+        forceRead_ = true;
+    }
     if (!opts_.setup_shown) { return; }   // the automatic check only counts and reports; the page stays closed until the person opens it
     opts_.setup_show_page = f.showPage;
     for (const rs::Finding& x : f.items) {
@@ -753,6 +781,10 @@ void SignalPublisher::updateClocks() {
     o.sdrplay_key_enabled = m.sdrplay_key_enabled;
     o.sdrplay_key_label = ss(m.sdrplay_key_label);
     o.sdrplay_line = ss(m.sdrplay_line);
+    o.rtl_key_shown = m.rtl_key_shown;
+    o.rtl_key_enabled = m.rtl_key_enabled;
+    o.rtl_key_label = ss(m.rtl_key_label);
+    o.rtl_line = ss(m.rtl_line);
     return o;
 }
 
@@ -1067,7 +1099,8 @@ void SignalPublisher::publish(const FoxReceiverState& state) {
                                     m.source.card_warning, m.source.airspy_decimations, m.source.airspy_decimation_index, m.source.airspy_hardware_rate,
                                     m.source.airspy_gain_mode, m.source.airspy_gain_norm, m.source.airspy_lna_agc, m.source.airspy_mixer_agc, m.source.airspy_lna,
                                     m.source.airspy_mixer, m.source.airspy_vga, m.source.options, m.source.converter_shown, m.source.converter_mode,
-                                    m.source.converter_alias, m.source.converter_lo, m.source.converter_inverts, m.source.converter_error, m.source.converter_on_air, m.source.sdrplay_key_shown, m.source.sdrplay_key_enabled, m.source.sdrplay_key_label, m.source.sdrplay_line))) {
+                                    m.source.converter_alias, m.source.converter_lo, m.source.converter_inverts, m.source.converter_error, m.source.converter_on_air, m.source.sdrplay_key_shown, m.source.sdrplay_key_enabled, m.source.sdrplay_key_label, m.source.sdrplay_line,
+                                    m.source.rtl_key_shown, m.source.rtl_key_enabled, m.source.rtl_key_label, m.source.rtl_line))) {
         ui_.set_source_model(mapSource(m.source));
     }
     if (sigs_.changed("radio", cat(m.radio.wfm, m.radio.stereo, m.radio.stereo_word, m.radio.stereo_tone, m.radio.rds_shown, m.radio.rds_ps, m.radio.rds_rt, m.radio.rds_pi, m.radio.signal_has, m.radio.signal_frac, m.radio.signal_text))) {
@@ -1157,6 +1190,11 @@ void SignalPublisher::wire() {
     ev.on_iq_open([this] { iqOpen(); });
     ev.on_iq_browse([this] { iqBrowse(); });
     ev.on_sdrplay_restart([this] { sdrPlayRestartPressed(); });
+    // INSTALL DRIVER beside the failed-open sentence: the Radio setup page's install, for the interface the bus check found for THIS failure (nothing when none was found - the key is not drawn then)
+    ev.on_rtl_driver_install([this] {
+        if (!opts_.rtl_fix_target.empty()) { startInstall(opts_.rtl_fix_target); }
+        forceRead_ = true;
+    });
     ev.on_iq_paste([this]() { return iqPaste(); });
     ev.on_pluto_address_committed([this](slint::SharedString t) { plutoDraft_ = std::string(t); plutoDraftSet_ = true; send(opPlutoAddress(plutoDraft_)); });
     ev.on_pluto_open([this] { send(opPlutoOpen(plutoDraftSet_ ? plutoDraft_ : last_.source.pluto_address)); });
