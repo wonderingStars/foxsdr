@@ -185,6 +185,7 @@ int main() {
         cascade::core::issue::resetIssueReportsForTest();
     }
     auto ringdropReports = [&] {
+        (void)cascade::core::issue::waitForWritesForTest(3000);   // (the report is written by a worker: freeze FA0B39E3)
         std::size_t n = 0;
         std::error_code ec;
         for (const auto& e : fs::directory_iterator(reports, ec)) {
