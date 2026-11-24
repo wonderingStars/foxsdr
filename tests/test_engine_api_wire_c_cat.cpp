@@ -11,6 +11,7 @@
 #include <cstring>
 #include <thread>
 
+#include "core/cat_scope.hpp"
 #include "net/loopback_sock.hpp"
 #include "wire_c_crash_trace.hpp"
 #include "wire_c_rig.hpp"
@@ -47,6 +48,24 @@ std::string ask(lo::Sock s, Rig& r, const std::string& cmd, int waitMs = 600) {
         }
     }
     return out;
+}
+
+// This computer's first non-loopback IPv4 address (host order), 0 when it has none: an address a listener on every address answers on and a loopback-only one does not.
+std::uint32_t otherAddressOfThisComputer() {
+    if (!lo::initSockets()) { return 0; }
+    char host[256];
+    if (::gethostname(host, sizeof host) != 0) { return 0; }
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    addrinfo* res = nullptr;
+    if (::getaddrinfo(host, nullptr, &hints, &res) != 0) { return 0; }
+    std::uint32_t found = 0;
+    for (addrinfo* p = res; p != nullptr && found == 0; p = p->ai_next) {
+        const std::uint32_t a = ntohl(reinterpret_cast<sockaddr_in*>(p->ai_addr)->sin_addr.s_addr);
+        if ((a >> 24) != 127u && (a >> 24) != 0u) { found = a; }
+    }
+    ::freeaddrinfo(res);
+    return found;
 }
 
 FoxCommand op(std::uint32_t o, std::int64_t a = 0) { return testing::cmd(o, 0.0, a, nullptr); }
@@ -139,6 +158,68 @@ void testTeardownWithClient(const fs::path& dir) {
     lo::closeSock(s);
 }
 
+std::string saved(Rig& r, const char* key) { return Access::wirec(r.eng).settings().get(key); }
+
+// R4-01 (network review of 2026-11-24, owner decision 19 applied to the CAT emulation): the port answers on THIS COMPUTER ONLY. A "listen on every address" value saved by an
+// older version is read as this computer only, the user is told once, and the saved value is cleared so nothing says it again. NOTHING IS BOUND here: the emulation stays off.
+void testSavedOnIsReadAsThisComputerOnly(const fs::path& dir) {
+    namespace cc = cascade::core;
+    CHECK(!cc::catEmulationReachesOtherComputers(true) && !cc::catEmulationReachesOtherComputers(false));
+    CHECK(!cc::kCatEmulationReachableOffered);
+    {
+        Rig r(dir);
+        CHECK(r.fact("cat.emulation.notice") != "1");
+        CHECK(r.status(setting("cat.emulation.bind_all", "1")) == FOXAPI_OK);
+        r.pass(4);
+        CHECK(r.fact("cat.emulation.notice") == "1");              // told
+        CHECK(saved(r, "cat.emulation.bind_all") == "0");           // and the saved "on" is gone: said once, not on every start
+        r.pass(8);
+        CHECK(r.fact("cat.emulation.notice") == "1");              // still shown for the rest of this run, not re-raised
+        CHECK(r.fact("cat.emulation.running") == "0");             // (nothing was opened)
+    }
+    {   // the program's next start, on the same folder: nothing to say
+        Rig r(dir);
+        r.pass(4);
+        CHECK(r.fact("cat.emulation.notice") != "1");
+        CHECK(saved(r, "cat.emulation.bind_all") == "0");
+    }
+}
+
+// The same value with the emulation ON: it listens on 127.0.0.1 and not on this computer's other address. Not run when the rule above says "every address" (it would then open
+// a listener beyond this computer in a test).
+void testSavedOnBindsLoopbackOnly(const fs::path& dir) {
+    if (cascade::core::catEmulationReachesOtherComputers(true)) {
+        std::printf("SKIP: the rule says every address; no listener is opened by this test\n");
+        return;
+    }
+    Rig r(dir);
+    const int port = freeTcpPort();
+    CHECK(port > 0);
+    CHECK(r.status(setting("cat.emulation.port", std::to_string(port))) == FOXAPI_OK);
+    CHECK(r.status(setting("cat.emulation.enabled", "1")) == FOXAPI_OK);
+    r.pass(6);
+    CHECK(r.fact("cat.emulation.running") == "1");
+    CHECK(r.status(setting("cat.emulation.bind_all", "1")) == FOXAPI_OK);   // an old saved value arrives while it runs
+    r.pass(6);
+    CHECK(r.fact("cat.emulation.running") == "1" && r.fact("cat.emulation.notice") == "1");
+    const lo::Sock s = lo::tcpConnect(0x7F000001u, port, 2000);
+    CHECK(s != lo::kBad);
+    if (s != lo::kBad) {
+        CHECK(ask(s, r, "ID;") == "ID020;");
+        lo::closeSock(s);
+    }
+    const std::uint32_t other = otherAddressOfThisComputer();
+    if (other == 0u) {
+        std::printf("NOTE: this computer has no non-loopback IPv4 address; the other-address connection was not tried\n");
+    } else {
+        const lo::Sock t = lo::tcpConnect(other, port, 1000);
+        CHECK(t == lo::kBad);   // a connection from another address than this computer's loopback is refused: the port is not open there
+        if (t != lo::kBad) { lo::closeSock(t); }
+    }
+    CHECK(r.status(setting("cat.emulation.enabled", "0")) == FOXAPI_OK);
+    r.pass(4);
+}
+
 }  // namespace
 
 int main() {
@@ -147,7 +228,7 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     const fs::path root = scratch("cat");
     int n = 0;
-    for (auto fn : {testCat, testTeardownWithClient}) {
+    for (auto fn : {testCat, testTeardownWithClient, testSavedOnIsReadAsThisComputerOnly, testSavedOnBindsLoopbackOnly}) {
         const fs::path d = root / std::to_string(n++);
         std::error_code ec;
         fs::create_directories(d, ec);

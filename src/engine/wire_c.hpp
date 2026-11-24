@@ -110,6 +110,7 @@ public:
     std::string openLast;   // the last confirmed open's outcome, a sentence
     std::string catEmuApplied = "0|kenwood-ts480|0|0";   // the settings it was last configured with (the defaults: nothing to do at the first pass)
     std::uint64_t catEmuSeen = 0;         // clients and commands the last published fact block counted
+    bool catEmuNotice = false;            // an older version's saved "listen on every address" was read as this computer only (R4-01): the page says so, once
     void shutdown() {                     // the engine's teardown: every listener and session this lane holds is let go
         catLink.stop();
         catEmu.stop();

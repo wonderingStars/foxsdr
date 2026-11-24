@@ -1060,11 +1060,12 @@ struct LaneLPublisher::Impl {
         choice(v, "h.cat-dialect", tr("CAT dialect"), {"Kenwood TS-480", "Yaesu FT-891"}, dia == "yaesu-ft891" ? 1 : 0, [this](int i) { setting(kHam, tr("CAT dialect"), "cat.emulation.dialect", i == 1 ? "yaesu-ft891" : "kenwood-ts480"); });
         v.push_back(rField("h.cat-port", tr("CAT port"), dv("h.cat-port", wirec("cat.emulation.port")), tr("The port the logging program connects to (not 4532, which the rigctl server uses); 0 = not set up")));
         handlers["h.cat-port"] = [this](const std::string& t) { draft["h.cat-port"] = t; setting(kHam, tr("CAT port"), "cat.emulation.port", trim(t), "h.cat-port"); };
-        settingTick(v, kHam, "h.cat-all", tr("Listen on every address"), "cat.emulation.bind_all", false, tr("Off = this computer only. On lets other computers on the network connect."));
         const std::string run = fact("cat.emulation.running");
         v.push_back(rReadout(tr("CAT emulation"), run == "1" ? tr("running") + ", " + fact("cat.emulation.clients") + " " + tr("clients") : tr("not running")));
         const std::string ce = fact("cat.emulation.error");
         if (!ce.empty()) { v.push_back(rNote(ce, kWarn)); }
+        // R4-01: an older version's saved "listen on every address" was read as this computer only; the engine says whether, the words are here (so they are translated)
+        if (fact("cat.emulation.notice") == "1") { v.push_back(rNote(tr("CAT emulation now listens on this computer only, so other computers can no longer reach its port."), kWarn)); }
         endNote(v, kHam);
     }
 
