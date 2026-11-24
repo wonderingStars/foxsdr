@@ -21,4 +21,10 @@ inline bool catReachesOtherComputers(bool savedBindAll, const std::string& allow
     return savedBindAll && (kCatReachableOffered || !allowList.empty());
 }
 
+// CAT EMULATION (the logging-program port, settings cat.emulation.*; network review R4-01 of 2026-11-24): owner decision 19 applies to it too. It has no password and no list of
+// allowed computers, so it listens on THIS COMPUTER ONLY and no window draws a tick for anything else. A "listen on every address" value saved by an older version is read as this
+// computer only: the engine clears it and says so once (fact cat.emulation.notice, shown as one sentence on the CAT emulation page).
+inline constexpr bool kCatEmulationReachableOffered = false;
+inline bool catEmulationReachesOtherComputers(bool savedBindAll) { return savedBindAll && kCatEmulationReachableOffered; }
+
 }  // namespace cascade::core

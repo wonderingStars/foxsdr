@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "core/app_commands.hpp"
+#include "core/cat_scope.hpp"
 #include "core/companion_fault.hpp"
 #include "core/config.hpp"
 #include "core/demod_names.hpp"
@@ -309,6 +310,7 @@ void Engine::wireCFacts(const std::function<void(const std::string&, const std::
     fact("cat.emulation.clients", std::to_string(s.catEmu.clients()));
     fact("cat.emulation.commands", std::to_string(s.catEmu.commands()));
     fact("cat.emulation.error", s.catEmu.error());
+    fact("cat.emulation.notice", s.catEmuNotice ? "1" : "");
     // THE CAT LINK (screen lane S5b; engine/cat_link.hpp): what FoxSDR is following, what the rig said last and what was done about it
     {
         const wc::CatLinkStatus cl = s.catLink.status();
@@ -802,7 +804,16 @@ void Engine::pumpWireC() {
         const bool on = s.settings().getBool("cat.emulation.enabled");
         const std::string dialect = s.settings().get("cat.emulation.dialect");
         const int port = static_cast<int>(s.settings().getInt("cat.emulation.port"));
-        const bool all = s.settings().getBool("cat.emulation.bind_all");
+        // R4-01: the emulation has no password and no list of allowed computers, so it answers on THIS COMPUTER ONLY (owner decision 19, core/cat_scope.hpp). A "listen on every address"
+        // value saved by an older version is read as that, the page says so in one sentence (fact cat.emulation.notice), and the saved value is cleared so it is said once, not at every start.
+        const bool savedAll = s.settings().getBool("cat.emulation.bind_all");
+        if (savedAll) {
+            s.catEmuNotice = true;
+            std::string why;
+            (void)s.settings().set("cat.emulation.bind_all", "0", why);
+            ++wireCVersion_;
+        }
+        const bool all = cascade::core::catEmulationReachesOtherComputers(savedAll);
         const std::string sig = std::string(on ? "1" : "0") + "|" + dialect + "|" + std::to_string(port) + "|" + (all ? "1" : "0");
         if (sig != s.catEmuApplied) {
             s.catEmuApplied = sig;

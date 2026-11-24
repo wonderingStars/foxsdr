@@ -51,7 +51,7 @@ constexpr Spec kSpecs[] = {
     {"cat.emulation.enabled", Kind::Bool, 0, 0, "0", ""},       // answer like a rig on a TCP port: read and set the frequency and mode; every transmit command is refused
     {"cat.emulation.dialect", Kind::Choice, 0, 0, "kenwood-ts480", "kenwood-ts480|yaesu-ft891"},
     {"cat.emulation.port", Kind::Int, 0, 65535, "0", ""},       // the port the logging program connects to (0 = not configured; 4532 is the rigctl server's)
-    {"cat.emulation.bind_all", Kind::Bool, 0, 0, "0", ""},      // listen on every address instead of this computer only
+    {"cat.emulation.bind_all", Kind::Bool, 0, 0, "0", ""},      // RETIRED (R4-01, owner decision 19): the emulation listens on this computer only; an older version's saved "on" is read as that, said once, and cleared
     // --- CAT link: FoxSDR follows a rig, or answers a logging program on a virtual COM port (screen lane S5b; engine/cat_link.hpp). RECEIVE SIDE ONLY: the only messages sent to a rig are "FA;" and "MD;"/"MD0;" (reads).
     {"cat.link.mode", Kind::Choice, 0, 0, "off", "off|follow|emulate|omnirig"},   // OFF: no port is opened and nothing is started until the person chooses a way and gives a port
     {"cat.link.port", Kind::Text, 0, 12, "", ""},                // "COM3" (follow, emulate)

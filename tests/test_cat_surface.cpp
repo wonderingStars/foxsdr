@@ -185,10 +185,37 @@ void testSourceHoldsNoSuchCall() {
     }
 }
 
+// R4-01 (network review of 2026-11-24, owner decision 19 applied to the CAT emulation): who can reach the emulation port is decided in the sources named here. The SYSTEM page does not
+// offer "Listen on every address" (it shows one sentence when the engine read an old saved "on" as this computer only), the engine never hands the saved value to the listener,
+// and the classic window never drew the tick.
+std::string readSource(const char* rel) {
+    std::ifstream f(g_root + "/" + rel, std::ios::binary);
+    CHECK(static_cast<bool>(f));
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+bool contains(const std::string& hay, const char* needle) { return hay.find(needle) != std::string::npos; }
+void testEmulationListensOnThisComputerOnly() {
+    const std::string scope = readSource("src/core/cat_scope.hpp");
+    CHECK(contains(scope, "kCatEmulationReachableOffered = false;"));
+    const std::string page = readSource("src/slint/lanel_publish.cpp");
+    CHECK(page.size() > 1000);
+    CHECK(!contains(page, "cat.emulation.bind_all"));
+    CHECK(!contains(page, "Listen on every address"));
+    CHECK(!contains(page, "h.cat-all"));
+    CHECK(contains(page, "fact(\"cat.emulation.notice\")"));
+    CHECK(contains(page, "tr(\"CAT emulation now listens on this computer only, so other computers can no longer reach its port.\")"));
+    const std::string engine = readSource("src/engine/engine_wire_c.cpp");
+    CHECK(engine.size() > 1000);
+    CHECK(contains(engine, "catEmulationReachesOtherComputers"));
+    CHECK(!contains(engine, "const bool all = s.settings().getBool(\"cat.emulation.bind_all\");"));
+    CHECK(!contains(readSource("src/gui/app_window.cpp"), "cat.emulation"));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc > 1) { g_root = argv[1]; }
+    testEmulationListensOnThisComputerOnly();
     testTheList();
     testNoWayToKeyOrSplit();
     testRandomLines();

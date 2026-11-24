@@ -96,6 +96,10 @@ public:
     std::string handle(const std::string& command);
     CatEmuStats stats() const { return stats_; }
     CatDialect dialect() const { return dialect_; }
+    // R4-02: for a network connection. When on, a stream whose first bytes are an HTTP request line ("POST / HTTP/1.1": a web page's
+    // request to this port, not a CAT client) executes nothing, answers nothing, and sets closeRequested(); the transport hangs up.
+    void setRefuseHttp(bool on) { refuseHttp_ = on; }
+    bool closeRequested() const { return closeRequested_; }
 
     static constexpr std::size_t kMaxCommandBytes = 64;
 
@@ -111,6 +115,10 @@ private:
     std::shared_ptr<RigVfos> vfos_;
     std::string partial_;
     bool dropping_ = false;   // an over-long command: everything up to its ';' is skipped
+    bool refuseHttp_ = false;
+    bool startDecided_ = false;   // the first bytes of the stream have been seen not to be an HTTP request line
+    bool closeRequested_ = false;
+    std::string head_;            // the stream's first bytes (at most eight), while startDecided_ is false
     CatEmuStats stats_;
 };
 
@@ -157,6 +165,10 @@ private:
 class CatTcpService {
 public:
     static constexpr int kMaxClients = 4;
+    // A client that does not read what it was answered is let go after this long in send() (R4-03); stop() therefore returns within it.
+    static constexpr int kSendTimeoutMs = 2000;
+    // For a test that must tell stop()'s own wake-up from the send timeout: set before start(); clients accepted afterwards use it.
+    void setSendTimeoutMsForTest(int ms) { sendTimeoutMs_ = ms; }
     CatTcpService(CatDialect dialect, RigBackend backend);
     ~CatTcpService();
     // `bindAll` false: 127.0.0.1 only. Port 0 asks the OS for a free one (boundPort() says which).
@@ -178,6 +190,7 @@ private:
     std::atomic<std::uint16_t> port_{0};
     std::atomic<int> clients_{0};
     std::atomic<std::uint64_t> commands_{0};
+    int sendTimeoutMs_ = kSendTimeoutMs;
     std::intptr_t listener_ = -1;
     std::mutex mu_;
     struct ClientRec;

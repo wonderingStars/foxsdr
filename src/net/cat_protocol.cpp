@@ -204,6 +204,28 @@ std::string catDumpState(const CatRadio& status) {
     return o.str();
 }
 
+CatHttpStart catClassifyConnectionStart(const std::string& head) {
+    // A connection whose first byte is a control byte other than CR or LF, or is 0x80 or above, is not a CAT client either: no CAT command opens so, and a TLS hello
+    // (a page pointing https:// at a name that resolves to this computer) opens 0x16 and carries the host name in the clear. A ';' or a newline cannot be ruled out of
+    // what follows, so the first byte alone decides.
+    if (!head.empty()) {
+        const unsigned char first = static_cast<unsigned char>(head[0]);
+        if ((first < 0x20 && first != '\r' && first != '\n') || first >= 0x7f) { return CatHttpStart::Yes; }
+    }
+    // The request methods of RFC 9110 (upper case, as a client must write them) and each followed by the one space that ends the word.
+    static const char* const kMethods[] = {"GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "PATCH ", "OPTIONS ", "CONNECT ", "TRACE "};
+    bool maybe = false;
+    for (const char* m : kMethods) {
+        const std::string method(m);
+        if (head.size() >= method.size()) {
+            if (head.compare(0, method.size(), method) == 0) return CatHttpStart::Yes;
+        } else if (method.compare(0, head.size(), head) == 0) {
+            maybe = true;
+        }
+    }
+    return maybe ? CatHttpStart::Maybe : CatHttpStart::No;
+}
+
 CatResult executeCatLine(const std::string& line, const CatRadio& status) {
     const std::string text = trimmed(line);
     if (text.empty()) {

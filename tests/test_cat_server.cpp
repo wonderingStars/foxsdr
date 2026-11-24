@@ -223,6 +223,21 @@ bool sendRaw(SockT s, const std::string& text) {
     return true;
 }
 
+// True when the server has closed this connection: an orderly close (recv returns 0) or, when the server closed while request bytes it never read
+// were still queued, a reset (Windows resets the connection then; recv returns -1 with ECONNRESET). A silent peer (a recv timeout) is neither.
+bool peerClosed(SockT s) {
+    char b[8];
+    const int n = static_cast<int>(::recv(s, b, sizeof b, 0));
+    if (n == 0) return true;
+    if (n > 0) return false;
+#if defined(_WIN32)
+    const int e = ::WSAGetLastError();
+    return e == WSAECONNRESET || e == WSAECONNABORTED;
+#else
+    return errno == ECONNRESET;
+#endif
+}
+
 // Reads until `lines` newlines have arrived or the deadline passes. Counting
 // lines rather than bytes is what makes this robust to segmentation: the point
 // of several tests here is that the reply may not arrive in one piece.
@@ -886,7 +901,9 @@ void testRoguePeerDoesNotDisturbAnotherSession() {
     SockT rogue = connectTo(port);
     CHECK(rogue != INVALID_SOCKET);
     if (rogue != INVALID_SOCKET) {
-        std::string garbage(std::string("\x01\x02\xfe\xff", 4) + "\r\n");
+        // (it opens with a printable byte: since the review fix of 2026-11-24 a connection whose FIRST byte is a control or high byte is closed unanswered, which
+        // testAWebPageRequestIsNotACatClient holds; the binary rubbish here is the rest of a line)
+        std::string garbage("x" + std::string("\x01\x02\xfe\xff", 4) + "\r\n");
         garbage += "F 999999999999999\n";       // far outside any tuning range
         garbage += std::string("\x03\x04", 2) + " unterminated";
         CHECK(sendRaw(rogue, garbage));
@@ -1018,6 +1035,97 @@ void testGarbageIsAnsweredOrIgnoredAndNeverApplied() {
     server.stop();
 }
 
+// R4-02 (network review of 2026-11-24): a web page can make a browser send a request to a loopback port. The header lines are answered RPRT and
+// ignored, and the BODY, whose text the page chooses, is one more line: "F 7100000" retunes the receiver. A connection that opens with an HTTP
+// request line is not a CAT client: it is closed with nothing executed and nothing answered.
+void testAWebPageRequestIsNotACatClient() {
+    resetStatus();
+    CatServer server;
+    server.setSessionOpener(opener());
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+    // what a browser sends for fetch("http://127.0.0.1:4532/", {method: "POST", mode: "no-cors", body: "\nF 145500000\n"})
+    const std::string body = "\nF 145500000\n";
+    const std::string request = "POST / HTTP/1.1\r\nHost: 127.0.0.1:4532\r\nConnection: keep-alive\r\nContent-Length: " + std::to_string(body.size()) +
+                                "\r\nContent-Type: text/plain;charset=UTF-8\r\nOrigin: https://example.invalid\r\n\r\n" + body;
+    const char* const methods[] = {"POST", "GET", "PUT", "HEAD", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE"};
+    for (const char* method : methods) {
+        std::string req = request;
+        req.replace(0, 4, method);   // "POST" -> the method under test (the rest of the request is the same)
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s == INVALID_SOCKET) { break; }
+        CHECK(sendRaw(s, req));
+        // Everything the server says until it closes (or 600 ms pass): a CAT server answers each line RPRT and keeps the connection; the
+        // guard says nothing and hangs up.
+        const std::string got = readLines(s, 1000, 600);
+        CHECK(got.empty());
+        CHECK(peerClosed(s));   // closed by the server (a silent timeout or an answer is not)
+        closeClient(s);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));   // (the connection's thread may still be working through what it was sent)
+        CHECK(takeSubmitted().empty());   // and the body was never run as a command
+    }
+    // the request line arrives split across segments: still refused, still nothing run
+    {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s != INVALID_SOCKET) {
+            CHECK(sendRaw(s, "PO"));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            CHECK(sendRaw(s, request.substr(2)));
+            CHECK(readLines(s, 1000, 600).empty());
+            closeClient(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            CHECK(takeSubmitted().empty());
+        }
+    }
+    // a real client is not affected, and the guard looks at the connection's first bytes only
+    {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s != INVALID_SOCKET) {
+            CHECK(sendRaw(s, "f\n"));
+            CHECK(readLines(s, 1) == "145000000\n");
+            CHECK(sendRaw(s, "GET / HTTP/1.1\n"));
+            CHECK(readLines(s, 1) == "RPRT -4\n");   // inside a session it is only an unknown command, as before
+            CHECK(sendRaw(s, "\\get_freq\n"));
+            CHECK(readLines(s, 1) == "145000000\n");
+            closeClient(s);
+        }
+    }
+    // REVIEW FIX (Fable review of 2026-11-24): a TLS hello (a page pointing https:// at a name that resolves to this computer) opens with a control byte and
+    // carries the host name in the clear; no CAT client opens with a control byte other than CR or LF, or with a byte of 0x80 or above, so none of these runs
+    {
+        const std::string hellos[] = {std::string("\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03", 11) + "\nF 7100000\n", std::string(1, '\0') + "\nF 7100000\n", std::string("\x80\nF 7100000\n"),
+                                      std::string("\x7f\nF 7100000\n"), std::string("\x01\nF 7100000\n")};
+        for (const std::string& hello : hellos) {
+            SockT s = connectTo(port);
+            CHECK(s != INVALID_SOCKET);
+            if (s == INVALID_SOCKET) { break; }
+            CHECK(sendRaw(s, hello));
+            CHECK(readLines(s, 1000, 600).empty());
+            CHECK(peerClosed(s));
+            closeClient(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            CHECK(takeSubmitted().empty());
+        }
+    }
+    // and a CR or LF opening is still a CAT client (a blank line is how some clients wake the port)
+    {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s != INVALID_SOCKET) {
+            CHECK(sendRaw(s, "\r\nf\n"));
+            CHECK(readLines(s, 1) == "145000000\n");
+            closeClient(s);
+        }
+    }
+    CHECK(takeSubmitted().empty());
+    CHECK(server.httpRefused() == 15u);   // the nine methods, the split request and the five non-text openings, and no real client
+    server.stop();
+}
+
 void testAClientThatNeverReadsIsDropped() {
     resetStatus();
     CatServer server;
@@ -1078,6 +1186,7 @@ void testReconnectingForEverIsBounded() {
 int main() {
     testBeyondThisComputerNeedsAList();
     testGarbageIsAnsweredOrIgnoredAndNeverApplied();
+    testAWebPageRequestIsNotACatClient();
     testAClientThatNeverReadsIsDropped();
     testReconnectingForEverIsBounded();
     testRefusesToStartWithoutAProvider();

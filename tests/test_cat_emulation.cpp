@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <random>
 #include <string>
 #include <thread>
@@ -282,6 +283,61 @@ public:
     }
 };
 
+// R4-02, at the protocol level: with the guard on, a stream that opens with an HTTP request line runs nothing, answers nothing and asks to be
+// closed (headers carry ';', so without the guard the body's commands would run); with it off (a serial port) nothing changes.
+void testRefuseHttp() {
+    for (const CatDialect dialect : {CatDialect::KenwoodTS480, CatDialect::YaesuFT891}) {
+        const std::string fa = dialect == CatDialect::KenwoodTS480 ? ";FA00007100000;MD2;" : ";FA007100000;MD02;";
+        const std::string req = "POST / HTTP/1.1\r\nContent-Type: text/plain;charset=UTF-8\r\n\r\n" + fa;
+        {
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            CHECK(e.feed(req).empty() && e.closeRequested());
+            CHECK(r.freqSets == 0 && r.modeSets == 0);
+            CHECK(e.feed("ID;").empty());   // once refused, nothing more is taken from the stream
+        }
+        {   // byte by byte
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            std::string out;
+            for (char c : req) { out += e.feed(std::string(1, c)); }
+            CHECK(out.empty() && e.closeRequested() && r.freqSets == 0 && r.modeSets == 0);
+        }
+        {   // REVIEW FIX (Fable review of 2026-11-24): a TLS hello to this port (a page pointing https:// at a name that resolves to this computer) opens with a control
+            // byte and carries the host name in the clear, and ';' may be legal in a host name: "a;FA00007100000;b.example" would put a clean command on the wire
+            const std::string host = dialect == CatDialect::KenwoodTS480 ? "a;FA00007100000;MD2;b.example" : "a;FA007100000;MD02;b.example";
+            const std::string hello = std::string("\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03", 11) + std::string(32, 'r') + std::string(1, '\0') + host;
+            for (const std::string& opening : {hello, std::string("\x80") + host, std::string(1, '\0') + host, std::string("\x7f") + host, std::string("\x01") + host}) {
+                FakeRig r;
+                CatEmulator e(dialect, r.backend());
+                e.setRefuseHttp(true);
+                CHECK(e.feed(opening).empty() && e.closeRequested());
+                CHECK(r.freqSets == 0 && r.modeSets == 0);
+            }
+            FakeRig r;   // a CR or LF is how a client may open, and still a CAT client
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            CHECK(e.feed("\r\n;ID;") == (dialect == CatDialect::KenwoodTS480 ? "ID020;" : "ID0650;") && !e.closeRequested());
+        }
+        {   // a real client, whatever its first bytes, is served; "PS1;" and "POST" are not alike
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            CHECK(e.feed("; ; ;ID;") == (dialect == CatDialect::KenwoodTS480 ? "ID020;" : "ID0650;"));
+            CHECK(!e.closeRequested());
+            CHECK(e.feed("PS;") == "PS1;" && !e.closeRequested());
+        }
+        {   // the guard off: a serial port is not a web page's business and is served as before
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.feed(req);
+            CHECK(!e.closeRequested() && r.freqSets == 1);
+        }
+    }
+}
+
 void testStream() {
     {
         FakeRig r;
@@ -402,6 +458,11 @@ SOCKET connectTo(const char* host, std::uint16_t port, int ms = 1500) {
     ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&to), sizeof to);
     return s;
 }
+// After a recv that returned -1: the server closed the connection with request bytes it never read still queued, which Windows reports as a reset (a silent peer is WSAETIMEDOUT).
+bool resetByPeer() {
+    const int e = ::WSAGetLastError();
+    return e == WSAECONNRESET || e == WSAECONNABORTED;
+}
 std::string tcpAsk(SOCKET s, const std::string& send, std::size_t want) {
     ::send(s, send.data(), static_cast<int>(send.size()), 0);
     std::string got;
@@ -521,6 +582,144 @@ void testTcp() {
     }
 }
 
+// ---- [H] the two findings of the network review of 2026-11-24 (R4-02, R4-03) -----------------------------------------------------------------
+bool waitUntil(int ms, const std::function<bool()>& pred) {
+    const auto end = Clock::now() + std::chrono::milliseconds(ms);
+    while (!pred()) {
+        if (Clock::now() > end) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+// R4-02: a web page can make a browser send a request to a loopback port. Its headers carry ';' (text/plain;charset=UTF-8), which ends whatever
+// had accumulated, so the next command in its BODY is clean and runs: ";FA00007100000;" retunes the receiver. A connection that opens with an
+// HTTP request line is not a CAT client: closed, nothing answered, nothing run.
+void testWebPageRequest() {
+    WSADATA d;
+    ::WSAStartup(MAKEWORD(2, 2), &d);
+    for (const CatDialect dialect : {CatDialect::KenwoodTS480, CatDialect::YaesuFT891}) {
+        FakeRig r;
+        CatTcpService svc(dialect, r.backend());
+        CatEmuFact f;
+        CHECK(svc.start(0, false, f));
+        const std::string body = dialect == CatDialect::KenwoodTS480 ? ";FA00007100000;MD2;" : ";FA007100000;MD02;";
+        const std::string request = "POST / HTTP/1.1\r\nHost: 127.0.0.1:4532\r\nConnection: keep-alive\r\nContent-Length: " + std::to_string(body.size()) +
+                                    "\r\nContent-Type: text/plain;charset=UTF-8\r\nOrigin: https://example.invalid\r\n\r\n" + body;
+        const char* const methods[] = {"POST", "GET", "PUT", "HEAD", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE"};
+        for (const char* method : methods) {
+            std::string req = request;
+            req.replace(0, 4, method);
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s == INVALID_SOCKET) { break; }
+            ::send(s, req.data(), static_cast<int>(req.size()), 0);
+            char buf[64];
+            const int n = ::recv(s, buf, sizeof buf, 0);
+            CHECK(n == 0 || (n < 0 && resetByPeer()));   // closed by the server (an orderly close, or a reset when request bytes were still queued): no answer, and not merely silent (a 3 s timeout)
+            ::closesocket(s);
+            CHECK(r.freqSets == 0 && r.modeSets == 0 && r.freq == 7050000.0 && r.mode == "USB");   // the body ran as nothing
+        }
+        {   // the request line split across segments
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s != INVALID_SOCKET) {
+                ::send(s, request.data(), 2, 0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                ::send(s, request.data() + 2, static_cast<int>(request.size() - 2), 0);
+                char buf[64];
+                const int n2 = ::recv(s, buf, sizeof buf, 0);
+                CHECK(n2 == 0 || (n2 < 0 && resetByPeer()));
+                ::closesocket(s);
+                CHECK(r.freqSets == 0 && r.modeSets == 0);
+            }
+        }
+        {   // a TLS hello whose host name carries a clean command (review fix of 2026-11-24)
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s != INVALID_SOCKET) {
+                const std::string hello = std::string("\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03", 11) + std::string(32, 'r') + std::string(1, '\0') + "a" + body + "b.example";
+                ::send(s, hello.data(), static_cast<int>(hello.size()), 0);
+                char buf[64];
+                const int n = ::recv(s, buf, sizeof buf, 0);
+                CHECK(n == 0 || (n < 0 && resetByPeer()));
+                ::closesocket(s);
+                CHECK(r.freqSets == 0 && r.modeSets == 0);
+            }
+        }
+        {   // a real client is unaffected
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s != INVALID_SOCKET) {
+                CHECK(tcpAsk(s, "ID;", dialect == CatDialect::KenwoodTS480 ? 6 : 7) == (dialect == CatDialect::KenwoodTS480 ? "ID020;" : "ID0650;"));
+                ::closesocket(s);
+            }
+        }
+    }
+}
+
+// What a client that never reads does: asks for answers over and over until the server's send is stuck.
+SOCKET floodWithoutReading(std::uint16_t port) {
+    SOCKET a = connectTo("127.0.0.1", port);
+    if (a == INVALID_SOCKET) { return a; }
+    DWORD sndTo = 500;
+    ::setsockopt(a, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sndTo), sizeof sndTo);
+    std::string chunk;
+    for (int i = 0; i < 10000; ++i) { chunk += "FA;"; }
+    for (int i = 0; i < 4000; ++i) {   // at most 120 MB of questions (a 1.7 GB answer): the server's socket buffers fill long before
+        if (::send(a, chunk.data(), static_cast<int>(chunk.size()), 0) <= 0) { break; }   // the server stopped reading: its own send is stuck
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    return a;
+}
+
+// R4-03: stop() joined a client thread that was blocked in a bare send() to a peer that never reads, with no deadline: a local program (or, with
+// "listen on every address", a LAN host) could freeze the application's settings pass or its exit.
+void testStopWithAClientThatNeverReads() {
+    WSADATA d;
+    ::WSAStartup(MAKEWORD(2, 2), &d);
+    FakeRig r;
+    CatTcpService svc(CatDialect::KenwoodTS480, r.backend());
+    // REVIEW FIX (Fable review of 2026-11-24): with the send timeout set far past the bound below, only stop()'s own shutdown of the client's socket can end the stuck
+    // send in time; the timing of a default 2 s timeout against a 1 s bound did not tell the two apart (the shutdown half was never shown red) and was tight on a loaded PC
+    svc.setSendTimeoutMsForTest(20000);
+    CatEmuFact f;
+    CHECK(svc.start(0, false, f));
+    SOCKET a = floodWithoutReading(svc.boundPort());
+    CHECK(a != INVALID_SOCKET);
+    CHECK(svc.clients() == 1);
+    std::atomic<bool> done{false};
+    const auto t0 = Clock::now();
+    std::thread th([&] { svc.stop(); done = true; });
+    const bool prompt = waitUntil(10000, [&] { return done.load(); });
+    const double secs = std::chrono::duration<double>(Clock::now() - t0).count();
+    std::printf("stop() with a client that never reads: %s after %.2f s\n", prompt ? "returned" : "STILL BLOCKED", secs);
+    CHECK(prompt);
+    CHECK(secs < 5.0);   // the shutdown from stop() wakes the stuck send (measured 0.03 s); without it nothing ends it for 20 s
+    if (a != INVALID_SOCKET) { ::closesocket(a); }   // (on a failure, this lets the stuck send end so the test can finish)
+    th.join();
+    CHECK(!svc.running() && svc.clients() == 0);
+}
+
+// R4-03, the other half: a client that stops reading is let go by itself, so it cannot hold one of the four places for ever.
+void testAClientThatNeverReadsIsDropped() {
+    WSADATA d;
+    ::WSAStartup(MAKEWORD(2, 2), &d);
+    FakeRig r;
+    CatTcpService svc(CatDialect::KenwoodTS480, r.backend());
+    CatEmuFact f;
+    CHECK(svc.start(0, false, f));
+    SOCKET a = floodWithoutReading(svc.boundPort());
+    CHECK(a != INVALID_SOCKET);
+    const bool dropped = waitUntil(10000, [&] { return svc.clients() == 0; });
+    CHECK(dropped);
+    if (a != INVALID_SOCKET) { ::closesocket(a); }
+    SOCKET good = connectTo("127.0.0.1", svc.boundPort());   // its place is free again
+    CHECK(good != INVALID_SOCKET && tcpAsk(good, "ID;", 6) == "ID020;");
+    if (good != INVALID_SOCKET) { ::closesocket(good); }
+    svc.stop();
+}
+
 #endif  // _WIN32
 
 }  // namespace
@@ -530,10 +729,14 @@ int main() {
     testYaesu();
     testReceiveOnly();
     testFuzz();
+    testRefuseHttp();
     testStream();
 #if defined(_WIN32)
     testSerial();
     testTcp();
+    testWebPageRequest();
+    testStopWithAClientThatNeverReads();
+    testAClientThatNeverReadsIsDropped();
 #endif
     return testSummary("test_cat_emulation");
 }
