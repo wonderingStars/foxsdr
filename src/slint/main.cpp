@@ -2429,7 +2429,8 @@ int main(int argc, char** argv) {
         addTicket = 0;
         submit(c);
         addTicket = lastTicket;
-        refusalPopup.noteSubmitted(lastTicket, choices[static_cast<std::size_t>(choice)].caption);   // 0.99.113: a refused add for a radio a patch part names raises the same popup
+        // 0.99.113 (review M1): a refused ADD raises NO popup. The Add-a-radio sheet stays open for a refusal and is declared after the Handover sheet in main.slint, so a popup raised on that sheet would be
+        // drawn under it and show up later. The card shows the engine's refusal sentence itself (addNote); only the Source list's click (signal_publish.cpp) raises the popup.
         addSwitchLayout = workspace.radioCount() == 1 && workspace.layout() == kLayoutOne;   // the first radio added shows beside the first (Side by side)
     };
     {
