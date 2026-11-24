@@ -394,9 +394,6 @@ endif()
 # the object format.
 if(MSVC)
     set_source_files_properties(src/gui/app_window.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
-    # src/engine/engine.cpp reached the same limit once perf/demod-pass1 and the
-    # reporter work were both merged (C1128 on a rebuild at integrate/0.99.113).
-    set_source_files_properties(src/engine/engine.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 
 add_library(cascade_engine STATIC
