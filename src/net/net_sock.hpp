@@ -22,6 +22,8 @@ inline constexpr Handle kInvalid = -1;
 bool ensureStarted();
 
 void closeHandle(Handle s);
+// Ends the sending half of a connection (a FIN after everything already sent), leaving the receiving half open so the peer's last bytes can be read and thrown away.
+void shutdownSend(Handle s);
 bool setNonBlocking(Handle s);
 void setNoDelay(Handle s);
 // Receive and send buffer sizes (bytes) asked of the OS; the OS may round them.

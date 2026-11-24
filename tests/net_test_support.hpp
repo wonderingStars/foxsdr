@@ -40,6 +40,7 @@ struct Client {
     sock::Handle s = sock::kInvalid;
     std::vector<std::uint8_t> got;
     bool eof = false;
+    bool recvFailed = false;  // the last read ended on an error (a reset), not on a clean close
 
     bool connect(std::uint16_t port, int timeoutMs = 2000) {
         std::uint32_t ip = 0;
@@ -72,6 +73,7 @@ struct Client {
                 eof = true;
             } else if (!sock::wouldBlock()) {
                 eof = true;
+                recvFailed = true;
             }
         }
         return added;

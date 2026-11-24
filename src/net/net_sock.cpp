@@ -71,6 +71,15 @@ void closeHandle(Handle s) {
 #endif
 }
 
+void shutdownSend(Handle s) {
+    if (s == kInvalid) { return; }
+#if defined(_WIN32)
+    ::shutdown(S(s), SD_SEND);
+#else
+    ::shutdown(S(s), SHUT_WR);
+#endif
+}
+
 bool setNonBlocking(Handle s) {
 #if defined(_WIN32)
     u_long on = 1;

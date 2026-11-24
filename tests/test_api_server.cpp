@@ -366,6 +366,8 @@ void testWebSocketMalformed() {
             if (c.eof) { break; }
             c.pump(30);
         }
+        // what the client really received, so a failure says "reset, no close frame" or "closed with another code" and not just false
+        std::printf("  closedWith(%zu bytes sent, want %d): received %zu bytes, eof=%d, ended on a receive error (reset)=%d\n", frames.size(), code, c.got.size(), c.eof ? 1 : 0, c.recvFailed ? 1 : 0);
         return false;
     };
     CHECK(closedWith(wsFrame(2, "binary"), 1003));                       // binary is not used
@@ -373,6 +375,8 @@ void testWebSocketMalformed() {
     CHECK(closedWith(wsFrame(1, std::string("\xC3\x28 bad", 6)), 1007)); // text that is not UTF-8
     CHECK(closedWith(wsFrame(1, R"({"op":"get_status"})", false), 1002)); // an unmasked client frame
     CHECK(closedWith(std::string("\x03\x80\x00\x00\x00\x00", 6), 1002)); // a reserved opcode
+    // the same refusal when only the header of the oversized frame is sent: nothing is left unread, so this one never depended on the close surviving a reset (round 10's control)
+    CHECK(closedWith(std::string("\x81\xFE\x13\x88\x00\x00\x00\x00", 8), 1009));
     {
         // raw garbage after a good handshake: closed, not echoed, nothing else happens
         std::string junk(2000, '\0');
@@ -391,6 +395,49 @@ void testWebSocketMalformed() {
         CHECK(statusOf(head) >= 400 && statusOf(head) < 500);
     }
     CHECK(hub.takeTune() == std::nullopt && s.running());
+    s.stop();
+}
+
+// After a close frame the server reads and discards what the client still sends (so the close frame is not lost to a reset), but only for a bounded time: a client that
+// never closes, or keeps sending, must not hold the connection past it, and other connections are served meanwhile.
+void testCloseLingerIsBounded() {
+    ControlHub hub;
+    std::string err;
+    ApiServer s(cfg0(), hub, nullptr);
+    CHECK(s.start(err));
+    const std::uint16_t port = static_cast<std::uint16_t>(s.port());
+    // (a) a client that provokes a 1009 and then neither reads nor closes
+    {
+        Client c;
+        CHECK(wsOpen(c, port));
+        const std::string big = wsFrame(1, std::string(5000, 'x'));
+        c.sendBytes(big.data(), big.size());
+        const auto t0 = nettest::Clock::now();
+        // while it lingers, another client is served at once
+        Client other;
+        CHECK(wsOpen(other, port));
+        CHECK(msSince(t0) < 400);
+        other.close();
+        while (s.stats().connections > 0 && msSince(t0) < 5000) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+        CHECK(s.stats().connections == 0);
+        CHECK(msSince(t0) < 3000);   // the bound is 500 ms; the rest is poll granularity and a busy machine
+    }
+    // (b) a client that keeps sending through the wait is let go all the same
+    {
+        Client c;
+        CHECK(wsOpen(c, port));
+        const std::string big = wsFrame(1, std::string(5000, 'x'));
+        c.sendBytes(big.data(), big.size());
+        const std::string chunk(4096, 'y');
+        const auto t0 = nettest::Clock::now();
+        while (s.stats().connections > 0 && msSince(t0) < 5000) {
+            c.sendBytes(chunk.data(), chunk.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(s.stats().connections == 0);
+        CHECK(msSince(t0) < 3000);
+    }
+    CHECK(s.running());
     s.stop();
 }
 
@@ -477,6 +524,7 @@ int main() {
     testRequireAuthNeverAsksTheCaller();
     testWebSocket();
     testWebSocketMalformed();
+    testCloseLingerIsBounded();
     testSse();
     testManyConnections();
     return testSummary("test_api_server");

@@ -112,6 +112,9 @@ private:
         std::size_t off = 0;
         std::int64_t born = 0, lastProgress = 0;
         bool closeAfterSend = false;
+        bool lingerOnClose = false;     // a WebSocket close frame is on its way: see kCloseLingerMs
+        bool lingering = false;         // everything is sent and the sending half is shut; the peer's last bytes are read and thrown away
+        std::int64_t lingerSince = 0;
         bool wantDecodes = false;
         std::uint64_t id = 0;
         bool authPending = false;       // the sign-in is with the auth worker; the request waits (what the client sends meanwhile is kept, bounded)

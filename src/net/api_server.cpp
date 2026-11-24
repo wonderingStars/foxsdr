@@ -19,6 +19,11 @@ using nlohmann::json;
 constexpr std::size_t kMaxHeaderLines = 64;
 constexpr std::size_t kReadBudgetPerTurn = 64 * 1024;
 constexpr int kMaxJsonDepth = 16;
+// AFTER A WEBSOCKET CLOSE FRAME (round 10, 24 Nov 2026). The server stops reading once it has decided to close, so part of an oversized client frame can still sit unread in the
+// socket's receive buffer. Closing a socket that holds unread data makes Windows send a reset instead of a FIN, and the reset can discard the close frame (code 1009) before the
+// client has read it. So the connection first shuts its sending half (FIN, after the close frame), reads and throws away what the client still sends until the client closes or this
+// many milliseconds have passed, and only then is closed. The wait is a state of the connection inside the one poll loop, never a blocking call: other connections are served meanwhile.
+constexpr std::int64_t kCloseLingerMs = 500;
 
 std::int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -270,6 +275,7 @@ void ApiServer::respond(Conn& c, int status, const std::string& contentType, con
 void ApiServer::closeWs(Conn& c, std::uint16_t code, const char* why) {
     (void)queue(c, ws::encodeClose(code, why));
     c.closeAfterSend = true;
+    c.lingerOnClose = true;
 }
 
 void ApiServer::handleHead(Conn& c, std::int64_t now) {
@@ -535,7 +541,17 @@ void ApiServer::run() {
         for (std::size_t i = 0; i < conns_.size();) {
             Conn& c = conns_[i];
             if (!flush(c, now)) { dropConn(i, nullptr); continue; }
-            if (c.closeAfterSend && c.pending() == 0) { dropConn(i, nullptr); continue; }
+            if (c.closeAfterSend && c.pending() == 0) {
+                if (!c.lingerOnClose) { dropConn(i, nullptr); continue; }
+                if (!c.lingering) {
+                    sock::shutdownSend(c.s);
+                    c.lingering = true;
+                    c.lingerSince = now;
+                } else if (now - c.lingerSince >= kCloseLingerMs) {
+                    dropConn(i, nullptr);
+                    continue;
+                }
+            }
             if (cfg_.stallMs > 0 && c.pending() > 0 && now - c.lastProgress >= cfg_.stallMs) { dropConn(i, &droppedStalled_); continue; }
             if (c.kind == Kind::Head && now - c.born >= cfg_.headMs) { dropConn(i, &droppedBad_); continue; }
             ++i;
@@ -582,6 +598,17 @@ void ApiServer::run() {
                         }   // an SSE client's bytes are thrown away
                         continue;
                     }
+                    if (r < 0 && sock::wouldBlock()) { break; }
+                    gone = true;
+                }
+            }
+            if ((got & sock::kReadable) && c.lingering) {
+                // the close frame is out: what the client still sends is read and thrown away, until it closes (0) or fails
+                std::size_t budget = kReadBudgetPerTurn;
+                char buf[2048];
+                while (budget > 0 && !gone) {
+                    const long r = sock::recvSome(c.s, buf, std::min<std::size_t>(sizeof(buf), budget));
+                    if (r > 0) { budget -= static_cast<std::size_t>(r); continue; }
                     if (r < 0 && sock::wouldBlock()) { break; }
                     gone = true;
                 }
