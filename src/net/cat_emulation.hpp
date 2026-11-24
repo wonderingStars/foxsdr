@@ -165,6 +165,8 @@ private:
 class CatTcpService {
 public:
     static constexpr int kMaxClients = 4;
+    // A client that does not read what it was answered is let go after this long in send() (R4-03); stop() therefore returns within it.
+    static constexpr int kSendTimeoutMs = 2000;
     CatTcpService(CatDialect dialect, RigBackend backend);
     ~CatTcpService();
     // `bindAll` false: 127.0.0.1 only. Port 0 asks the OS for a free one (boundPort() says which).

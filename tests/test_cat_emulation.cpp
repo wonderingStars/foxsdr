@@ -623,6 +623,65 @@ void testWebPageRequest() {
     }
 }
 
+// What a client that never reads does: asks for answers over and over until the server's send is stuck.
+SOCKET floodWithoutReading(std::uint16_t port) {
+    SOCKET a = connectTo("127.0.0.1", port);
+    if (a == INVALID_SOCKET) { return a; }
+    DWORD sndTo = 500;
+    ::setsockopt(a, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sndTo), sizeof sndTo);
+    std::string chunk;
+    for (int i = 0; i < 10000; ++i) { chunk += "FA;"; }
+    for (int i = 0; i < 4000; ++i) {   // at most 120 MB of questions (a 1.7 GB answer): the server's socket buffers fill long before
+        if (::send(a, chunk.data(), static_cast<int>(chunk.size()), 0) <= 0) { break; }   // the server stopped reading: its own send is stuck
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    return a;
+}
+
+// R4-03: stop() joined a client thread that was blocked in a bare send() to a peer that never reads, with no deadline: a local program (or, with
+// "listen on every address", a LAN host) could freeze the application's settings pass or its exit.
+void testStopWithAClientThatNeverReads() {
+    WSADATA d;
+    ::WSAStartup(MAKEWORD(2, 2), &d);
+    FakeRig r;
+    CatTcpService svc(CatDialect::KenwoodTS480, r.backend());
+    CatEmuFact f;
+    CHECK(svc.start(0, false, f));
+    SOCKET a = floodWithoutReading(svc.boundPort());
+    CHECK(a != INVALID_SOCKET);
+    CHECK(svc.clients() == 1);
+    std::atomic<bool> done{false};
+    const auto t0 = Clock::now();
+    std::thread th([&] { svc.stop(); done = true; });
+    const bool prompt = waitUntil(10000, [&] { return done.load(); });
+    const double secs = std::chrono::duration<double>(Clock::now() - t0).count();
+    std::printf("stop() with a client that never reads: %s after %.2f s\n", prompt ? "returned" : "STILL BLOCKED", secs);
+    CHECK(prompt);
+    CHECK(secs < 1.0);   // the shutdown from stop() wakes the stuck send (measured 0.03 s); without it the 2 s send timeout would end it (measured 1.28 s)
+    if (a != INVALID_SOCKET) { ::closesocket(a); }   // (on a failure, this lets the stuck send end so the test can finish)
+    th.join();
+    CHECK(!svc.running() && svc.clients() == 0);
+}
+
+// R4-03, the other half: a client that stops reading is let go by itself, so it cannot hold one of the four places for ever.
+void testAClientThatNeverReadsIsDropped() {
+    WSADATA d;
+    ::WSAStartup(MAKEWORD(2, 2), &d);
+    FakeRig r;
+    CatTcpService svc(CatDialect::KenwoodTS480, r.backend());
+    CatEmuFact f;
+    CHECK(svc.start(0, false, f));
+    SOCKET a = floodWithoutReading(svc.boundPort());
+    CHECK(a != INVALID_SOCKET);
+    const bool dropped = waitUntil(10000, [&] { return svc.clients() == 0; });
+    CHECK(dropped);
+    if (a != INVALID_SOCKET) { ::closesocket(a); }
+    SOCKET good = connectTo("127.0.0.1", svc.boundPort());   // its place is free again
+    CHECK(good != INVALID_SOCKET && tcpAsk(good, "ID;", 6) == "ID020;");
+    if (good != INVALID_SOCKET) { ::closesocket(good); }
+    svc.stop();
+}
+
 #endif  // _WIN32
 
 }  // namespace
@@ -638,6 +697,8 @@ int main() {
     testSerial();
     testTcp();
     testWebPageRequest();
+    testStopWithAClientThatNeverReads();
+    testAClientThatNeverReadsIsDropped();
 #endif
     return testSummary("test_cat_emulation");
 }

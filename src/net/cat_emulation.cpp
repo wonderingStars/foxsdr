@@ -473,6 +473,8 @@ struct CatTcpService::ClientRec {
     std::thread t;
     std::atomic<bool> done{false};
     SOCKET s = INVALID_SOCKET;
+    std::mutex m;          // guards `closed`: stop() shuts the socket down only while this thread has not yet closed it (a closed handle may be reused)
+    bool closed = false;
 };
 
 CatTcpService::CatTcpService(CatDialect dialect, RigBackend backend) : dialect_(dialect), backend_(std::move(backend)), vfos_(std::make_shared<RigVfos>()) {}
@@ -524,6 +526,9 @@ void CatTcpService::acceptLoop() {
         if (clients_.load() >= kMaxClients) { ::closesocket(c); continue; }
         DWORD to = 100;
         ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&to), sizeof to);
+        // R4-03: a client that stops reading must not park this thread in send() for ever (stop() joins it): the send gives up after kSendTimeoutMs
+        DWORD sendTo = kSendTimeoutMs;
+        ::setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTo), sizeof sendTo);
         BOOL nodelay = TRUE;
         ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof nodelay);
         auto rec = std::make_unique<ClientRec>();
@@ -540,7 +545,11 @@ void CatTcpService::acceptLoop() {
             SocketStream stream(c);
             const std::uint64_t n = serveCatStream(stream, emu, stop_);
             commands_ += n;
-            ::closesocket(c);
+            {
+                std::lock_guard<std::mutex> lk(r->m);
+                r->closed = true;
+                ::closesocket(c);
+            }
             --clients_;
             r->done = true;
         });
@@ -556,7 +565,11 @@ void CatTcpService::stop() {
         recs.swap(recs_);
     }
     for (auto& r : recs) {
-        if (r->t.joinable()) { r->t.join(); }   // each client thread sees stop_ within its 100 ms receive timeout
+        {   // R4-03: a thread blocked in send() to a peer that never reads is woken by the shutdown; failing that, its send timeout ends it
+            std::lock_guard<std::mutex> lk(r->m);
+            if (!r->closed) { ::shutdown(r->s, SD_BOTH); }
+        }
+        if (r->t.joinable()) { r->t.join(); }   // each client thread sees stop_ within its 100 ms receive timeout, or its send timeout
     }
     if (listener_ != -1) { ::closesocket(static_cast<SOCKET>(listener_)); listener_ = -1; }
     port_ = 0;
@@ -590,6 +603,8 @@ struct CatTcpService::ClientRec {
     std::thread t;
     std::atomic<bool> done{false};
     int s = -1;
+    std::mutex m;          // guards `closed`: stop() shuts the socket down only while this thread has not yet closed it (a closed descriptor may be reused)
+    bool closed = false;
 };
 
 CatTcpService::CatTcpService(CatDialect dialect, RigBackend backend) : dialect_(dialect), backend_(std::move(backend)), vfos_(std::make_shared<RigVfos>()) {}
@@ -641,6 +656,9 @@ void CatTcpService::acceptLoop() {
         if (clients_.load() >= kMaxClients) { ::close(c); continue; }
         timeval to{0, 100000};
         ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
+        // R4-03: a client that stops reading must not park this thread in send() for ever (stop() joins it): the send gives up after kSendTimeoutMs
+        timeval sendTo{kSendTimeoutMs / 1000, (kSendTimeoutMs % 1000) * 1000};
+        ::setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &sendTo, sizeof sendTo);
         int nodelay = 1;
         ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof nodelay);
         auto rec = std::make_unique<ClientRec>();
@@ -657,7 +675,11 @@ void CatTcpService::acceptLoop() {
             SocketStream stream(c);
             const std::uint64_t n = serveCatStream(stream, emu, stop_);
             commands_ += n;
-            ::close(c);
+            {
+                std::lock_guard<std::mutex> lk(r->m);
+                r->closed = true;
+                ::close(c);
+            }
             --clients_;
             r->done = true;
         });
@@ -673,7 +695,11 @@ void CatTcpService::stop() {
         recs.swap(recs_);
     }
     for (auto& r : recs) {
-        if (r->t.joinable()) { r->t.join(); }   // each client thread sees stop_ within its 100 ms receive timeout
+        {   // R4-03: a thread blocked in send() to a peer that never reads is woken by the shutdown; failing that, its send timeout ends it
+            std::lock_guard<std::mutex> lk(r->m);
+            if (!r->closed) { ::shutdown(r->s, SHUT_RDWR); }
+        }
+        if (r->t.joinable()) { r->t.join(); }   // each client thread sees stop_ within its 100 ms receive timeout, or its send timeout
     }
     if (listener_ != -1) { ::close(static_cast<int>(listener_)); listener_ = -1; }
     port_ = 0;
