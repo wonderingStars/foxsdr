@@ -1560,7 +1560,6 @@ bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std:
     // which is the whole point. The extension is the host's own, not a list of
     // every platform's — a Windows installation has no business writing a .so
     // into its plugins directory, and PluginHost would not load it anyway.
-    const std::size_t extLen = std::strlen(kModuleExtension);
     if (!hasModuleExtension(raw)) {
         error = std::string("file name does not end in \"") + kModuleExtension + "\": \"" +
                 raw + "\"";
@@ -1568,8 +1567,11 @@ bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std:
     }
     // Windows reserved device names are reserved with ANY extension, so
     // "CON.dll" is not a file - creating it either fails oddly or talks to a
-    // device. Refuse with a clear reason instead.
-    const std::string stem = toLowerAscii(raw.substr(0, raw.size() - extLen));
+    // device. Refuse with a clear reason instead. THE PART BEFORE THE FIRST DOT is
+    // what Windows tests ("COM1.a.dll" and "con.x.dll" are devices too), not the
+    // name minus the module extension (security review R1, finding F5). `raw` starts
+    // with a letter or a digit (checked above), so the cut is never at position 0.
+    const std::string stem = toLowerAscii(raw.substr(0, raw.find('.')));
     static const char* kReserved[] = {"con",  "prn",  "aux",  "nul",  "com1", "com2", "com3",
                                       "com4", "com5", "com6", "com7", "com8", "com9", "lpt1",
                                       "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",

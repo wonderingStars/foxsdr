@@ -95,8 +95,8 @@ std::string validInstallAs(const std::string& name) {
     // The store's own files in the plugins folder: the install manifest, the helper record, the companion-program record and the kept catalogue (security review R1, finding F2:
     // the last two were missing, so a companion could be installed over them).
     if (l == "installed.json" || l == "helpers.json" || l == "companions.json" || l == "catalogue.json") { return "that name is the store's own"; }
-    // Windows reserved device names (the stem)
-    const std::string stem = lower(stemOf(name));
+    // Windows reserved device names: THE PART BEFORE THE FIRST DOT, as Windows tests it ("con.x.txt" and "COM1.a" are devices; security review R1, finding F5)
+    const std::string stem = l.substr(0, l.find('.'));
     static const char* const kReserved[] = {"con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
     for (const char* r : kReserved) {
         if (stem == r) { return "a reserved device name"; }

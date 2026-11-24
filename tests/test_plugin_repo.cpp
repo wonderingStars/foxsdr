@@ -869,6 +869,17 @@ int main() {
         expectBadName(n("nul"), "reserved device name, lower case");
         expectBadName(n("COM1"), "reserved serial device");
         expectBadName(n("LPT9"), "reserved printer device");
+        // F5 (review R1, 0.99.114): the device name is the part before the FIRST dot, so a second dot does not hide it.
+        expectBadName(n("COM1.a"), "reserved serial device with a second dot");
+        expectBadName(n("con.x"), "reserved device with a second dot");
+        expectBadName(n("lpt9.v2.1"), "reserved printer device with two more dots");
+        {
+            std::string out;
+            std::string err;
+            CHECK(PluginRepo::sanitiseFileName(n("radar.v2"), out, err));      // a dotted name that is not a device is still a good name
+            CHECK(PluginRepo::sanitiseFileName(n("console"), out, err));
+            CHECK(PluginRepo::sanitiseFileName(n("com10.v2"), out, err));
+        }
         // The bound itself: kMaxFileNameChars is accepted, one more is not.
         // Sized from the extension so the boundary is exact on both platforms.
         {

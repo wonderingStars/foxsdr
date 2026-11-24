@@ -520,12 +520,13 @@ void testRegionalHelperFilesAreHeldToThePrefix() {
 }
 
 // F2 (second half): the names a companion may not install under include the store's own other files in the plugins folder.
-void testOwnNames() {
-    for (const char* ok : {"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt", "controller.v2.exe"}) {
+// F5: a Windows device name is reserved when the part BEFORE THE FIRST DOT is one, not only when the whole stem is.
+void testReservedAndOwnNames() {
+    for (const char* ok : {"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt", "controller.v2.exe", "console.exe", "com10.exe", "aux1.exe"}) {
         if (!hs::validInstallAs(ok).empty()) { std::printf("      a good name was refused: %s\n", ok); }
         CHECK(hs::validInstallAs(ok).empty());
     }
-    for (const char* bad : {"companions.json", "COMPANIONS.JSON", "catalogue.json", "installed.json", "helpers.json", "con.exe"}) {
+    for (const char* bad : {"companions.json", "COMPANIONS.JSON", "catalogue.json", "installed.json", "helpers.json", "con.exe", "COM1.a", "com1.helper.json", "con.x.txt", "NUL.tar.gz", "lpt9.v2.1.exe", "Aux.LICENSE.txt"}) {
         if (hs::validInstallAs(bad).empty()) { std::printf("      a bad name was accepted: %s\n", bad); }
         CHECK(!hs::validInstallAs(bad).empty());
     }
@@ -550,7 +551,7 @@ int main() {
     testUpdateAndRemove();
     testSiteAndWords();
     testRegionalHelperFilesAreHeldToThePrefix();
-    testOwnNames();
+    testReservedAndOwnNames();
     PluginRepo::setTransportForTest(nullptr);
     fs::remove_all(g_dir, ec);
     return testSummary("test_plugin_repo_helper");
