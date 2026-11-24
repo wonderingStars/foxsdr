@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/updater.hpp"
+#include "core/sys_hash.hpp"
 #include "core/sys_manifest_sig.hpp"   // wire-c
 
 #include <nlohmann/json.hpp>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -19,7 +21,9 @@
 
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/package_identity.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/plugin_repo_data.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -131,12 +135,14 @@ bool wellFormedSha256(const std::string& s) {
 }
 
 bool urlIsOnAllowedHost(const std::string& url) {
-    const std::string prefix = "https://";
-    if (url.rfind(prefix, 0) != 0) { return false; }
-    const std::size_t start = prefix.size();
-    const std::size_t slash = url.find('/', start);
-    const std::string host = url.substr(start, slash == std::string::npos ? std::string::npos
-                                                                          : slash - start);
+    // THE HOST IS CUT WHERE A URL'S AUTHORITY ENDS - at '/', '?' or '#' - by the plugin
+    // store's own host function, which also refuses user-info, a backslash, a space or a
+    // control character outright and keeps a non-default port in the answer (so it never
+    // equals the bare host below). This used to cut at '/' alone, so
+    // "https://other.example?.foxsdr.com/x" looked like a foxsdr.com subdomain here
+    // and like other.example to the HTTP client (security review R1, finding F3).
+    const std::string host = pluginSiteHost(url);
+    if (host.empty()) { return false; }
     // Exactly the host, or a subdomain of it. "evilfoxsdr.com" must not pass,
     // which a plain suffix test would allow.
     if (host == kAllowedHost) { return true; }
@@ -234,6 +240,8 @@ bool wellFormedMessageId(const std::string& id) {
 }
 
 bool updateManifestFakeSet() {
+    // A PRODUCT run ignores the seam (security review R1, finding F4): engine/process_boot.cpp calls lockFakePackageSeams() for a run with no --frames and no --seconds.
+    if (!fakePackageSeamsOpen()) { return false; }
     const char* const v = std::getenv("FOXSDR_FAKE_UPDATE_MANIFEST");
     return v != nullptr && *v != '\0';
 }
@@ -410,14 +418,17 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
 }
 
 std::string updateEndpoint() {
+    // The override is for bounded runs and tests only: a PRODUCT run ignores it (security review R1, finding F4; see updateManifestFakeSet).
+    if (fakePackageSeamsOpen()) {
 #if defined(_WIN32)
-    char buf[512] = {0};
-    const DWORD n = ::GetEnvironmentVariableA("FOXSDR_UPDATE_URL", buf, sizeof(buf));
-    if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
+        char buf[512] = {0};
+        const DWORD n = ::GetEnvironmentVariableA("FOXSDR_UPDATE_URL", buf, sizeof(buf));
+        if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
 #else
-    const char* v = std::getenv("FOXSDR_UPDATE_URL");
-    if (v != nullptr && *v != '\0') { return std::string(v); }
+        const char* v = std::getenv("FOXSDR_UPDATE_URL");
+        if (v != nullptr && *v != '\0') { return std::string(v); }
 #endif
+    }
     return "https://foxsdr.com/api/update";
 }
 
@@ -545,7 +556,142 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
         progress->store(1.0f, std::memory_order_relaxed);
     }
     outPath = dest.string();
+    recordVerifiedInstaller(outPath, info.sha256);   // F1: what the launchers re-check and hold right before they start it
     return true;
+}
+
+// ---- F1 (review R1, 0.99.114): the installer that runs is the installer that was verified ---------------------------------------------------------
+namespace {
+std::mutex g_verifiedInstallersMutex;
+std::map<std::string, std::string> g_verifiedInstallers;   // path as downloadUpdate returned it -> lower-case sha256 it was verified against
+
+std::string lowerHexOf(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'F') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return out;
+}
+}  // namespace
+
+void recordVerifiedInstaller(const std::string& path, const std::string& sha256) {
+    std::lock_guard<std::mutex> lk(g_verifiedInstallersMutex);
+    g_verifiedInstallers[path] = lowerHexOf(sha256);
+}
+
+void InstallerHold::release() {
+#if defined(_WIN32)
+    if (handle_ != nullptr) { ::CloseHandle(static_cast<HANDLE>(handle_)); }
+    if (parent_ != nullptr) { ::CloseHandle(static_cast<HANDLE>(parent_)); }
+#endif
+    handle_ = nullptr;
+    parent_ = nullptr;
+    held_ = false;
+}
+
+bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::string& error) {
+    hold.release();
+    error.clear();
+    const auto refuse = [&error](const char* why) {
+        error = why;
+        diagWarnf("update: the installer was not started: %s", why);   // no path, no content
+        return false;
+    };
+    std::string expected;
+    {
+        std::lock_guard<std::mutex> lk(g_verifiedInstallersMutex);
+        const auto it = g_verifiedInstallers.find(path);
+        if (it != g_verifiedInstallers.end()) { expected = it->second; }
+    }
+    if (expected.empty()) { return refuse("that file is not an installer this program verified"); }
+
+    cascade::core::sys::Sha256 hasher;
+    std::uint64_t total = 0;
+    std::vector<char> buf(64 * 1024);
+#if defined(_WIN32)
+    std::wstring wide;
+    try {
+        wide = fs::path(path).wstring();
+    } catch (...) {
+        return refuse("the installer's path cannot be read");
+    }
+    if (wide.empty()) { return refuse("the installer's path is empty"); }
+    // THE PARENT FOLDER FIRST (review of the R1 fixes, D1): FILE_FLAG_OPEN_REPARSE_POINT below covers the last path component only, so a process on the same account could
+    // make "foxsdr-update" a junction to a folder holding a genuine copy, let the hash pass there, and re-point the junction before ShellExecuteEx resolves the same string.
+    // The folder is opened as itself (a junction is seen as one and refused) and kept open without delete sharing: it cannot be moved aside or replaced while the hold lives.
+    // A junction ABOVE this folder (for example the temp folder itself) is not covered; the temp folder is the user's own.
+    HANDLE parent = INVALID_HANDLE_VALUE;
+    {
+        std::wstring parentWide;
+        try {
+            parentWide = fs::path(path).parent_path().wstring();
+        } catch (...) {
+            return refuse("the installer's folder cannot be read");
+        }
+        if (parentWide.empty()) { return refuse("the installer's folder is not named"); }
+        parent = ::CreateFileW(parentWide.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                               nullptr);
+        if (parent == INVALID_HANDLE_VALUE) { return refuse("the installer's folder cannot be opened"); }
+        BY_HANDLE_FILE_INFORMATION pinfo{};
+        if (!::GetFileInformationByHandle(parent, &pinfo) || (pinfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || (pinfo.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            ::CloseHandle(parent);
+            return refuse("the installer's folder is not a plain folder");
+        }
+    }
+    // FILE_SHARE_READ only: while this handle lives nobody can open the file for writing or deleting, rename it or replace it; the shell and the loader only read it.
+    // FILE_FLAG_OPEN_REPARSE_POINT so a link is opened AS a link and refused below, not followed to a target nobody checked.
+    HANDLE h = ::CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
+                             nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        ::CloseHandle(parent);
+        return refuse("the installer cannot be opened");
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!::GetFileInformationByHandle(h, &info) || (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+        ::CloseHandle(h);
+        ::CloseHandle(parent);
+        return refuse("the installer is not a plain file");
+    }
+    for (;;) {
+        DWORD got = 0;
+        if (!::ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr)) {
+            ::CloseHandle(h);
+            ::CloseHandle(parent);
+            return refuse("the installer cannot be read");
+        }
+        if (got == 0) { break; }
+        total += got;
+        if (total > kMaxInstallerBytes) {
+            ::CloseHandle(h);
+            ::CloseHandle(parent);
+            return refuse("the installer is larger than any this program downloads");
+        }
+        hasher.update(buf.data(), got);
+    }
+    if (cascade::core::sys::toHex(hasher.finish().data(), 32) != expected) {
+        ::CloseHandle(h);
+        ::CloseHandle(parent);
+        return refuse("the installer is not the file that was verified");
+    }
+    hold.handle_ = h;
+    hold.parent_ = parent;
+    hold.held_ = true;
+    return true;
+#else
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { return refuse("the installer cannot be opened"); }
+    while (in) {
+        in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        const std::streamsize got = in.gcount();
+        if (got <= 0) { break; }
+        total += static_cast<std::uint64_t>(got);
+        if (total > kMaxInstallerBytes) { return refuse("the installer is larger than any this program downloads"); }
+        hasher.update(buf.data(), static_cast<std::size_t>(got));
+    }
+    if (cascade::core::sys::toHex(hasher.finish().data(), 32) != expected) { return refuse("the installer is not the file that was verified"); }
+    hold.held_ = true;   // no share-mode lock off Windows: the digest check is all there is
+    return true;
+#endif
 }
 
 // UpdateCheckTask: a template now (AbandonableTask), defined in the header.

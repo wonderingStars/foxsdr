@@ -173,7 +173,9 @@ bool checkForUpdate(const std::string& baseUrl, const std::string& currentVersio
 std::string updateChannelParam(const std::string& setting);
 
 // Where the check goes. Overridable with FOXSDR_UPDATE_URL so a test can point
-// at a local stub, and so the endpoint can move without orphaning binaries.
+// at a local stub - IN A TEST OR BOUNDED RUN ONLY: a product run (one with no --frames and no
+// --seconds, after lockFakePackageSeams()) always gets the built-in address (security review R1,
+// finding F4, 0.99.114).
 std::string updateEndpoint();
 
 // THE TEST SEAM (0.99.79). FOXSDR_FAKE_UPDATE_MANIFEST=<path to a file> makes
@@ -185,10 +187,11 @@ std::string updateEndpoint();
 // It exists so a --frames run can show the whole team-message path: fetchText refuses
 // anything that is not https, so a stub on a loopback port cannot stand in for foxsdr.com.
 //
-// SAFE AS AN ENVIRONMENT HOOK for the same reason FOXSDR_FAKE_STORE_UPDATE
-// (core/store_update.hpp) is: the most it can do is make a copy believe the service said
-// something. The answer still goes through parseUpdateManifest, so it cannot make the
-// application download anything the real answer could not, and it sends nothing.
+// A TEST SEAM, CLOSED IN A PRODUCT RUN (security review R1, finding F4, 0.99.114): it was once
+// called safe as an environment hook, and it is not - a canned answer can put a banner and an
+// installer URL in front of the user. After lockFakePackageSeams() (a run with no --frames and
+// no --seconds) updateManifestFakeSet() is false whatever the environment says. The answer still
+// goes through parseUpdateManifest, and it sends nothing.
 //
 // True when it is set and not empty; read from the environment on each call.
 bool updateManifestFakeSet();
@@ -220,6 +223,58 @@ void setManifestTrustedKeysForTest(const std::vector<std::array<std::uint8_t, 32
 bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& error,
                     std::atomic<float>* progress = nullptr,
                     std::atomic<bool>* cancel = nullptr);
+
+// THE VERIFIED INSTALLER MUST BE THE ONE THAT RUNS (security review R1, finding F1, 0.99.114).
+// downloadUpdate hashes the file and renames it into a per-user temp folder under a name anyone can predict; the user then reads the banner for as long as they like
+// before pressing "Install now and restart", and ShellExecute starts whatever is at that path THEN. A process on the same account could replace the file in
+// between and borrow the elevation prompt the user expects. So the two launchers (gui/app_window.cpp launchInstaller, slint/host_duties.cpp shellOpenInstaller) call
+// holdVerifiedInstaller immediately before ShellExecute and keep the InstallerHold alive across that call:
+//   * downloadUpdate records (path, sha256) of each installer it has verified (recordVerifiedInstaller, in memory only);
+//   * holdVerifiedInstaller refuses a path this process did not verify, opens the file with READ-ONLY SHARING (nobody else can write, delete or rename it while the hold
+//     lives; reading and executing it stay allowed), refuses a link or other reparse point, re-hashes the bytes through that same handle and refuses a file whose
+//     digest is not the recorded one - so there is no gap between the check and the handle that stays open - and does the same for the file's PARENT folder (a junction
+//     there is refused; the real folder is held open without delete sharing, so it cannot be moved aside and replaced by a junction while the installer starts);
+//   * the caller starts the installer, then lets the hold go.
+// A refusal is the same "could not start the installer" the launchers already report, so the user sees no new wording; the reason goes to the diagnostic log (no path,
+// no content). On non-Windows builds the hold is the digest check alone.
+//
+// NARROWED, NOT CLOSED. What the hold cannot do: a junction ABOVE the installer's folder (the temp folder itself) is not looked at, and once ShellExecute has started the
+// installer, the installer opens its own setup file again by path and unpacks a second program of its own - the hold ends when ShellExecute returns.
+void recordVerifiedInstaller(const std::string& path, const std::string& sha256);
+
+class InstallerHold {
+public:
+    InstallerHold() = default;
+    ~InstallerHold() { release(); }
+    InstallerHold(InstallerHold&& other) noexcept : handle_(other.handle_), parent_(other.parent_), held_(other.held_) { other.handle_ = nullptr; other.parent_ = nullptr; other.held_ = false; }
+    InstallerHold& operator=(InstallerHold&& other) noexcept {
+        if (this != &other) {
+            release();
+            handle_ = other.handle_;
+            parent_ = other.parent_;
+            held_ = other.held_;
+            other.handle_ = nullptr;
+            other.parent_ = nullptr;
+            other.held_ = false;
+        }
+        return *this;
+    }
+    InstallerHold(const InstallerHold&) = delete;
+    InstallerHold& operator=(const InstallerHold&) = delete;
+
+    bool held() const { return held_; }
+    void release();
+
+private:
+    friend bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::string& error);
+    void* handle_ = nullptr;   // the Windows file HANDLE; null elsewhere
+    void* parent_ = nullptr;   // the Windows HANDLE of the installer's folder, held without delete sharing; null elsewhere
+    bool held_ = false;
+};
+
+// False (and `hold` empty, `error` a short fixed sentence) when `path` was not verified by this process, cannot be opened, is a link, is over the installer size cap, or
+// no longer hashes to the digest downloadUpdate verified.
+bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::string& error);
 
 // What one update check came back with - the whole of it, BY VALUE, so the
 // worker that produced it writes nothing that anybody else owns.

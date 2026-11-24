@@ -10,6 +10,7 @@
 #include "core/file_read.hpp"
 #include "core/i18n.hpp"
 #include "core/companion_programs.hpp"   // companion applications shelf
+#include "core/package_identity.hpp"     // fakePackageSeamsOpen (the product-run gate on the test seams)
 #include "core/plugin_repo_helper.hpp"   // wire-c
 #include "core/utf8_text.hpp"
 
@@ -1271,18 +1272,23 @@ std::string PluginRepo::regionalIndexUrl() {
     // Same seam shape as every other FOXSDR_*_URL override in this codebase
     // (feature_request.cpp, telemetry.cpp, ...): GetEnvironmentVariableA on
     // Windows, getenv on POSIX, an empty value treated the same as unset.
+    // For bounded runs and tests only: a PRODUCT run ignores the variable (security review R1, finding F4;
+    // engine/process_boot.cpp calls lockFakePackageSeams() for a run with no --frames and no --seconds).
+    if (fakePackageSeamsOpen()) {
 #if defined(_WIN32)
-    char buf[512] = {0};
-    const DWORD n = ::GetEnvironmentVariableA("FOXSDR_REGIONAL_CATALOGUE_URL", buf, sizeof(buf));
-    if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
+        char buf[512] = {0};
+        const DWORD n = ::GetEnvironmentVariableA("FOXSDR_REGIONAL_CATALOGUE_URL", buf, sizeof(buf));
+        if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
 #else
-    const char* v = std::getenv("FOXSDR_REGIONAL_CATALOGUE_URL");
-    if (v != nullptr && v[0] != '\0') { return std::string(v); }
+        const char* v = std::getenv("FOXSDR_REGIONAL_CATALOGUE_URL");
+        if (v != nullptr && v[0] != '\0') { return std::string(v); }
 #endif
+    }
     return "https://foxsdr.com/api/plugins/regional";
 }
 
 bool PluginRepo::regionalOverrideSet() {
+    if (!fakePackageSeamsOpen()) { return false; }   // a product run ignores the override (finding F4)
 #if defined(_WIN32)
     char buf[512] = {0};
     const DWORD n = ::GetEnvironmentVariableA("FOXSDR_REGIONAL_CATALOGUE_URL", buf, sizeof(buf));
@@ -1392,6 +1398,17 @@ PluginRepo::RegionalMergeResult PluginRepo::mergeRegional(
                 badUrl = true;
                 break;
             }
+            // THE HELPER PROGRAM'S FILES TOO (security review R1, finding F2): a helper entry's
+            // companion files (program, manifest, licence) are downloaded and moved into the
+            // plugins folder like the module, so each is held to the same regional prefix. They
+            // used to be copied across unchecked and could name any https host.
+            for (const HelperCompanion& c : p.companions) {
+                if (!isRegionalDownloadUrl(c.url, downloadPrefix)) {
+                    badUrl = true;
+                    break;
+                }
+            }
+            if (badUrl) { break; }
         }
         if (badUrl) {
             result.dropped.push_back(
@@ -1549,7 +1566,6 @@ bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std:
     // which is the whole point. The extension is the host's own, not a list of
     // every platform's — a Windows installation has no business writing a .so
     // into its plugins directory, and PluginHost would not load it anyway.
-    const std::size_t extLen = std::strlen(kModuleExtension);
     if (!hasModuleExtension(raw)) {
         error = std::string("file name does not end in \"") + kModuleExtension + "\": \"" +
                 raw + "\"";
@@ -1557,8 +1573,11 @@ bool PluginRepo::sanitiseFileName(const std::string& raw, std::string& out, std:
     }
     // Windows reserved device names are reserved with ANY extension, so
     // "CON.dll" is not a file - creating it either fails oddly or talks to a
-    // device. Refuse with a clear reason instead.
-    const std::string stem = toLowerAscii(raw.substr(0, raw.size() - extLen));
+    // device. Refuse with a clear reason instead. THE PART BEFORE THE FIRST DOT is
+    // what Windows tests ("COM1.a.dll" and "con.x.dll" are devices too), not the
+    // name minus the module extension (security review R1, finding F5). `raw` starts
+    // with a letter or a digit (checked above), so the cut is never at position 0.
+    const std::string stem = toLowerAscii(raw.substr(0, raw.find('.')));
     static const char* kReserved[] = {"con",  "prn",  "aux",  "nul",  "com1", "com2", "com3",
                                       "com4", "com5", "com6", "com7", "com8", "com9", "lpt1",
                                       "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
@@ -3232,7 +3251,14 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
     // before any socket: this function does not trust its caller to have
     // gone through mergeRegional(), which is the only place `regional` is
     // meant to be set true.
-    if (e.regional && !isRegionalDownloadUrl(p->url, regionalDownloadPrefix())) {
+    // D7 (Fable review of the R1 fixes): the companion files of a helper entry are held to the same prefix as the plugin itself.
+    bool regionalOk = !e.regional || isRegionalDownloadUrl(p->url, regionalDownloadPrefix());
+    if (e.regional) {
+        for (const HelperCompanion& c : p->companions) {
+            if (!isRegionalDownloadUrl(c.url, regionalDownloadPrefix())) { regionalOk = false; }
+        }
+    }
+    if (!regionalOk) {
         error = "\"" + e.name + "\" is a regional catalogue entry and may only download from " +
                 regionalDownloadPrefix();
         return false;

@@ -232,6 +232,50 @@ void testAManifestPointingSomewhereElseIsRefused() {
         manifest("0.56.0", "https://dl.foxsdr.com/download/x.exe"), "0.50.0", info, err));
 }
 
+void testTheUpdateHostTestAndTheHttpClientAgreeAboutTheHost() {
+    // F3 (review R1, 0.99.114): the host was "everything up to the first '/'", but a URL's authority also ends at '?' and '#', and WinHTTP reads it that way. So
+    // "https://other.example?.foxsdr.com/x" looked like a foxsdr.com subdomain to this test and like other.example to the client. The host is now cut at '/', '?'
+    // or '#' (the plugin store's own host function), and user-info and backslash tricks are refused outright.
+    UpdateInfo info;
+    std::string err;
+    const char* bad[] = {
+        "https://other.example?.foxsdr.com/x.exe",         // query hides a foxsdr.com-looking suffix
+        "https://other.example#.foxsdr.com/x.exe",         // fragment does the same
+        "https://other.example?x=1.foxsdr.com",            // no slash at all
+        "https://other.example\\.foxsdr.com/x.exe",        // a backslash: a browser reads it as a slash
+        "https://foxsdr.com@other.example/x.exe",          // user-info: the host is other.example
+        "https://other.example@a.foxsdr.com/x.exe",        // user-info in front of a foxsdr.com host: refused outright, not parsed
+        "https://foxsdr.com:8443/x.exe",                   // a port
+        "https://foxsdr.com./x.exe",                       // a trailing dot
+        "https://evilfoxsdr.com?.foxsdr.com/x.exe",
+    };
+    for (const char* u : bad) {
+        const bool ok = cascade::core::parseUpdateManifest(manifest("0.56.0", u), "0.50.0", info, err);
+        if (ok) { std::printf("FAIL accepted an update URL of \"%s\"\n", u); }
+        CHECK(!ok);
+    }
+    const char* good[] = {
+        "https://foxsdr.com/download/u/foxsdr-setup-0.56.0.exe",
+        "https://dl.foxsdr.com/download/x.exe",
+        "https://foxsdr.com/x.exe?download=1",             // a query on the real host is the real host
+        "https://foxsdr.com",
+    };
+    for (const char* u : good) {
+        const bool ok = cascade::core::parseUpdateManifest(manifest("0.56.0", u), "0.50.0", info, err);
+        if (!ok) { std::printf("FAIL refused an update URL of \"%s\": %s\n", u, err.c_str()); }
+        CHECK(ok);
+    }
+    // downloadUpdate re-checks the same rule for an UpdateInfo built by hand
+    UpdateInfo hostile;
+    hostile.version = "0.56.0";
+    hostile.sha256 = "393e5fd91b7b2292611c52af7e9f2db1e2c730d78f1639adefceaf0fb5cca0ea";
+    hostile.url = "https://other.example?.foxsdr.com/x.exe";
+    hostile.newer = true;
+    std::string path;
+    CHECK(!cascade::core::downloadUpdate(hostile, path, err));
+    CHECK(err.find("refusing an update URL") != std::string::npos);
+}
+
 void testVersionGrammar() {
     using cascade::core::wellFormedVersion;
     // The two shapes the project actually publishes.
@@ -1102,6 +1146,7 @@ int main() {
     testTheVersionDecisionIsMadeHereNotByTheServer();
     testAManifestWithoutAChecksumIsRefused();
     testAManifestPointingSomewhereElseIsRefused();
+    testTheUpdateHostTestAndTheHttpClientAgreeAboutTheHost();
     testVersionGrammar();
     testAManifestWithAHostileVersionIsRefused();
     testLegitimateVersionsStillGetThrough();
