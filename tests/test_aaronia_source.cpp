@@ -396,6 +396,20 @@ void testRecords() {
         for (char c : two) { const std::uint8_t b = static_cast<std::uint8_t>(c); q.feed(&b, 1, out2); }
         CHECK(q.error().empty() && out2.size() == 2);
     }
+    // R3-05: JSON numbers beyond float range (1e300) become infinity in a float; the parser zeroes the pair and counts it
+    {
+        aa::RecordParser p(aa::SampleFormat::Json);
+        std::vector<aa::IqRecord> out;
+        const std::string w = std::string("{\"payload\":\"iq\",\"startTime\":1,\"endTime\":2,\"samples\":[1e300,-1e300,0.5,0.25,3,1e308]}") + "\n\x1e";
+        p.feed(reinterpret_cast<const std::uint8_t*>(w.data()), w.size(), out);
+        CHECK(p.error().empty() && out.size() == 1 && out[0].samples.size() == 3);
+        if (out.size() == 1 && out[0].samples.size() == 3) {
+            CHECK(out[0].samples[0] == std::complex<float>(0.0f, 0.0f));
+            CHECK(out[0].samples[1] == std::complex<float>(0.5f, 0.25f));
+            CHECK(out[0].samples[2] == std::complex<float>(0.0f, 0.0f));
+        }
+        CHECK(p.nonFiniteSamples() == 2);
+    }
     // strings containing braces and escaped quotes do not end an object early
     {
         aa::RecordParser p(aa::SampleFormat::Json);

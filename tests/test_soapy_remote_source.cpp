@@ -15,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <limits>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -139,7 +140,8 @@ enum class Mode {
     TruncatedReply, CS12Format, OddCallThenNormal,
     DripMake  // R3-02: answers MAKE with a header that announces 2000 bytes, then one byte every 400 ms for 12 s
 };
-enum class StreamFault { None, SplitHeader, DieAfter, LyingBytes, ElemsBeyond, StatusFatal, StatusOverflow, Stall };
+enum class StreamFault { None, SplitHeader, DieAfter, LyingBytes, ElemsBeyond, StatusFatal, StatusOverflow, Stall,
+                         NonFinite  /* R3-05: CF32 elements that are NaN and infinity (needs nativeFormat CF32) */ };
 
 class FakeSoapy {
 public:
@@ -420,7 +422,8 @@ private:
             }
             const int elems = 200;
             Bytes d;
-            std::uint32_t bytes = 24 + elems * 4;
+            const std::uint32_t elemBytes = f == StreamFault::NonFinite ? 8 : 4;
+            std::uint32_t bytes = 24 + elems * elemBytes;
             std::int32_t elemsField = elems;
             if (f == StreamFault::LyingBytes && sent == faultAfter.load()) { bytes = 24 + elems * 4 + 5000; }
             if (f == StreamFault::ElemsBeyond && sent == faultAfter.load()) { elemsField = elems + 50; }
@@ -432,7 +435,16 @@ private:
             put32(d, 0);
             put32(d, 0);
             put32(d, 0);
-            if (bytes > 24) {
+            if (bytes > 24 && f == StreamFault::NonFinite) {
+                for (int i = 0; i < elems; ++i, ++n) {
+                    const float re = n % 3 == 0 ? std::numeric_limits<float>::quiet_NaN() : (n % 5 == 0 ? std::numeric_limits<float>::infinity() : 0.5f);
+                    const float im = n % 7 == 0 ? -std::numeric_limits<float>::infinity() : 0.25f;
+                    std::uint8_t raw[8];
+                    std::memcpy(raw, &re, 4);
+                    std::memcpy(raw + 4, &im, 4);
+                    d.insert(d.end(), raw, raw + 8);
+                }
+            } else if (bytes > 24) {
                 const int actual = std::min(elems, static_cast<int>((bytes - 24) / 4));
                 for (int i = 0; i < elems; ++i, ++n) {
                     const std::int16_t v = static_cast<std::int16_t>(n % 20000);
@@ -781,6 +793,25 @@ void testImplausibleRatesAreDropped() {
     s.closeDevice();
 }
 
+// R3-05: CF32 samples that are NaN or infinite (a server's bytes) must not reach the ring: the converter
+// zeroes them, as the SpyServer, Aaronia raw and ExtIO converters already do.
+void testNonFiniteSamplesAreZeroed() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.nativeFormat = "CF32";
+    fake.fullScale = 1.0;
+    fake.fault.store(StreamFault::NonFinite);
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args()));
+    CHECK(s.start());
+    const auto got = readN(s, 2000);
+    CHECK(got.size() >= 2000);
+    std::size_t bad = 0;
+    for (const auto& v : got) { bad += !(std::isfinite(v.real()) && std::isfinite(v.imag())); }
+    CHECK(bad == 0);
+    s.closeDevice();
+}
+
 void testShutdownWhileServerSilent() {
     // The server stops sending while the source is streaming; close must still return inside
     // the reader-join bound.
@@ -957,6 +988,7 @@ int main() {
     STEP(testShutdownWhileServerSilent());
     STEP(testDripReplyHasOneDeadline());
     STEP(testImplausibleRatesAreDropped());
+    STEP(testNonFiniteSamplesAreZeroed());
     STEP(testScripted());
     STEP(testFuzz());
     return testSummary("test_soapy_remote_source");

@@ -91,6 +91,8 @@ struct SoapyRemoteSource::Stream {
                 float a = 0.0f, b = 0.0f;
                 std::memcpy(&a, p + 8 * i, 4);
                 std::memcpy(&b, p + 8 * i + 4, 4);
+                if (!std::isfinite(a)) { a = 0.0f; }  // NaN and infinity are the peer's bytes, never samples (R3-05)
+                if (!std::isfinite(b)) { b = 0.0f; }
                 out[i] = {a * inv, b * inv};
             }
         }
