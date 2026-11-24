@@ -7,6 +7,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -135,6 +136,57 @@ void testTheInstallerIsReCheckedAndHeldBeforeItRuns() {
 }
 
 #ifdef _WIN32
+// D1 (Fable review of the R1 fixes): the hold pinned the FILE, not the PATH. FILE_FLAG_OPEN_REPARSE_POINT covers the last component only, so a same-account process
+// could make `<temp>\foxsdr-update` a junction to a folder that holds a genuine copy: the file hashes fine through the junction, then the junction is re-pointed and
+// ShellExecuteEx resolves the same path string to another file. The hold must therefore (a) refuse a path whose parent folder is a reparse point and (b) keep the real
+// parent folder open without delete sharing, so it cannot be moved aside and replaced while the installer starts.
+bool makeJunction(const fs::path& link, const fs::path& target) {
+    const std::wstring cmd = L"cmd /c \"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >nul 2>nul\"";
+    return ::_wsystem(cmd.c_str()) == 0 && fs::exists(link);
+}
+
+void testTheParentFolderIsHeldAndNotALink() {
+    std::error_code ec;
+    const fs::path base = fs::temp_directory_path() / ("foxsdr-test-installer-parent-" + std::to_string(TEST_GETPID()));
+    fs::remove_all(base, ec);
+    fs::create_directories(base / "real", ec);
+    const std::string good = "stand-in installer bytes, parent test";
+    const std::string sha = cascade::core::sys::sha256Hex(good);
+    writeWhole(base / "real" / "foxsdr-setup-9.9.9.exe", good);
+
+    // (a) the parent folder is a junction to the folder that holds the genuine file: refused, nothing held.
+    CHECK(makeJunction(base / "junction", base / "real"));
+    const fs::path viaJunction = base / "junction" / "foxsdr-setup-9.9.9.exe";
+    cascade::core::recordVerifiedInstaller(viaJunction.string(), sha);
+    {
+        cascade::core::InstallerHold hold;
+        std::string err;
+        CHECK(!cascade::core::holdVerifiedInstaller(viaJunction.string(), hold, err));
+        CHECK(!hold.held());
+        CHECK(!err.empty());
+    }
+    // ... and the same folder reached by its real name is fine (the test is about the link, not the folder).
+    const fs::path direct = base / "real" / "foxsdr-setup-9.9.9.exe";
+    cascade::core::recordVerifiedInstaller(direct.string(), sha);
+
+    // (b) while the real parent is held it cannot be moved aside (the step that makes room for a junction of the same name) or deleted.
+    {
+        cascade::core::InstallerHold hold;
+        std::string err;
+        CHECK(cascade::core::holdVerifiedInstaller(direct.string(), hold, err));
+        CHECK(hold.held());
+        CHECK(!::MoveFileW((base / "real").wstring().c_str(), (base / "aside").wstring().c_str()));
+        CHECK(fs::exists(base / "real", ec) && !fs::exists(base / "aside", ec));
+        // a second file in the same folder is still fine (the installer unpacks beside itself)
+        writeWhole(base / "real" / "side.tmp", "x");
+        CHECK(fs::exists(base / "real" / "side.tmp", ec));
+    }
+    // released with the hold: the folder can be moved again
+    CHECK(::MoveFileW((base / "real").wstring().c_str(), (base / "aside").wstring().c_str()));
+    fs::remove(base / "junction", ec);   // removes the junction itself, not what it pointed at
+    fs::remove_all(base, ec);
+}
+
 // The hold must not stop the shell from starting the file (the same ShellExecuteEx the launchers call), or the fix would break "Install now".
 // A harmless stand-in: a copy of a small system program that prints the computer's name and exits; started hidden, waited for.
 void testAHeldStandInStillStartsThroughTheShell() {
@@ -183,6 +235,7 @@ int main() {
     testTheInstallerIsReCheckedAndHeldBeforeItRuns();
 #ifdef _WIN32
     testAHeldStandInStillStartsThroughTheShell();
+    testTheParentFolderIsHeldAndNotALink();
 #endif
     return testSummary("test_installer_hold");
 }

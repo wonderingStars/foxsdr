@@ -582,8 +582,10 @@ void recordVerifiedInstaller(const std::string& path, const std::string& sha256)
 void InstallerHold::release() {
 #if defined(_WIN32)
     if (handle_ != nullptr) { ::CloseHandle(static_cast<HANDLE>(handle_)); }
+    if (parent_ != nullptr) { ::CloseHandle(static_cast<HANDLE>(parent_)); }
 #endif
     handle_ = nullptr;
+    parent_ = nullptr;
     held_ = false;
 }
 
@@ -614,35 +616,65 @@ bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::st
         return refuse("the installer's path cannot be read");
     }
     if (wide.empty()) { return refuse("the installer's path is empty"); }
+    // THE PARENT FOLDER FIRST (review of the R1 fixes, D1): FILE_FLAG_OPEN_REPARSE_POINT below covers the last path component only, so a process on the same account could
+    // make "foxsdr-update" a junction to a folder holding a genuine copy, let the hash pass there, and re-point the junction before ShellExecuteEx resolves the same string.
+    // The folder is opened as itself (a junction is seen as one and refused) and kept open without delete sharing: it cannot be moved aside or replaced while the hold lives.
+    // A junction ABOVE this folder (for example the temp folder itself) is not covered; the temp folder is the user's own.
+    HANDLE parent = INVALID_HANDLE_VALUE;
+    {
+        std::wstring parentWide;
+        try {
+            parentWide = fs::path(path).parent_path().wstring();
+        } catch (...) {
+            return refuse("the installer's folder cannot be read");
+        }
+        if (parentWide.empty()) { return refuse("the installer's folder is not named"); }
+        parent = ::CreateFileW(parentWide.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                               nullptr);
+        if (parent == INVALID_HANDLE_VALUE) { return refuse("the installer's folder cannot be opened"); }
+        BY_HANDLE_FILE_INFORMATION pinfo{};
+        if (!::GetFileInformationByHandle(parent, &pinfo) || (pinfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || (pinfo.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+            ::CloseHandle(parent);
+            return refuse("the installer's folder is not a plain folder");
+        }
+    }
     // FILE_SHARE_READ only: while this handle lives nobody can open the file for writing or deleting, rename it or replace it; the shell and the loader only read it.
     // FILE_FLAG_OPEN_REPARSE_POINT so a link is opened AS a link and refused below, not followed to a target nobody checked.
     HANDLE h = ::CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
                              nullptr);
-    if (h == INVALID_HANDLE_VALUE) { return refuse("the installer cannot be opened"); }
+    if (h == INVALID_HANDLE_VALUE) {
+        ::CloseHandle(parent);
+        return refuse("the installer cannot be opened");
+    }
     BY_HANDLE_FILE_INFORMATION info{};
     if (!::GetFileInformationByHandle(h, &info) || (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
         ::CloseHandle(h);
+        ::CloseHandle(parent);
         return refuse("the installer is not a plain file");
     }
     for (;;) {
         DWORD got = 0;
         if (!::ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr)) {
             ::CloseHandle(h);
+            ::CloseHandle(parent);
             return refuse("the installer cannot be read");
         }
         if (got == 0) { break; }
         total += got;
         if (total > kMaxInstallerBytes) {
             ::CloseHandle(h);
+            ::CloseHandle(parent);
             return refuse("the installer is larger than any this program downloads");
         }
         hasher.update(buf.data(), got);
     }
     if (cascade::core::sys::toHex(hasher.finish().data(), 32) != expected) {
         ::CloseHandle(h);
+        ::CloseHandle(parent);
         return refuse("the installer is not the file that was verified");
     }
     hold.handle_ = h;
+    hold.parent_ = parent;
     hold.held_ = true;
     return true;
 #else
