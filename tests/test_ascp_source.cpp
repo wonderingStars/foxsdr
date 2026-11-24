@@ -99,7 +99,7 @@ Bytes ctl(as::MsgType t, std::uint16_t item, const Bytes& params) {
 
 class Radio {
 public:
-    explicit Radio(RadioSpec s) : spec_(std::move(s)) {}
+    explicit Radio(RadioSpec s) : spec_(std::move(s)) { rate.store(spec_.initialRate); }
     ~Radio() { stop(); }
 
     bool start() {
@@ -1028,6 +1028,23 @@ void testImplausibleReportedRateIsRefused() {
     s.closeDevice();
 }
 
+// Review of the R3 fixes, D3: the rate the radio reports at OPEN went into rateHz_ unchecked, and sampleRateHz() returns it until start(): a peer that answers 4294967295 or 1
+// told the receiver that rate. A reported rate no receiver could run is not kept; the wanted rate stands in until the stream starts.
+void testImplausibleRateReportedAtOpenIsNotKept() {
+    for (const int bad : {2000000000, 1, 999}) {
+        RadioSpec sp;
+        sp.initialRate = bad;
+        Radio r(sp);
+        CHECK(r.start());
+        AscpSource s;
+        CHECK(s.open(r.args("rate=250000,timeout=1500")));
+        const double got = s.sampleRateHz();
+        if (!cascade::source::plausibleSampleRateHz(got)) { std::printf("      a radio reporting %d at open: sampleRateHz() is %g\n", bad, got); }
+        CHECK(cascade::source::plausibleSampleRateHz(got));
+        s.closeDevice();
+    }
+}
+
 void testReadWhenIdle() {
     RadioSpec sp;
     Radio r(sp);
@@ -1114,6 +1131,7 @@ int main() {
     testReadWhenIdle();
     testStrayDatagramDoesNotParkReader();
     testImplausibleReportedRateIsRefused();
+    testImplausibleRateReportedAtOpenIsNotKept();
     testFuzz();
     return testSummary("test_ascp_source");
 }

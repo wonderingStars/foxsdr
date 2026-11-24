@@ -513,7 +513,8 @@ bool AscpSource::open(const std::string& args) {
     setError("");
     rateHz_ = 0.0;
     if (transact(as::MsgType::Request, as::ci::RxOutSampleRate, {as::kChannel1}, rep, nak) && !nak && rep.size() >= 5) {
-        rateHz_ = static_cast<double>(as::getLe(rep.data() + 1, 4));
+        const double reported = static_cast<double>(as::getLe(rep.data() + 1, 4));
+        if (cascade::source::plausibleSampleRateHz(reported)) { rateHz_ = reported; }   // review of the R3 fixes, D3: the peer's number is kept only if a receiver could run it
     }
     setError("");
     const std::vector<double> rates = ascpRatesFor(model_, mainClockHz_);

@@ -89,6 +89,7 @@ void testOutputIsCapped() {
                 cascade::source::enumOutcomeName(r.outcome));
     CHECK(grewMiB < 40.0);       // a bounded capture; the old code held the lot (>= 96 MiB, about 200 at peak)
     CHECK(r.devices.empty());    // and a cut-off answer is not a list of devices
+    CHECK(r.outcome == cascade::source::EnumOutcome::Malformed);   // review of the R3 fixes: a cut-off answer is a malformed one, not an empty list
 }
 
 void testGrandchildDoesNotHoldTheScan() {
@@ -100,6 +101,9 @@ void testGrandchildDoesNotHoldTheScan() {
     std::printf("child exited with a grandchild holding the pipe: scan took %lld ms, outcome %s\n",
                 static_cast<long long>(ms), cascade::source::enumOutcomeName(r.outcome));
     CHECK(ms < 15000);  // the grandchild sleeps 40 s; the old code waited for it
+    // review of the R3 fixes: the answer was already in the pipe when the job was ended, so it still arrives (an empty device list, outcome ok), not a lost answer
+    CHECK(r.outcome == cascade::source::EnumOutcome::Ok);
+    CHECK(r.devices.empty());
 }
 
 }  // namespace
