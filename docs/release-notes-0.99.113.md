@@ -67,4 +67,4 @@ Where a statement could only be tested with test signals or a stand-in, and not 
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.113.exe`:**
-`TBD`
+`ccbde4ef1a7096a1a00d13998f4ffb5b0a50e63b55bd671278cc0d51cb82bcdd`
