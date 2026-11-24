@@ -236,7 +236,7 @@ int main() {
         const SourceModel ms = readSource(status.t, status.s, status.o);
         CHECK(ms.look_for_usrps && ms.error_line == "Could not set the gain" && ms.mismatch_note == "The radio would not tune to 6 GHz.");
         // 0.99.113, A REFUSED RADIO CHOICE SAYS WHY: the engine refused the B200 (a Radio part of the saved patch names it) and wrote its sentence to the Source error line; the RTL-SDR stays selected and
-        // the Source section shows the sentence as it shows any line (it is the one line both windows and remote clients read). The sentences of the other two holders reach it the same way.
+        // the Source section shows the sentence as it shows any line (it is the one line both windows and remote clients read). THIS PROVES ONLY THE DISPLAY (readSource shows any line it is given, so it passes without the 0.99.113 code); the engine's writing of the sentence is tests/test_engine_api_source_refusal.cpp, the window's wiring tests/test_handover_sheet.cpp. The sentences of the other two holders reach it the same way.
         for (const char* sentence : {"This radio is set as the radio of the part \"Radio\" on the Patch page. Change or remove that part, or start the patch to use the radio there.",
                                      "This radio is in use by Radio 2. Choose another radio there first.", "This radio is in use by the transmitter."}) {
             Rig refusedChoice = rtlOpen();
