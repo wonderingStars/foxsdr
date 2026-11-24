@@ -53,6 +53,7 @@
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/health_events.hpp"
+#include "core/issue_report.hpp"
 #include "core/telemetry.hpp"
 #include "core/ubsan_exempt.hpp"
 #include "core/version.hpp"
@@ -3368,9 +3369,21 @@ int main(int argc, char** argv) {
             auto g = health::globalLedger();
             g->reset();
             g->arm("", cascade::core::newInstallId(), false);
+            // THE SNAPSHOT WAITS FOR THE REPORT WRITER (round 10, 24 Nov 2026). The
+            // earlier cases of this block (a timeout kill files a "scanlimit" issue
+            // report, a death an "enumchild" one) are written by a detached worker
+            // thread of this very process (core/issue_report.cpp:378-397), so a
+            // snapshot taken the moment the case returned counted the folder before
+            // that worker had finished: filesBefore was 1 and the one report that
+            // landed during the closed-pipe scan made the count 2 (17 of 40 runs
+            // failed here). The product's own in-flight counter says when it is done.
+            // The same wait precedes the count below, so that a report filed by the
+            // closed-pipe scan itself would still be seen.
+            (void)cascade::core::issue::waitForWritesForTest(3000);
             const std::size_t filesBefore = filesIn(dir);
             setMode("pipeclosed");
             const EnumResult pc = enumerateIsolated(once);
+            (void)cascade::core::issue::waitForWritesForTest(3000);
             std::printf("closed pipe: outcome=%s exit=%lu endedOnClosedPipe=%d deaths=%d "
                         "closedPipeEnds=%d reports=%zu files=%zu\n",
                         enumOutcomeName(pc.outcome), pc.deathExitCode,
