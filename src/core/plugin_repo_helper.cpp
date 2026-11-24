@@ -94,9 +94,14 @@ std::string validInstallAs(const std::string& name) {
     if (endsWith(l, ".part") || endsWith(l, ".tmp") || l.find(".wcbak") != std::string::npos) { return "that name is the store's own"; }
     // The store's own files in the plugins folder: the install manifest, the helper record, the companion-program record and the kept catalogue (security review R1, finding F2:
     // the last two were missing, so a companion could be installed over them).
-    if (l == "installed.json" || l == "helpers.json" || l == "companions.json" || l == "catalogue.json") { return "that name is the store's own"; }
+    if (l == "installed.json" || l == "helpers.json" || l == "companions.json") { return "that name is the store's own"; }
+    // D4: the kept catalogue and its copies (catalogue.json, catalogue.json.time, catalogue-<hex>.json[.time]) all start so.
+    if (l.rfind("catalogue.json", 0) == 0 || l.rfind("catalogue-", 0) == 0) { return "that name is the store's own"; }
+    // D5: "~" would let an 8.3 short-name alias (INSTAL~1.JSO) reach a store file on a volume that keeps short names.
+    if (l.find('~') != std::string::npos) { return "the file name holds a character a bare name cannot"; }
     // Windows reserved device names: THE PART BEFORE THE FIRST DOT, as Windows tests it ("con.x.txt" and "COM1.a" are devices; security review R1, finding F5)
-    const std::string stem = l.substr(0, l.find('.'));
+    std::string stem = l.substr(0, l.find('.'));
+    while (!stem.empty() && stem.back() == ' ') { stem.pop_back(); }   // D6: Windows drops a space before the dot as well ("nul .txt" is the device)
     static const char* const kReserved[] = {"con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"};
     for (const char* r : kReserved) {
         if (stem == r) { return "a reserved device name"; }
@@ -374,6 +379,17 @@ bool Txn::stage(const PluginCatalogEntry& e, const PluginPlatform& p, std::atomi
 bool Txn::commit(std::string& error) {
     error.clear();
     std::error_code ec;
+    // D3 (Fable review of the R1 fixes): a target that is there and is not a plain file - the "helpers" folder where the companion programs live is the real case - is never
+    // moved aside for a file to take its place (finish() could not delete the folder's backup, so the programs would stay displaced). Checked before anything is moved, and a
+    // link counts as not a plain file.
+    for (const Staged& f : files_) {
+        const fs::file_status st = fs::symlink_status(f.target, ec);
+        if (!ec && st.type() != fs::file_type::not_found && st.type() != fs::file_type::regular) {
+            error = "\"" + f.name + "\" is not a file here and cannot be replaced by one";
+            rollback();
+            return false;
+        }
+    }
     for (Staged& f : files_) {
         if (fs::exists(f.target, ec)) {
             f.backup = f.target;

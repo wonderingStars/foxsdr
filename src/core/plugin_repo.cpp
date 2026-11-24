@@ -3251,7 +3251,14 @@ bool PluginRepo::installImpl(const PluginCatalogEntry& e, const std::string& plu
     // before any socket: this function does not trust its caller to have
     // gone through mergeRegional(), which is the only place `regional` is
     // meant to be set true.
-    if (e.regional && !isRegionalDownloadUrl(p->url, regionalDownloadPrefix())) {
+    // D7 (Fable review of the R1 fixes): the companion files of a helper entry are held to the same prefix as the plugin itself.
+    bool regionalOk = !e.regional || isRegionalDownloadUrl(p->url, regionalDownloadPrefix());
+    if (e.regional) {
+        for (const HelperCompanion& c : p->companions) {
+            if (!isRegionalDownloadUrl(c.url, regionalDownloadPrefix())) { regionalOk = false; }
+        }
+    }
+    if (!regionalOk) {
         error = "\"" + e.name + "\" is a regional catalogue entry and may only download from " +
                 regionalDownloadPrefix();
         return false;

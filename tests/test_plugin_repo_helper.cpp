@@ -388,6 +388,72 @@ void testAllOrNothing() {
     }
 }
 
+// D3 (Fable review of the R1 fixes): a companion's target that already exists and is NOT a regular file - the "helpers" folder where the companion programs live is the real
+// case, reachable with installAs "helpers" - was renamed to <name>.wcbak-<pid> and a file put in its place; finish() then failed silently to delete the non-empty backup
+// folder, so the programs stayed displaced. Commit now refuses such a target before it moves anything, and the install is all-or-nothing as before.
+void testATargetThatIsAFolderIsNotDisplaced() {
+    std::printf("[H3c] a target that is a folder\n");
+    const fs::path dir = g_dir / "h3c";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "multimon-ng.exe");   // a folder where the program's file would go
+    {
+        std::ofstream keep(dir / "multimon-ng.exe" / "keep.bin", std::ios::binary);
+        keep << "programs that live here";
+    }
+    World w;
+    const Version v = goodVersion();
+    std::string err, path;
+    const bool ok = installOne(w, helperIndex(w, v), dir, err, path);
+    if (ok) { std::printf("      the install went over a folder\n"); }
+    CHECK(!ok);
+    CHECK(!err.empty());
+    CHECK(fs::is_directory(dir / "multimon-ng.exe"));
+    CHECK(slurp(dir / "multimon-ng.exe" / "keep.bin") == "programs that live here");
+    bool backups = false;
+    for (const auto& e : fs::directory_iterator(dir)) {
+        const std::string n = e.path().filename().string();
+        if (n.find(".wcbak") != std::string::npos || n.find(".helper-stage") != std::string::npos) { backups = true; }
+    }
+    CHECK(!backups);
+    CHECK(!fs::exists(dir / "multimon-ng.helper.json"));   // nothing of the new files was left behind
+    fs::remove_all(dir);
+}
+
+// D7 (Fable review of the R1 fixes): installImpl says it does not trust its caller to have gone through mergeRegional, but tested only the plugin's own URL: a regional entry
+// whose companion files are off the regional prefix must be refused here too, before any transfer.
+void testARegionalEntryWithAnOffPrefixCompanionIsRefusedAtInstall() {
+    std::printf("[H3d] regional entry, companion off the prefix, at install time\n");
+    const fs::path dir = g_dir / "h3d";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    World w;
+    const Version v = goodVersion();
+    std::string doc = helperIndex(w, v);
+    const std::string base = "https://dl.example.invalid/1.0.0/";
+    const std::string home = PluginRepo::regionalDownloadPrefix() + "us/";
+    const std::string dllName = "helper-bridge-1.0.0-abi3" TEST_MODULE_EXT;
+    const std::size_t at = doc.find("\"url\":\"" + base + dllName + "\"");
+    CHECK(at != std::string::npos);
+    if (at == std::string::npos) { return; }
+    doc.replace(at, std::string("\"url\":\"" + base + dllName + "\"").size(), "\"url\":\"" + home + dllName + "\"");   // the plugin itself is on the prefix; the companions are not
+    w.files[home + dllName] = v.dll;
+    std::vector<PluginCatalogEntry> es;
+    std::string perr;
+    CHECK(parse(doc, es, perr) && es.size() == 1u);
+    if (es.size() != 1u) { return; }
+    es[0].regional = true;
+    w.install();
+    PluginRepo repo;
+    std::string path, err;
+    const bool ok = repo.install(es[0], dir.string(), path, err);
+    if (ok) { std::printf("      installed a regional entry whose companions are off the prefix\n"); }
+    CHECK(!ok);
+    CHECK(!err.empty());
+    CHECK(w.asked.empty());   // refused before any transfer
+    CHECK(tree(dir).empty());
+    fs::remove_all(dir);
+}
+
 // ---- H4 / H5 -----------------------------------------------------------------------------------------------------------------------------
 void testUpdateAndRemove() {
     std::printf("[H4] update, [H5] remove\n");
@@ -522,11 +588,13 @@ void testRegionalHelperFilesAreHeldToThePrefix() {
 // F2 (second half): the names a companion may not install under include the store's own other files in the plugins folder.
 // F5: a Windows device name is reserved when the part BEFORE THE FIRST DOT is one, not only when the whole stem is.
 void testReservedAndOwnNames() {
-    for (const char* ok : {"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt", "controller.v2.exe", "console.exe", "com10.exe", "aux1.exe"}) {
+    for (const char* ok : {"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt", "controller.v2.exe", "console.exe", "com10.exe", "aux1.exe", "catalogue.helper.json", "nul-viewer.exe"}) {
         if (!hs::validInstallAs(ok).empty()) { std::printf("      a good name was refused: %s\n", ok); }
         CHECK(hs::validInstallAs(ok).empty());
     }
-    for (const char* bad : {"companions.json", "COMPANIONS.JSON", "catalogue.json", "installed.json", "helpers.json", "con.exe", "COM1.a", "com1.helper.json", "con.x.txt", "NUL.tar.gz", "lpt9.v2.1.exe", "Aux.LICENSE.txt"}) {
+    for (const char* bad : {"companions.json", "COMPANIONS.JSON", "catalogue.json", "installed.json", "helpers.json", "con.exe", "COM1.a", "com1.helper.json", "con.x.txt", "NUL.tar.gz", "lpt9.v2.1.exe", "Aux.LICENSE.txt",
+                           // D4: the kept catalogue copies; D5: an 8.3 short-name alias of a store file; D6: a space before the first dot is stripped by Windows
+                           "catalogue.json.time", "catalogue-0123456789abcdef.json", "catalogue-0123456789abcdef.json.time", "INSTAL~1.JSO", "COMPAN~1.JSO", "nul .txt", "con .x.exe", "NUL  .tar.gz"}) {
         if (hs::validInstallAs(bad).empty()) { std::printf("      a bad name was accepted: %s\n", bad); }
         CHECK(!hs::validInstallAs(bad).empty());
     }
@@ -548,6 +616,8 @@ int main() {
     testParse();
     testInstall();
     testAllOrNothing();
+    testATargetThatIsAFolderIsNotDisplaced();
+    testARegionalEntryWithAnOffPrefixCompanionIsRefusedAtInstall();
     testUpdateAndRemove();
     testSiteAndWords();
     testRegionalHelperFilesAreHeldToThePrefix();
