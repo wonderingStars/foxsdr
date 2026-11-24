@@ -21,6 +21,7 @@
 
 #include "core/i18n.hpp"
 #include "core/patch_draft.hpp"
+#include "core/rtl_open_case.hpp"
 #include "core/patch_levels.hpp"
 #include "core/patch_plan.hpp"
 #include "core/source_fallback.hpp"
@@ -1800,6 +1801,9 @@ void Engine::buildApiListsSource(ApiListBlock& b) {
     fact("source.keep", rx().restoreKeep_.kind);
     fact("source.searchProblem", soapySearchProblem_);   // "" or the sentence for an install whose radio-search helper program is missing (hw-findings item 6)
     fact("source.standin", cascade::gui::generatorStandsIn(rx().sourceKind_, rx().sourceError_) ? "1" : "0");   // the generator stands in for a radio that did not open (hw-findings item 4)
+    // WHAT THE ERROR LINE CAN BE FIXED WITH, as a word: "rtl-driver" while the line says an RTL-SDR is plugged in on the wrong Windows driver (core/rtl_open_case.hpp), else "".
+    // Read off the open's own sentence, in the engine that produced it, so a user's pick and the start-up restore (both wrap the sentence in the same stand-in line) say it alike.
+    fact("source.fix", cascade::core::rtlopen::saysWrongDriver(rx().sourceError_) ? "rtl-driver" : std::string());
     fact("source.opening", rx().deviceOpenPending_ ? rx().deviceBusyLabel_ : std::string());
     // The scan beside an open radio: the name the two deferral sentences quote, and the drivers a scan leaves out
     // ("" with the whole SoapySDR scan deferred, and with nothing gating it).

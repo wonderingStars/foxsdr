@@ -1313,14 +1313,43 @@ const char* RtlSdrSource::lastError() const {
 
 // --- open -------------------------------------------------------------------
 
-bool RtlSdrSource::open(const std::string& args) {
+RtlBusView shippedRtlBusView() {
+    RtlBusView v;
+    v.bound = [] { return usb::enumerateWinUsb(rtlSdrUsbIds()); };
+    v.unbound = [] { return usb::enumerateUnbound(rtlSdrUsbIds()); };
+    v.present = [](std::vector<usb::UsbId>& out) { return usb::presentUsbIds(out); };
+    return v;
+}
+
+cascade::core::rtlopen::Case noRtlRadioCase(const RtlBusView& bus) {
+    // THE UNBOUND LIST FIRST: a dongle on the bus with no WinUSB interface is the answer whatever else the bus holds (the engine's own scan uses the same call, engine.cpp
+    // scanNative). Then the whole bus listing, which says "not plugged in" only when it could be taken and holds no RTL-SDR id.
+    const bool anyUnbound = bus.unbound && !bus.unbound().empty();
+    std::vector<usb::UsbId> present;
+    const bool listed = bus.present && bus.present(present);
+    bool rtlOnBus = false;
+    if (listed) {
+        for (const usb::UsbId& p : present) {
+            for (const usb::UsbId& w : rtlSdrUsbIds()) {
+                if (p.vid == w.vid && p.pid == w.pid) { rtlOnBus = true; }
+            }
+        }
+    }
+    return cascade::core::rtlopen::decide(listed, rtlOnBus, anyUnbound);
+}
+
+bool RtlSdrSource::open(const std::string& args) { return openOver(args, shippedRtlBusView()); }
+
+bool RtlSdrSource::openOver(const std::string& args, const RtlBusView& bus) {
     std::string wantSerial;
     int wantIndex = -1;
     parseArgs(args, wantSerial, wantIndex);
 
-    const std::vector<usb::UsbDeviceInfo> found = usb::enumerateWinUsb(rtlSdrUsbIds());
+    const std::vector<usb::UsbDeviceInfo> found = bus.bound();
     if (found.empty()) {
-        setError(std::string("no RTL-SDR is ") + usb::kBindHint + " on this machine");
+        // THREE DIFFERENT THINGS, three sentences (core/rtl_open_case.hpp): the dongle is on the wrong Windows driver, it is not plugged in, or the bus cannot say.
+        // This sentence once said "no RTL-SDR is bound to WinUSB" for all three.
+        setError(cascade::core::rtlopen::sentence(noRtlRadioCase(bus)));
         return false;
     }
     const usb::UsbDeviceInfo* pick = nullptr;

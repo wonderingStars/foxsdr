@@ -42,6 +42,12 @@ inline std::string& fakeRadioNameOverride() {
     return name;
 }
 
+// The sentence a fake radio whose arguments contain "ERRTEXT" fails its open with (see FakeRadio::open). Set by one test, from the thread that drives the engine.
+inline std::string& fakeRadioOpenError() {
+    static std::string text;
+    return text;
+}
+
 // A switch for a test that needs a radio to DIE mid-stream (multi-radio stage 4: a fault on one radio leaves the others running): while it is set, a fake radio of the
 // kind "hackrf" throws from read(), which is what the pipeline's source thread reports as the radio's fault. Never set by any other test; the kinds "rtlsdr" and the rest never throw.
 inline std::atomic<bool>& fakeRadioThrows() {
@@ -88,6 +94,12 @@ public:
     bool open(const std::string& args) override {
         if (args.find("MISSING") != std::string::npos) {
             lastError_ = "no such device";
+            return false;
+        }
+        // A radio whose arguments contain "ERRTEXT" fails with the sentence a test put in fakeRadioOpenError() (tests/test_engine_api_rtl_driver_fix.cpp: the open's own
+        // "no radio" sentences reach the engine's fact through the restore and a user's pick).
+        if (args.find("ERRTEXT") != std::string::npos) {
+            lastError_ = fakeRadioOpenError();
             return false;
         }
         open_ = true;
