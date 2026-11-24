@@ -2,6 +2,7 @@
 // an RTL-SDR that is open, the generator, a sound card, an Airspy, a converter in force, the filters, the sinks, the recorder, unbound radios of two
 // families and a stopped device - and the exact commands each control sends, which are the ImGui window's own. No Slint, no engine.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "core/rtl_open_case.hpp"
 #include "host_logic.hpp"
 #include "signal_logic.hpp"
 #include "test_check.hpp"
@@ -165,7 +166,8 @@ Rig airspy(bool free) {
 // INSTALL DRIVER BESIDE A FAILED OPEN (core/rtl_open_case.hpp; docs 0.99.114): the key is on the Source card only while the engine's fact says the error line is "an RTL-SDR is
 // plugged in on the wrong Windows driver" AND the window's bus check found the interface the reviewed policy lets the installer bind. Every other state shows no key.
 void testTheInstallDriverKey() {
-    const std::string wrong = "RTL2838UHIDIR did not open: An RTL-SDR is plugged in, but Windows has not given it the WinUSB driver. The receiver is running on the signal generator.";
+    // the open's real sentence (core/rtl_open_case.hpp), wrapped the way the engine wraps it
+    const std::string wrong = std::string("RTL2838UHIDIR did not open: ") + cascade::core::rtlopen::sentence(cascade::core::rtlopen::Case::WrongDriver) + " The receiver is running on the signal generator.";
     // (a) the engine says wrong driver and the bus check found the interface: the key, enabled, the same label as the Radio setup page's key
     {
         Rig r = rtlOpen();
@@ -215,9 +217,74 @@ void testTheInstallDriverKey() {
     }
 }
 
+// THE OFFER'S TRACKER (signal_logic.hpp rtlFixPoll / rtlFixAnswered / rtlFixRetarget): what the publisher's pollSetup does, as plain values - when the bus is looked at, when the interface found
+// for an earlier failure and the install's status line left by an earlier failure are dropped. The review (rtlnotice-REVIEW D2) named one case: dongle A is fixed (status "Driver installed."),
+// dongle B then fails on the wrong driver - B's card must not show A's "installed" line.
+void testTheInstallDriverTracker() {
+    // a quiet engine: nothing happens, however many polls
+    {
+        RtlFixState st;
+        for (unsigned i = 0; i < 3; ++i) {
+            const RtlFixStep s = rtlFixPoll(st, false, i, false);
+            CHECK(!s.start_probe && !s.clear_target && !s.clear_install_status);
+        }
+        CHECK(!rtlFixAnswered(st, 5));
+    }
+    // a failure: ONE bus check, started at the edge; the answer is the first finish AFTER it, taken once
+    {
+        RtlFixState st;
+        const RtlFixStep a = rtlFixPoll(st, true, 4, false);
+        CHECK(a.start_probe && !a.clear_target);
+        for (int i = 0; i < 5; ++i) { CHECK(!rtlFixPoll(st, true, 4, false).start_probe); }   // the same failure does not start another check
+        CHECK(!rtlFixAnswered(st, 4));   // the run that finished before it was started is not its answer
+        CHECK(rtlFixAnswered(st, 5));
+        CHECK(!rtlFixAnswered(st, 5));   // once
+        // the sentence goes (another pick): the target is dropped and the next failure is a new round
+        const RtlFixStep off = rtlFixPoll(st, false, 5, false);
+        CHECK(off.clear_target && !off.start_probe);
+        CHECK(rtlFixPoll(st, true, 5, false).start_probe);
+    }
+    // D2: a stale install status under a NEW failure. A's install said "Driver installed."; the open of B fails on the wrong driver: the line goes at the edge
+    {
+        RtlFixState st;
+        std::string installStatus = "Driver installed.";
+        (void)rtlFixPoll(st, true, 1, false);                 // the first failure (the one A's install fixed)
+        (void)rtlFixPoll(st, false, 1, false);                // the person picks again: the old sentence goes
+        const RtlFixStep b = rtlFixPoll(st, true, 2, false);  // B fails on the wrong driver
+        if (b.clear_install_status) { installStatus.clear(); }
+        CHECK(b.start_probe);
+        CHECK(b.clear_install_status);
+        CHECK(installStatus.empty());
+        // the same failure after the install DOES keep the line: no edge, no clearing (the person reads what happened)
+        RtlFixState same;
+        (void)rtlFixPoll(same, true, 1, false);
+        std::string kept = "Driver installed.";
+        for (int i = 0; i < 4; ++i) { if (rtlFixPoll(same, true, 2, false).clear_install_status) { kept.clear(); } }
+        CHECK(kept == "Driver installed.");
+    }
+    // an install in flight is never wiped: its "Installing..." line is live
+    {
+        RtlFixState st;
+        const RtlFixStep s = rtlFixPoll(st, true, 0, true);
+        CHECK(s.start_probe && !s.clear_install_status);
+    }
+    // the target: the first non-empty id; "changed" only when it is (D5: no forced re-read each poll)
+    {
+        std::string target;
+        CHECK(!rtlFixRetarget(target, {}));
+        CHECK(!rtlFixRetarget(target, {"", ""}));
+        CHECK(rtlFixRetarget(target, {"", "USB\\A", "USB\\B"}) && target == "USB\\A");
+        CHECK(!rtlFixRetarget(target, {"USB\\A"}));           // the same answer again: nothing to re-read
+        CHECK(!rtlFixRetarget(target, {"", "USB\\A"}));
+        CHECK(rtlFixRetarget(target, {"USB\\B"}) && target == "USB\\B");
+        CHECK(rtlFixRetarget(target, {}) && target.empty());   // the interface is gone: the key goes
+    }
+}
+
 }  // namespace
 
 int main() {
+    testTheInstallDriverTracker();
     testTheInstallDriverKey();
     // ---- an RTL-SDR that is open ----
     {

@@ -142,7 +142,10 @@ void testTheSentences() {
     CHECK(a != b && a != c && b != c);
     CHECK(a.find("plugged in") != std::string::npos && a.find("WinUSB") != std::string::npos && a.find("install") != std::string::npos);   // says the driver is the problem and that FoxSDR can fix it
     CHECK(b.find("No RTL-SDR is plugged") != std::string::npos);
-    CHECK(c.find("could not tell") != std::string::npos);
+    // review D4: (a) does not promise an install the person may have no key for - it says WHERE the install is (the Radio setup page both windows have)
+    CHECK(a.find("Radio setup") != std::string::npos);
+    // review D3: (c) is also what a dongle that IS on the bus but has no usable interface gets, so it must not say FoxSDR could not tell whether one is plugged in; it says what to do either way
+    CHECK(c.find("could not tell") == std::string::npos && c.find("plugged in") != std::string::npos && c.find("unplug") != std::string::npos);
     const std::string old = std::string("no RTL-SDR is ") + usb::kBindHint + " on this machine";
     for (const std::string& s : {a, b, c}) { CHECK(s != old && s.find(old) == std::string::npos); }
     // each is a whole sentence with a full stop
@@ -199,7 +202,6 @@ void testOtherFamiliesKeepTheirWords() {
     // the other drivers' "not bound" sentences keep their class (they are not this change's)
     CHECK(health::classifyRadioOpen("hackrf", "no HackRF found (is it plugged in, and bound to WinUSB?)") == health::RadioReason::Bind);
     CHECK(health::classifyRadioOpen("airspy", "no Airspy found (is it plugged in, and bound to WinUSB?)") == health::RadioReason::Bind);
-    CHECK(health::classifyRadioOpen("rtlsdr", std::string("no RTL-SDR is ") + usb::kBindHint + " on this machine") == health::RadioReason::Bind);   // the old words, still read as bind
     CHECK(health::classifyRadioOpen("rtlsdr", "no RTL-SDR with serial 00000001 is present") == health::RadioReason::Absent);
 }
 

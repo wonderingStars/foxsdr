@@ -1737,4 +1737,36 @@ Command opImportPath(const std::string& path, int kind) {
     return {};
 }
 
+RtlFixStep rtlFixPoll(RtlFixState& st, bool wanted, unsigned probe_finished, bool installing) {
+    RtlFixStep step;
+    if (wanted && !st.on) {
+        st.on = true;
+        st.pending = true;
+        st.base = probe_finished;
+        step.start_probe = true;
+        step.clear_install_status = !installing;   // a status sentence left by an earlier install belongs to an earlier failure (review D2); one still running is live
+    } else if (!wanted && st.on) {
+        st.on = false;   // the sentence is gone (another pick, or a fix): re-armed for the next failure
+        st.pending = false;
+        step.clear_target = true;
+    }
+    return step;
+}
+
+bool rtlFixAnswered(RtlFixState& st, unsigned probe_finished) {
+    if (!st.pending || probe_finished <= st.base) { return false; }
+    st.pending = false;
+    return true;
+}
+
+bool rtlFixRetarget(std::string& target, const std::vector<std::string>& found) {
+    std::string next;
+    for (const std::string& id : found) {
+        if (!id.empty()) { next = id; break; }
+    }
+    if (next == target) { return false; }
+    target = std::move(next);
+    return true;
+}
+
 }  // namespace foxsdr::slintsignal

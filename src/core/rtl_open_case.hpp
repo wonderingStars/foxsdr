@@ -30,11 +30,11 @@ enum class Case { WrongDriver, NotPlugged, CannotTell };
 // THE ENGLISH SENTENCES, the translation keys. Each is the whole error the open sets (the engine wraps it as "<radio> did not open: <sentence>. The receiver is
 // running on the signal generator."), so each ends in a full stop and none names a Windows menu path: the setup page has those words.
 inline constexpr const char kWrongDriverEnglish[] = FOX_TR_NOOP(
-    "An RTL-SDR is plugged in, but Windows has not given it the WinUSB driver that FoxSDR needs, so FoxSDR cannot open it. FoxSDR can install that driver for you.");
+    "An RTL-SDR is plugged in, but Windows has not given it the WinUSB driver that FoxSDR needs, so FoxSDR cannot open it. FoxSDR can install that driver for you from the Radio setup page.");
 inline constexpr const char kNotPluggedEnglish[] = FOX_TR_NOOP(
     "No RTL-SDR is plugged into this computer. Plug it in, then pick it again.");
 inline constexpr const char kCannotTellEnglish[] = FOX_TR_NOOP(
-    "FoxSDR found no RTL-SDR it can open, and could not tell whether one is plugged in. Check that it is plugged in, then pick it again.");
+    "FoxSDR found no RTL-SDR it can open. Check that it is plugged in; if it is, unplug it and plug it back in. Then pick it again.");
 
 // The decision. `listed`: the list of every USB device on the bus could be taken (usb::presentUsbIds returned true). `rtlOnBus`: that list holds an RTL-SDR id.
 // `anyUnbound`: usb::enumerateUnbound found an RTL-SDR with no WinUSB interface. Order matters: an unbound dongle is the answer whatever else is true.

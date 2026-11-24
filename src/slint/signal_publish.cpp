@@ -157,8 +157,7 @@ struct SignalPublisher::SetupState {
     rs::Probe probe;
     bool started = false;
     bool autoWanted = true, autoStarted = false, autoRun = false;   // the automatic first-run check: wanted (a real window), started once, and its answer still to be counted
-    bool fixOn = false, fixPending = false;                         // the failed open names the wrong Windows driver: the bus check was started for this failure / its answer is still to come
-    unsigned fixBase = 0;                                           // probe.finished() when that check was started: the answer is the first finish after it
+    RtlFixState fix;                                                // the failed open names the wrong Windows driver: the bus check for this failure (signal_logic.hpp rtlFixPoll)
     std::string fake;   // FOXSDR_FAKE_RADIO_SETUP: a synthetic machine (bounded runs)
     struct Install {
         std::atomic<bool> done{false};
@@ -267,17 +266,13 @@ void SignalPublisher::pollSetup() {
     }
     // THE FAILED-OPEN SENTENCE SAYS "WRONG WINDOWS DRIVER" (the engine's fact, core/rtl_open_case.hpp): look at the bus ONCE for this failure, off this thread, to find the interface the install may bind.
     // The page is not raised by it; the offer is the key beside the sentence (signal_logic.cpp readSource).
-    const bool fixWanted = fact("fact.source.fix") == "rtl-driver";
-    if (fixWanted && !s.fixOn) {
-        s.fixOn = true;
-        s.fixPending = true;
-        s.fixBase = s.probe.finished();
+    const RtlFixStep fixStep = rtlFixPoll(s.fix, fact("fact.source.fix") == "rtl-driver", s.probe.finished(), s.install && !s.install->done.load());
+    if (fixStep.start_probe) {
+        // A refused start (the start-up check is still running) is harmless: the answer used is that run's, taken a moment ago, and the elevated helper re-checks the device before it binds anything.
         startProbe();
-    } else if (!fixWanted && s.fixOn) {
-        s.fixOn = false;   // the sentence is gone (another pick, or a fix): re-armed for the next failure
-        s.fixPending = false;
-        opts_.rtl_fix_target.clear();
     }
+    if (fixStep.clear_install_status) { s.installStatus.clear(); }
+    if (fixStep.clear_target) { opts_.rtl_fix_target.clear(); }
     if (s.probe.poll() && s.probe.state() == rs::Probe::State::TimedOut) {
         cascade::core::diagWarnf("radio setup: the probe did not finish in %lld s - not waiting for it any longer", static_cast<long long>(rs::kProbeBudget.count() / 1000));
     }
@@ -287,7 +282,7 @@ void SignalPublisher::pollSetup() {
     opts_.setup_install_status = s.installStatus;
     opts_.findings.clear();
     opts_.setup_show_page = false;
-    const bool fixReady = s.fixPending && s.probe.finished() > s.fixBase;
+    const bool fixReady = rtlFixAnswered(s.fix, s.probe.finished());
     if ((!opts_.setup_shown && !s.autoRun && !fixReady) || !opts_.setup_have_answer) { return; }
     // what the probe saw, plus what the application's own lists hold now (app_window_radio_setup.cpp radioSetupInventory)
     rs::Inventory inv = s.probe.inventory();
@@ -323,16 +318,13 @@ void SignalPublisher::pollSetup() {
     const rs::Findings f = rs::assess(inv);
     if (s.fake.empty()) { rs::noteFindings(f); }   // the setup.* count and the radio_found event for a radio present with no usable driver (once a session each; a synthetic machine says nothing)
     s.autoRun = false;
-    if (fixReady || s.fixOn) {
+    if (fixReady || s.fix.on) {
         // The interface the one-click install may bind: assess() gives a target only to an RTL-SDR interface 0 that driver_policy.hpp allows (InstallWinUsb), on the wrong driver.
-        if (fixReady) { s.fixPending = false; }
-        opts_.rtl_fix_target.clear();
-        if (s.fixOn) {
-            for (const rs::Finding& x : f.items) {
-                if (!x.installTarget.empty()) { opts_.rtl_fix_target = x.installTarget; break; }
-            }
+        std::vector<std::string> targets;
+        if (s.fix.on) {
+            for (const rs::Finding& x : f.items) { targets.push_back(x.installTarget); }
         }
-        forceRead_ = true;
+        if (rtlFixRetarget(opts_.rtl_fix_target, targets)) { forceRead_ = true; }   // re-read only when the target changed (the setup page open must not force a full read every poll)
     }
     if (!opts_.setup_shown) { return; }   // the automatic check only counts and reports; the page stays closed until the person opens it
     opts_.setup_show_page = f.showPage;
