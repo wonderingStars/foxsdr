@@ -472,6 +472,65 @@ void testSiteAndWords() {
     fs::remove_all(dir);
 }
 
+// ---- H8 (review R1 findings F2 and F5, 0.99.114) ---------------------------------------------------------------------------------------------
+// F2: a REGIONAL entry's module URL is held to the regional prefix by mergeRegional, but its helper object's companion files were not: they could name any https
+// host and install under any name. Now every companion URL of every platform is held to the same prefix, or the whole entry is dropped.
+void testRegionalHelperFilesAreHeldToThePrefix() {
+    std::printf("[H8] regional helper files / reserved names\n");
+    const std::string prefix = PluginRepo::regionalDownloadPrefix();
+    World w;
+    const Version v = goodVersion();
+    const std::string base = "https://dl.example.invalid/1.0.0/";
+    const std::string home = prefix + "us/";
+    const auto regionalDoc = [&](const std::string& doc) {
+        std::string d = doc;
+        for (std::size_t at = d.find(base); at != std::string::npos; at = d.find(base, at + home.size())) { d.replace(at, base.size(), home); }
+        return d;
+    };
+    const auto merge = [&](const std::string& doc, int& added, int& dropped) {
+        std::vector<PluginCatalogEntry> es;
+        std::string err;
+        const bool parsed = parse(doc, es, err);
+        CHECK(parsed);
+        const PluginRepo::RegionalMergeResult r = PluginRepo::mergeRegional({}, es, prefix);
+        added = r.added;
+        dropped = static_cast<int>(r.dropped.size());
+    };
+    const std::string good = regionalDoc(helperIndex(w, v));
+    int added = 0, dropped = 0;
+    merge(good, added, dropped);
+    CHECK(added == 1 && dropped == 0);   // everything on the regional prefix: kept (a regional helper entry is not refused outright)
+
+    // each companion, pointed off the prefix in turn: the whole entry goes
+    const std::string files[] = {"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt"};
+    const std::string elsewhere[] = {"https://evil.example/", "https://foxsdr.com.evil.example/plugins/regional/us/", "https://foxsdr.com/plugins/other/us/"};
+    for (const std::string& f : files) {
+        for (const std::string& where : elsewhere) {
+            std::string doc = good;
+            const std::string from = "\"url\":\"" + home + f + "\"";
+            const std::size_t at = doc.find(from);
+            CHECK(at != std::string::npos);
+            if (at == std::string::npos) { continue; }
+            doc.replace(at, from.size(), "\"url\":\"" + where + f + "\"");
+            merge(doc, added, dropped);
+            if (added != 0 || dropped != 1) { std::printf("      regional entry kept with %s from %s\n", f.c_str(), where.c_str()); }
+            CHECK(added == 0 && dropped == 1);
+        }
+    }
+}
+
+// F2 (second half): the names a companion may not install under include the store's own other files in the plugins folder.
+void testOwnNames() {
+    for (const char* ok : {"multimon-ng.exe", "multimon-ng.helper.json", "multimon-ng.LICENSE.txt", "controller.v2.exe"}) {
+        if (!hs::validInstallAs(ok).empty()) { std::printf("      a good name was refused: %s\n", ok); }
+        CHECK(hs::validInstallAs(ok).empty());
+    }
+    for (const char* bad : {"companions.json", "COMPANIONS.JSON", "catalogue.json", "installed.json", "helpers.json", "con.exe"}) {
+        if (hs::validInstallAs(bad).empty()) { std::printf("      a bad name was accepted: %s\n", bad); }
+        CHECK(!hs::validInstallAs(bad).empty());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -490,6 +549,8 @@ int main() {
     testAllOrNothing();
     testUpdateAndRemove();
     testSiteAndWords();
+    testRegionalHelperFilesAreHeldToThePrefix();
+    testOwnNames();
     PluginRepo::setTransportForTest(nullptr);
     fs::remove_all(g_dir, ec);
     return testSummary("test_plugin_repo_helper");

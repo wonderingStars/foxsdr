@@ -1392,6 +1392,17 @@ PluginRepo::RegionalMergeResult PluginRepo::mergeRegional(
                 badUrl = true;
                 break;
             }
+            // THE HELPER PROGRAM'S FILES TOO (security review R1, finding F2): a helper entry's
+            // companion files (program, manifest, licence) are downloaded and moved into the
+            // plugins folder like the module, so each is held to the same regional prefix. They
+            // used to be copied across unchecked and could name any https host.
+            for (const HelperCompanion& c : p.companions) {
+                if (!isRegionalDownloadUrl(c.url, downloadPrefix)) {
+                    badUrl = true;
+                    break;
+                }
+            }
+            if (badUrl) { break; }
         }
         if (badUrl) {
             result.dropped.push_back(
