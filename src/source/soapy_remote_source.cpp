@@ -207,7 +207,7 @@ sr::Unpacker SoapyRemoteSource::callLocked(const sr::Packer& request) {
     std::vector<std::uint8_t> payload;
     std::uint32_t version = 0;
     std::string err;
-    if (!sr::recvMessage(*control_, payload, version, err)) { throw std::runtime_error(err); }
+    if (!sr::recvMessage(*control_, payload, version, err, std::chrono::milliseconds(ioWaitMs_))) { throw std::runtime_error(err); }
     return sr::Unpacker(std::move(payload), version);
 }
 
@@ -391,7 +391,7 @@ bool SoapyRemoteSource::setupStreamLocked(const std::string& prot) {
             std::vector<std::uint8_t> payload;
             std::uint32_t version = 0;
             std::string err;
-            if (!sr::recvMessage(*control_, payload, version, err)) { throw std::runtime_error(err); }
+            if (!sr::recvMessage(*control_, payload, version, err, std::chrono::milliseconds(ioWaitMs_))) { throw std::runtime_error(err); }
             return sr::Unpacker(std::move(payload), version);
         };
         std::string serverPort;

@@ -135,7 +135,8 @@ struct In {
 
 enum class Mode {
     Normal, Junk, Silent, CloseNow, BadTrailer, HugeLength, TinyLength, ExceptionOnMake,
-    TruncatedReply, CS12Format, OddCallThenNormal
+    TruncatedReply, CS12Format, OddCallThenNormal,
+    DripMake  // R3-02: answers MAKE with a header that announces 2000 bytes, then one byte every 400 ms for 12 s
 };
 enum class StreamFault { None, SplitHeader, DieAfter, LyingBytes, ElemsBeyond, StatusFatal, StatusOverflow, Stall };
 
@@ -241,6 +242,18 @@ private:
                         Bytes f = Out::voidReply();
                         f[8] = 0; f[9] = 0; f[10] = 0; f[11] = 16;
                         send(s, f);
+                        return;
+                    }
+                    if (mode.load() == Mode::DripMake) {
+                        Bytes f = Out::voidReply();
+                        f.resize(2000);  // the body the header below announces
+                        f[8] = 0; f[9] = 0; f[10] = 0x07; f[11] = 0xD0;  // length 2000
+                        send(s, Bytes(f.begin(), f.begin() + 12));
+                        for (int i = 0; i < 30 && run.load(); ++i) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                            const std::uint8_t one = 0;
+                            if (!sendExact(s, &one, 1)) { break; }
+                        }
                         return;
                     }
                     if (mode.load() == Mode::TruncatedReply) {
@@ -732,6 +745,27 @@ void testStartStopAndShutdown() {
     c.stop();
 }
 
+// R3-02: a server that keeps every receive inside the call's timeout (one byte every 400 ms against
+// timeout=1000) but never finishes the reply must not hold the call for ever. The call's bound is one
+// deadline for the whole reply: the timeout plus a second per 32 KiB announced (two seconds here), then
+// the open fails and close returns at once.
+void testDripReplyHasOneDeadline() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.mode.store(Mode::DripMake);
+    SoapyRemoteSource s;
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(!s.open(fake.args("timeout=1000")));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::fprintf(stderr, "open against a dripping server: %lld ms\n", static_cast<long long>(ms));
+    CHECK(ms < 5000);
+    CHECK(!s.isOpen());
+    CHECK(std::string(s.lastError()).find("too long") != std::string::npos);
+    const auto t1 = std::chrono::steady_clock::now();
+    s.closeDevice();
+    CHECK(std::chrono::steady_clock::now() - t1 < std::chrono::milliseconds(2500));
+}
+
 void testShutdownWhileServerSilent() {
     // The server stops sending while the source is streaming; close must still return inside
     // the reader-join bound.
@@ -906,6 +940,7 @@ int main() {
     STEP(testSplitHeader());
     STEP(testStartStopAndShutdown());
     STEP(testShutdownWhileServerSilent());
+    STEP(testDripReplyHasOneDeadline());
     STEP(testScripted());
     STEP(testFuzz());
     return testSummary("test_soapy_remote_source");

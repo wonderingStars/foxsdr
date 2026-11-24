@@ -47,6 +47,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -300,13 +301,43 @@ inline bool sendMessage(iiod::Transport& t, const std::vector<std::uint8_t>& msg
     return t.sendAll(msg.data(), msg.size());
 }
 
+// One deadline for a whole reply (R3-02). The transport's own timeout bounds each receive, so a server
+// that sends one byte just inside it could hold a call for ever; with `ioWait` set, recvMessage reads
+// in receives of its own and gives up once `ioWait` (the call's bound: the first byte, as before) plus
+// one second per 32 KiB the header announces has passed. That is the only change to the reads; the
+// longest a call can then take is that deadline plus one more receive timeout.
+constexpr std::int64_t kReplyBytesPerExtraSecond = 32768;
+
+inline bool recvBefore(iiod::Transport& t, std::uint8_t* data, std::size_t n,
+                       std::chrono::steady_clock::time_point deadline, std::string& error) {
+    std::size_t got = 0;
+    while (got < n) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            error = "the server took too long to finish its reply";
+            return false;
+        }
+        std::size_t part = 0;
+        if (!t.recvSome(data + got, n - got, part)) { error = t.lastError(); return false; }
+        got += part;
+    }
+    return true;
+}
+
 // Reads one message. False with `error` set for: a transport failure or timeout, a wrong
 // header word, a length that cannot hold a header, trailer and one byte, a length over
 // kMaxMessageBytes, or a wrong trailer word. On success `payload` and `version` are set.
+// `ioWait` of zero (the default) leaves the transport's per-receive timeout as the only bound;
+// the source passes its call timeout so that the whole reply has one deadline.
 inline bool recvMessage(iiod::Transport& t, std::vector<std::uint8_t>& payload,
-                        std::uint32_t& version, std::string& error) {
+                        std::uint32_t& version, std::string& error,
+                        std::chrono::milliseconds ioWait = std::chrono::milliseconds(0)) {
+    const auto start = std::chrono::steady_clock::now();
     std::uint8_t h[kMessageHeaderBytes];
-    if (!t.recvAll(h, sizeof(h))) { error = t.lastError(); return false; }
+    if (ioWait.count() <= 0) {
+        if (!t.recvAll(h, sizeof(h))) { error = t.lastError(); return false; }
+    } else if (!recvBefore(t, h, sizeof(h), start + ioWait, error)) {
+        return false;
+    }
     const auto rd = [](const std::uint8_t* p) {
         return (static_cast<std::uint32_t>(p[0]) << 24) | (static_cast<std::uint32_t>(p[1]) << 16) |
                (static_cast<std::uint32_t>(p[2]) << 8) | p[3];
@@ -320,7 +351,13 @@ inline bool recvMessage(iiod::Transport& t, std::vector<std::uint8_t>& payload,
     }
     if (length > kMaxMessageBytes) { error = "a reply longer than the limit"; return false; }
     std::vector<std::uint8_t> rest(length - kMessageHeaderBytes);
-    if (!t.recvAll(rest.data(), rest.size())) { error = t.lastError(); return false; }
+    if (ioWait.count() <= 0) {
+        if (!t.recvAll(rest.data(), rest.size())) { error = t.lastError(); return false; }
+    } else {
+        const auto extra = std::chrono::seconds(
+            (static_cast<std::int64_t>(length) + kReplyBytesPerExtraSecond - 1) / kReplyBytesPerExtraSecond);
+        if (!recvBefore(t, rest.data(), rest.size(), start + ioWait + extra, error)) { return false; }
+    }
     if (rd(rest.data() + rest.size() - kMessageTrailerBytes) != kTrailerWord) {
         error = "a reply with a wrong trailer";
         return false;
