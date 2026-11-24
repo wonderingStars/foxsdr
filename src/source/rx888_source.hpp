@@ -175,6 +175,24 @@ public:
     using UsbListFn = std::function<std::vector<cascade::usb::UsbDeviceInfo>()>;
     void setTransportForTest(UsbListFn lister, UsbOpenFn opener);
 
+    // THE CLOCK THE DRIVER TIMES ITS OWN REQUESTS WITH, in milliseconds. The
+    // real one is the steady clock. A test hands in the stand-in firmware's
+    // virtual clock, so that "the request after the ADC clock waited 1000 ms"
+    // is an exact figure and not a measurement of the test machine.
+    using ClockFn = std::function<std::uint64_t()>;
+    void setClockForTest(ClockFn clock);
+
+    // WHAT THE LAST open() DID, in one line, as it was written to the log:
+    // whether the firmware was loaded by this open or was already running,
+    // each request by name with how long its answer took (or that none came,
+    // or that it was refused, and after how long), how long the request after
+    // the ADC clock waited,
+    // and the transport's description of the USB endpoints (a 1024-byte bulk
+    // packet is a USB 3 link, 512 a USB 2 one). Empty before the first open.
+    // It is the line a failure report's log carries, so that one report from
+    // a real radio settles which request stopped and when.
+    std::string openReport() const;
+
     // --- DeviceSource ----------------------------------------------------
 
     const char* driverKey() const override { return "rx888"; }
@@ -499,8 +517,26 @@ private:
     // bus and answers nothing - nothing this driver sends can wake it), the
     // error becomes the one plain instruction that does, followed by which
     // request it was and that it timed out. Any other failure keeps the words
-    // it already has. Returns false, for `return failedOpenLocked();`.
+    // it already has. Writes the open's report line. Returns false, for
+    // `return failedOpenLocked();`.
     bool failedOpenLocked();
+
+    // The open's report line (openReport()): built from the trace the control
+    // helpers keep while open() runs, written to the log, kept for the test.
+    void writeOpenReportLocked(bool opened);
+
+    // AFTER A TUNER REQUEST: WAIT UNTIL THE FIRMWARE IS IDLE AGAIN. The
+    // firmware answers TUNERINIT, TUNERTUNE and the two R82XX arguments as
+    // soon as their data has arrived and does the tuner's I2C work afterwards,
+    // on the one thread that serves every request. A read-only TESTFX3 sent
+    // straight after is answered only when that work is done, so when this
+    // returns the firmware has nothing left to finish - and the stop or close
+    // that may come next, on its short teardown bound, cannot be given up on
+    // half way through the tuner's work. `what` names the wait for the error
+    // and the log. On the patient bound; false when the radio did not answer.
+    bool settleTunerLocked(const char* what);
+
+    std::uint64_t nowMs() const;
 
     bool programAdcClockLocked(std::uint32_t hz);
     // Switches the front end and programs that side's two gains. Idempotent
@@ -542,11 +578,15 @@ private:
     static std::string healthLineLocked(ReaderLink& link);  // link.healthMutex held
 
     static void setErrorOn(ReaderLink& link, std::string msg);
+    // `timing` is for the log line only (" after 3000 ms (STARTADC, bound 3000
+    // ms)"): the failure report's reason keeps `what` and `detail` as they were.
     static void noteTransportFaultOn(ReaderLink& link, const char* what,
-                                     const std::string& detail);
+                                     const std::string& detail,
+                                     const std::string& timing = std::string());
     void setError(std::string msg);
     void clearError();
-    void noteTransportFault(const char* what, const std::string& detail);
+    void noteTransportFault(const char* what, const std::string& detail,
+                            const std::string& timing = std::string());
 
     void setName(std::string n);
 
@@ -592,6 +632,25 @@ private:
     rx888::Model model_ = rx888::Model::None;
     std::uint16_t firmwareVersion_ = 0;
     bool firmwareUploaded_ = false;
+
+    // THE OPEN'S TRACE, under devMutex_. While open() runs (tracingOpen_) the
+    // control helpers add one entry per request: which, how long its answer
+    // took, and whether one came. writeOpenReportLocked() turns it into the
+    // report line.
+    struct Asked {
+        std::uint8_t request = 0;
+        unsigned tookMs = 0;
+        bool answered = false;
+        // Not answered: true when the request ran out of time (the radio said
+        // nothing), false when the radio or the host refused it outright.
+        bool silent = false;
+    };
+    std::vector<Asked> openTrace_;
+    bool tracingOpen_ = false;
+    std::uint64_t openStartMs_ = 0;
+    std::string usbLayout_;
+    std::string openReport_;
+    ClockFn clock_;
 
     // The test seam (see setTransportForTest). An empty opener means the real
     // WinUSB transport.

@@ -209,6 +209,20 @@ constexpr std::uint16_t kFirmwareVersion = 0x0202;
 constexpr std::chrono::milliseconds kSetupTimeout{3000};
 constexpr unsigned kSetupTimeoutMs = static_cast<unsigned>(kSetupTimeout.count());
 
+// THE FIRST REQUEST OF AN OPEN (TESTFX3), PER ASK. Rx888Source::open() asks it
+// up to twice. Two seconds is twice the firmware's longest known pause, so an
+// ask is not given up on while a firmware that is merely pausing could still
+// answer; a radio that answers nothing at all costs the person two of these.
+// Its own number, so that it does not move if kSetupTimeout does. Only ever
+// spent inside open(), never on the way out.
+constexpr unsigned kFirstAskTimeoutMs = 2000;
+
+// AFTER A TUNER REQUEST THE DRIVER WAITS FOR THE FIRMWARE TO BE IDLE AGAIN (a
+// read-only TESTFX3 on the patient bound; Rx888Source::settleTunerLocked). When
+// that wait was at least this long the log says how long, which is the only
+// way the length of a real R828D's I2C work will ever be learned.
+constexpr unsigned kTunerWorkNoteMs = 250;
+
 // THE THREE REQUESTS ON THE WAY OUT: the STOPFX3 in stopStreamingLocked, and
 // in closeDevice the tuner to standby (when this session started it) and the
 // GPIO word that unpowers both bias tees. (The bootloader's block writes use
@@ -231,16 +245,18 @@ constexpr unsigned kSetupTimeoutMs = static_cast<unsigned>(kSetupTimeout.count()
 // IT IS NOT A BOUND TO SPEND LIGHTLY, THOUGH. A request that runs out of time
 // is abandoned, and an abandoned request is not harmless on this firmware: on
 // 24 Nov 2026 (16:05 UTC) a radio whose TUNERSTDBY had been abandoned -
-// 0.99.113's 500 ms, inside the sleep above - did not answer the next open
-// nine seconds later and had to be unplugged. The SDK's source says the
-// firmware should have recovered (it waits at most 5 seconds for the data and
-// stops waiting when a new request arrives; the same loop is in our image, at
-// 0x40016AC4), so WHY it did not is not known. What the source does show is
-// that the control transfer's "status pending" state then stays set - link
-// power saving refused, a ready signal repeated every 100 ms - until another
-// control transfer completes (cyu3usbpp.c). So no request is given this bound
-// unless the shutdown budget forces it, and a teardown request that does run
-// out leaves a radio that may have to be replugged before it opens again.
+// 0.99.113's 500 ms, inside the sleep above - REFUSED the first request of the
+// next open nine seconds later ("a control transfer failed (Windows error
+// 31)", 18 ms into the open). The image says why: once its thread is free the
+// handler takes the abandoned request, waits for data that never comes (at
+// most 5 seconds, looking every 100 ms for a new request: 0x40016AC4), and
+// returns "not handled" (0x400052C8), on which the SDK stalls endpoint 0. So
+// the NEXT request sent to the radio is refused. open() therefore asks its
+// first request twice, and no request is given this short bound unless the
+// shutdown budget forces it. The tuner requests, whose work is of unknown
+// length, are followed by a patient wait for the firmware to be idle
+// (Rx888Source::settleTunerLocked), so that a stop or a close sent straight
+// after one cannot be the request that runs out.
 //
 // A std::chrono duration rather than a bare unsigned so
 // tests/test_shutdown_budget.cpp's scan can DISCOVER it; the transport takes

@@ -527,8 +527,10 @@ FoxSDR has to reach both: `04B4:00F3` (the FX3 bootloader, before the
 firmware) and `04B4:00F1` (the radio, after it). See [Installing](MANUAL.md#installing).
 
 **If FoxSDR says the RX888 is not answering**, the radio is on the USB bus but
-did not answer FoxSDR's first request, which is asked twice. Unplug the RX888,
-wait ten seconds, plug it in again, then choose it. If you have just changed
+one of the requests FoxSDR sends while opening it got no answer in time (the
+first request is asked twice before FoxSDR says so; the words in brackets after
+the sentence name the request). Unplug the RX888, wait ten seconds, plug it in
+again, then choose it. If you have just changed
 its driver with Zadig while it was running, or another SDR program has been
 using it, close that program and replug the radio before the first use.
 (Opening the radio takes about a second longer than you might expect: the
