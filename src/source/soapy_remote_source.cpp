@@ -25,6 +25,9 @@ constexpr std::size_t kStreamWindow = 1u << 20;
 // The receive slice of the stream sockets, ms: the longest a reader can be parked before it
 // looks at the close flag.
 constexpr int kStreamPollMs = 200;
+constexpr double kMinFullScale = 1.0e-6;   // review of the R3 fixes, D1: the bounds of a full-scale a server may announce
+constexpr double kMaxFullScale = 1.0e12;
+constexpr std::size_t kMaxGainNames = 64;  // review of the R3 fixes, D2: gain names read at open
 
 bool timedOut(const char* err) { return err != nullptr && std::strstr(err, "timed out") != nullptr; }
 
@@ -93,7 +96,11 @@ struct SoapyRemoteSource::Stream {
                 std::memcpy(&b, p + 8 * i + 4, 4);
                 if (!std::isfinite(a)) { a = 0.0f; }  // NaN and infinity are the peer's bytes, never samples (R3-05)
                 if (!std::isfinite(b)) { b = 0.0f; }
-                out[i] = {a * inv, b * inv};
+                // ... and so is a finite float whose product with 1/full-scale overflows (review of the R3 fixes, D1): 3e38 over a full-scale of 0.5
+                float ra = a * inv, rb = b * inv;
+                if (!std::isfinite(ra)) { ra = 0.0f; }
+                if (!std::isfinite(rb)) { rb = 0.0f; }
+                out[i] = {ra, rb};
             }
         }
     }
@@ -301,6 +308,9 @@ void SoapyRemoteSource::queryDeviceLocked() {
         remoteFormat_ = u.str();
         fullScale_ = u.f64();
         if (!(fullScale_ > 0.0) || !std::isfinite(fullScale_)) { throw std::runtime_error("a full-scale of zero"); }
+        // Review of the R3 fixes, D1: every sample is multiplied by 1 / full-scale, a number the SERVER sends. 1e-40 makes that reciprocal infinite (every CS8/CU8/CS16 sample
+        // NaN or infinity); the bound keeps 32768 times the reciprocal finite for the integer formats. Real servers send 1, 127, 128, 32768, 2^31.
+        if (fullScale_ < kMinFullScale || fullScale_ > kMaxFullScale) { throw std::runtime_error("a full-scale no receiver could scale by"); }
     }
     // The rest is information for the screen: a server that answers an error to any of these
     // still opens (the stream is what matters).
@@ -330,6 +340,7 @@ void SoapyRemoteSource::queryDeviceLocked() {
         p.call(sr::C_LIST_GAINS).chr(static_cast<char>(kDirRx)).i32(0);
         const std::vector<std::string> names = callLocked(p).stringList();
         for (const std::string& n : names) {
+            if (gains_.size() >= kMaxGainNames) { break; }   // every query is one more call a hostile server can stretch to a whole reply deadline
             sr::Packer q;
             q.call(sr::C_GET_GAIN_RANGE_ELEMENT).chr(static_cast<char>(kDirRx)).i32(0).str(n);
             const sr::Range r = callLocked(q).range();
@@ -442,8 +453,12 @@ bool SoapyRemoteSource::setupStreamLocked(const std::string& prot) {
 void SoapyRemoteSource::teardownLocked() {
     // Best-effort goodbye: every reply is optional, none may throw out of here.
     if (control_ != nullptr) {
-        const auto bye = [this](const sr::Packer& p) {
-            try { callLocked(p); } catch (const std::exception&) {}
+        // Review of the R3 fixes, D2: the first goodbye that fails (a timeout, a reset, a refusal) leaves the control connection out of step, so the rest are skipped:
+        // four calls under the mutex were four whole reply deadlines against a server that had gone quiet.
+        bool byeFailed = false;
+        const auto bye = [this, &byeFailed](const sr::Packer& p) {
+            if (byeFailed) { return; }
+            try { callLocked(p); } catch (const std::exception&) { byeFailed = true; }
         };
         if (active_ && streamId_ >= 0) {
             sr::Packer p;
