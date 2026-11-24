@@ -22,6 +22,7 @@
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
 #include "core/plugin_repo.hpp"
+#include "core/plugin_repo_data.hpp"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -133,12 +134,14 @@ bool wellFormedSha256(const std::string& s) {
 }
 
 bool urlIsOnAllowedHost(const std::string& url) {
-    const std::string prefix = "https://";
-    if (url.rfind(prefix, 0) != 0) { return false; }
-    const std::size_t start = prefix.size();
-    const std::size_t slash = url.find('/', start);
-    const std::string host = url.substr(start, slash == std::string::npos ? std::string::npos
-                                                                          : slash - start);
+    // THE HOST IS CUT WHERE A URL'S AUTHORITY ENDS - at '/', '?' or '#' - by the plugin
+    // store's own host function, which also refuses user-info, a backslash, a space or a
+    // control character outright and keeps a non-default port in the answer (so it never
+    // equals the bare host below). This used to cut at '/' alone, so
+    // "https://other.example?.foxsdr.com/x" looked like a foxsdr.com subdomain here
+    // and like other.example to the HTTP client (security review R1, finding F3).
+    const std::string host = pluginSiteHost(url);
+    if (host.empty()) { return false; }
     // Exactly the host, or a subdomain of it. "evilfoxsdr.com" must not pass,
     // which a plain suffix test would allow.
     if (host == kAllowedHost) { return true; }
