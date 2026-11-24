@@ -69,11 +69,24 @@ inline std::atomic<int>& fakeRadioOpenDelayMs() {
     static std::atomic<int> n{0};
     return n;
 }
+// THE OVERLAP DETECTOR (review of the radio holder fix, D-tests): counted AT ENTRY to open(), before any delay, so two opens in flight at the same moment show as 2 whatever
+// the timing - `fakeRadioPeak` above counts after the delay and an abandoned open is closed the moment it returns, so it sees two opens at once only by luck. The figure is
+// opens still on their way plus radios open now; its highest value is `fakeRadioOverlapPeak` (1 = never two at once, one physical radio). An open that fails does not count.
+inline std::atomic<int>& fakeRadioBusy() {
+    static std::atomic<int> n{0};
+    return n;
+}
+inline std::atomic<int>& fakeRadioOverlapPeak() {
+    static std::atomic<int> n{0};
+    return n;
+}
 inline void resetFakeRadioCounters() {
     fakeRadioOpens() = 0;
     fakeRadioLive() = 0;
     fakeRadioPeak() = 0;
     fakeRadioOpenDelayMs() = 0;
+    fakeRadioBusy() = 0;
+    fakeRadioOverlapPeak() = 0;
 }
 
 class FakeRadio final : public cascade::source::DeviceSource {
@@ -118,6 +131,13 @@ public:
             lastError_ = "no such device";
             return false;
         }
+        // (only the ONE radio the tests share - serial 00000001 - is counted: a test may open another serial beside it on purpose)
+        if (!open_ && !counted_ && args == kFakeRadioArgs) {
+            counted_ = true;
+            const int busy = fakeRadioBusy().fetch_add(1) + 1;   // (counted at entry: the open is on its way from here)
+            int top = fakeRadioOverlapPeak().load();
+            while (busy > top && !fakeRadioOverlapPeak().compare_exchange_weak(top, busy)) {}
+        }
         if (const int delay = fakeRadioOpenDelayMs().load(); delay > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(delay)); }
         if (!open_) {
             open_ = true;
@@ -132,6 +152,10 @@ public:
         if (open_) {
             open_ = false;
             fakeRadioLive().fetch_sub(1);
+        }
+        if (counted_) {
+            counted_ = false;
+            fakeRadioBusy().fetch_sub(1);
         }
     }
     bool isOpen() const override { return open_; }
@@ -180,6 +204,7 @@ private:
     double gain_ = 29.7;
     bool agc_ = false;
     bool open_ = false;
+    bool counted_ = false;   // this object is counted in fakeRadioBusy (from the entry to open() until it is closed)
 };
 
 inline std::unique_ptr<cascade::source::DeviceSource> makeFakeRadio(const std::string& kind) {

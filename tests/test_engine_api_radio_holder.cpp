@@ -72,6 +72,10 @@ struct AppWindowTestAccess {
     static void setPartOn(Engine& e, std::uint32_t id, bool on) {
         if (pc::Node* n = e.patchGraph_.mutableNode(id)) { n->on = on; }
     }
+    static void setPartDevice(Engine& e, std::uint32_t id, const std::string& device) {
+        if (pc::Node* n = e.patchGraph_.mutableNode(id)) { n->device = device; }
+    }
+    static void deletePart(Engine& e, std::uint32_t id) { (void)e.patchGraph_.removeNode(id); }
     static void setPatchRunning(Engine& e, bool on) { e.patchRunning_ = on; }
     static std::size_t patchRadiosOpen(const Engine& e) { return e.patchRadios_.size(); }
     static std::size_t patchOpensPending(const Engine& e) { return e.patchRadioPending_.size(); }
@@ -510,6 +514,7 @@ void testStopWithAPartStillOpeningThenChoose() {
     CHECK_EQ(again.result.status, static_cast<int32_t>(FOXAPI_OK));
     CHECK(passUntil(d.eng, [&] { return radio1Open(s); }));
     CHECK_EQ(engine_api_test::fakeRadioPeak().load(), 1);
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);   // counted at entry to open(): never two opens of the radio on their way at once, whatever the timing
 }
 
 void testARetiredOpenKeepsItsHold() {
@@ -534,6 +539,158 @@ void testARetiredOpenKeepsItsHold() {
     CHECK(passUntil(d.eng, [&] { return engine_api_test::fakeRadioOpens().load() == 2 && engine_api_test::fakeRadioLive().load() == 1 && !radio1Opening(s); }, 8000));
     engine_api_test::fakeRadioOpenDelayMs() = 0;
     CHECK_EQ(pumped(d.eng, s, addRadioCmd(2, engine_api_test::kFakeRadioId)).result.status, static_cast<int32_t>(FOXAPI_OK));
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);   // (the refused add never opened the radio beside the retired open; the accepted one came after it had gone)
+}
+
+// ---- D1 to D3 (review of this change) ----------------------------------------------------------------------------------------------------------
+
+// D1. Radio 1 has the radio, START lends it and the part's open goes to its worker (seconds on a B200), then STOP inside that time: the patch hands the open to a detached
+// thread and the hand-back (Radio 1's own open of the same radio) must WAIT for it - it used to run at once, beside the detached one.
+void testStopWhileAPartIsOpeningTheLentRadio() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
+    CHECK(s.ok());
+    CHECK(scanFakeRadio(d, s));
+    const std::uint32_t part = Access::addPart(d.eng, kKey, true);
+    passes(d.eng, 3);
+    CHECK(openFakeRadioAsReceiver(d, s));            // Radio 1 has the radio (its open was instant: the delay is set after it)
+    engine_api_test::fakeRadioOpenDelayMs() = 1200;
+    Access::setPatchRunning(d.eng, true);            // START: Radio 1 lends it, the part's open is on its worker
+    CHECK(passUntil(d.eng, [&] { return Access::patchOpensPending(d.eng) == 1u && Access::patchMainKept(d.eng); }, 3000));
+    Access::setPatchRunning(d.eng, false);           // STOP while the part is still opening
+    passes(d.eng, 6);
+    CHECK_EQ(Access::patchOpensPending(d.eng), std::size_t{0});
+    CHECK(!radio1Opening(s));                        // Radio 1's hand-back open does not start beside the detached one...
+    CHECK(Access::patchMainKept(d.eng));             // ...the radio is still remembered for Radio 1
+    // when the detached open has returned (and dropped what it opened), Radio 1 gets its radio back, once
+    CHECK(passUntil(d.eng, [&] { return radio1Open(s); }, 8000));
+    CHECK(!Access::patchMainKept(d.eng));
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);
+    CHECK_EQ(engine_api_test::fakeRadioLive().load(), 1);
+    CHECK_EQ(Access::openFailures(d.eng), std::uint64_t{0});
+    (void)part;
+}
+
+// D1, the other end: the patch STARTS again while the hand-back waits - the kept radio stays kept and the part gets it (nothing is handed back into a running patch).
+void testStartAgainWhileTheHandBackWaits() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
+    CHECK(s.ok());
+    CHECK(scanFakeRadio(d, s));
+    const std::uint32_t part = Access::addPart(d.eng, kKey, true);
+    passes(d.eng, 3);
+    CHECK(openFakeRadioAsReceiver(d, s));
+    engine_api_test::fakeRadioOpenDelayMs() = 800;
+    Access::setPatchRunning(d.eng, true);
+    CHECK(passUntil(d.eng, [&] { return Access::patchOpensPending(d.eng) == 1u && Access::patchMainKept(d.eng); }, 3000));
+    Access::setPatchRunning(d.eng, false);
+    passes(d.eng, 3);
+    Access::setPatchRunning(d.eng, true);            // START again: the detached open has not returned
+    engine_api_test::fakeRadioOpenDelayMs() = 0;
+    CHECK(passUntil(d.eng, [&] { return Access::patchRadiosOpen(d.eng) == 1u; }, 8000));   // the part has the radio once the detached open is over
+    passes(d.eng, 3);
+    CHECK(!radio1Open(s));                           // Radio 1 stays on the generator while the patch runs
+    CHECK(Access::patchMainKept(d.eng));
+    Access::setPatchRunning(d.eng, false);           // and a STOP now hands it back as ever
+    CHECK(passUntil(d.eng, [&] { return radio1Open(s); }, 8000));
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);
+    (void)part;
+}
+
+// D2. The patch runs and Radio 1's radio X is lent; Radio 1 picks another radio, Y, and its open is on the worker. Slot 0 used to claim nothing while the loan stood, so the
+// open of Y was not on the books and Y could be added as Radio 2 beside it.
+void testASecondPickWhileALoanStands() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
+    CHECK(s.ok());
+    CHECK(scanFakeRadio(d, s));
+    const std::uint32_t part = Access::addPart(d.eng, kKey, true);
+    passes(d.eng, 3);
+    CHECK(openFakeRadioAsReceiver(d, s));
+    Access::setPatchRunning(d.eng, true);
+    CHECK(passUntil(d.eng, [&] { return Access::patchRadiosOpen(d.eng) == 1u && Access::patchMainKept(d.eng); }, 3000));   // the loan stands
+    // Radio 1 picks Y (the fake radio of another serial; the shared counters count only serial 00000001): its open is on the worker
+    engine_api_test::fakeRadioOpenDelayMs() = 1500;
+    Access::launchOpen(d.eng, engine_api_test::kFakeRadioDriver, "serial=00000002");
+    CHECK(passUntil(d.eng, [&] { return radio1Opening(s); }, 2000));
+    const testing::Outcome o = onePass(d.eng, s, addRadioCmd(2, "rtlsdr:serial=00000002"));
+    CHECK(o.landed);
+    CHECK_EQ(o.result.status, static_cast<int32_t>(FOXAPI_BUSY));
+    CHECK_EQ(std::string(o.result.message), std::string("in use by Radio 1"));
+    CHECK_EQ(fact(s, "radio.count"), std::string("1"));
+    engine_api_test::fakeRadioOpenDelayMs() = 0;
+    (void)part;
+}
+
+// D3. A part's open is on its worker; the part is re-pointed to another device (or deleted). The books follow the radio it is OPENING, not the one the part names now: the
+// radio is still being opened and a second open of it is refused until the first is over.
+void testAPartRepointedWhileItsOpenIsOnTheWorker() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
+    CHECK(s.ok());
+    CHECK(scanFakeRadio(d, s));
+    engine_api_test::fakeRadioOpenDelayMs() = 1200;
+    const std::uint32_t part = Access::addPart(d.eng, kKey, true);
+    Access::setPatchRunning(d.eng, true);
+    CHECK(passUntil(d.eng, [&] { return Access::patchOpensPending(d.eng) == 1u; }, 3000));
+    Access::setPartDevice(d.eng, part, pc::makeDeviceKey("rtlsdr", "serial=MISSING"));   // re-pointed while its open is on the worker
+    passes(d.eng, 3);
+    CHECK_EQ(Access::patchOpensPending(d.eng), std::size_t{1});   // (the open is still on its worker: nothing cancels it)
+    const testing::Outcome o = pumped(d.eng, s, selectFake());
+    CHECK(o.landed);
+    CHECK_EQ(o.result.status, static_cast<int32_t>(FOXAPI_BUSY));
+    CHECK_EQ(pumped(d.eng, s, addRadioCmd(2, engine_api_test::kFakeRadioId)).result.status, static_cast<int32_t>(FOXAPI_BUSY));
+    // once the open has returned (its answer is dropped: the part is not wanted on that radio any more) the radio is free
+    CHECK(passUntil(d.eng, [&] { return Access::patchOpensPending(d.eng) == 0u && engine_api_test::fakeRadioLive().load() == 0; }, 6000));
+    Access::setPatchRunning(d.eng, false);   // (a running patch would take the radio Radio 1 opens - the loan - and Radio 1 would show the generator again)
+    passes(d.eng, 3);
+    engine_api_test::fakeRadioOpenDelayMs() = 0;
+    CHECK_EQ(pumped(d.eng, s, selectFake()).result.status, static_cast<int32_t>(FOXAPI_OK));
+    CHECK(passUntil(d.eng, [&] { return radio1Open(s); }));
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);
+}
+
+void testAPartDeletedWhileItsOpenIsOnTheWorker() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
+    CHECK(s.ok());
+    CHECK(scanFakeRadio(d, s));
+    engine_api_test::fakeRadioOpenDelayMs() = 1200;
+    const std::uint32_t part = Access::addPart(d.eng, kKey, true);
+    Access::setPatchRunning(d.eng, true);
+    CHECK(passUntil(d.eng, [&] { return Access::patchOpensPending(d.eng) == 1u; }, 3000));
+    Access::deletePart(d.eng, part);
+    passes(d.eng, 3);
+    const testing::Outcome o = pumped(d.eng, s, selectFake());
+    CHECK(o.landed);
+    CHECK_EQ(o.result.status, static_cast<int32_t>(FOXAPI_BUSY));
+    CHECK(passUntil(d.eng, [&] { return Access::patchOpensPending(d.eng) == 0u && engine_api_test::fakeRadioLive().load() == 0; }, 6000));
+    Access::setPatchRunning(d.eng, false);   // (a running patch would take the radio Radio 1 opens - the loan - and Radio 1 would show the generator again)
+    passes(d.eng, 3);
+    engine_api_test::fakeRadioOpenDelayMs() = 0;
+    CHECK_EQ(pumped(d.eng, s, selectFake()).result.status, static_cast<int32_t>(FOXAPI_OK));
+    CHECK(passUntil(d.eng, [&] { return radio1Open(s); }));
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);
+}
+
+// D3, the open radio: a running part is re-pointed in the SAME pass as a choice of the radio it has open (the pass closes the old radio later than the commands are applied).
+void testAnOpenPartRepointedAndTheChoiceInOnePass() {
+    Direct d;
+    testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
+    CHECK(s.ok());
+    CHECK(scanFakeRadio(d, s));
+    const std::uint32_t part = Access::addPart(d.eng, kKey, true);
+    CHECK(startPartAndWaitForItsRadio(d, part));
+    Access::setPartDevice(d.eng, part, pc::makeDeviceKey("rtlsdr", "serial=MISSING"));   // the edit lands...
+    const testing::Outcome o = onePass(d.eng, s, selectFake());                            // ...and so does the choice, before the pass has closed the old radio
+    CHECK(o.landed);
+    CHECK_EQ(o.result.status, static_cast<int32_t>(FOXAPI_BUSY));
+    CHECK(passUntil(d.eng, [&] { return engine_api_test::fakeRadioLive().load() == 0; }, 4000));   // the pass closed the part's radio
+    Access::setPatchRunning(d.eng, false);
+    passes(d.eng, 3);
+    CHECK_EQ(pumped(d.eng, s, selectFake()).result.status, static_cast<int32_t>(FOXAPI_OK));
+    CHECK(passUntil(d.eng, [&] { return radio1Open(s); }));
+    CHECK_EQ(engine_api_test::fakeRadioOverlapPeak().load(), 1);
 }
 
 // ---- 15 to 17 ----------------------------------------------------------------------------------------------------------------------------------
@@ -714,6 +871,12 @@ int main() {
     testHandBackPendingStillHolds();
     testStopWithAPartStillOpeningThenChoose();
     testARetiredOpenKeepsItsHold();
+    testStopWhileAPartIsOpeningTheLentRadio();
+    testStartAgainWhileTheHandBackWaits();
+    testASecondPickWhileALoanStands();
+    testAPartRepointedWhileItsOpenIsOnTheWorker();
+    testAPartDeletedWhileItsOpenIsOnTheWorker();
+    testAnOpenPartRepointedAndTheChoiceInOnePass();
     testRadio2HoldsItThenPatchStarts();
     testRadio1HoldsItThenPatchStarts();
     testPartSwitchedOffWhileRunningThenRadio2Takes();

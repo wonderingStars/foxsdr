@@ -194,12 +194,11 @@ void Engine::rebuildDeviceLedger() {
                 // What the receiver would lend (the same question the loan asks, with the patch taken as running): its device, or its sound card.
                 const cascade::gui::ReceiverLoan held = cascade::gui::receiverSourceForPatch(true, rx().sourceKind_, rx().device_ != nullptr, rx().deviceOpenPending_, rx().deviceArgs_,
                                                                                             soundCardOpenPending_, soundCardLive_);
-                if (held.take) {
-                    key = pc::makeDeviceKey(held.kind, held.args);
-                } else if (rx().deviceOpenPending_) {
-                    key = rx().pendingOpenKey_;   // its open is on the worker: the radio is already its (the loan waits for the answer, the ledger does not)
-                }
+                if (held.take) { key = pc::makeDeviceKey(held.kind, held.args); }
             }
+            // ITS OPEN ON THE WORKER IS ON THE BOOKS WHETHER OR NOT A LOAN STANDS (review D2): while the patch runs and the receiver has lent its radio X, a pick of another radio Y is
+            // an open of Y that is as much the first radio's as any other (the loan waits for the answer, the ledger does not).
+            if (key.empty() && rx().deviceOpenPending_) { key = rx().pendingOpenKey_; }
         }
         // A radio other than the first holds what it asked for when it was added or last pointed at a device (Receiver::claimedKey_, cleared by its own
         // pass when an open did not take): it is on the books whether it is on a device or the generator.
@@ -226,6 +225,18 @@ void Engine::rebuildDeviceLedger() {
             if (ro.open.valid() && !ro.key.empty()) { deviceLedger_.claim(ro.key, DeviceHolder::inFlight(DeviceHolder::receiver(slot), ++seq), false); }
         }
     }
+    // THE RADIO A PART IS OPENING OR HAS OPEN IS THE ONE IT OPENED ON, not the one the node names now (review D3): re-pointed or deleted while its open is on the worker, or
+    // while its radio is open and the pass has not yet closed it, the node names another device or none, and the radio would look free. Held as in flight, against everyone,
+    // while the key differs; when it is the node's own, the node's claim below is the hold.
+    const auto holdWhileDifferent = [&](const std::map<pc::NodeId, std::string>& keys) {
+        for (const auto& [id, key] : keys) {
+            if (key.empty()) { continue; }
+            const pc::Node* n = patchGraph_.find(id);
+            if (n == nullptr || n->device != key) { deviceLedger_.claim(key, DeviceHolder::inFlight(DeviceHolder::patchNode(id), ++seq), false); }
+        }
+    };
+    holdWhileDifferent(patchRadioPendingKey_);
+    holdWhileDifferent(patchRadioOpenedKey_);
     for (const pc::Node& n : patchGraph_.nodes()) {
         if (n.kind != pc::NodeKind::Radio || n.device.empty()) { continue; }
         const bool open = (patchRunning_ && n.on) || patchRadios_.count(n.id) != 0 || patchRadioPending_.count(n.id) != 0;
@@ -416,6 +427,7 @@ void Engine::patchReconcile() {
                                 static_cast<unsigned>(id), patchRadioForLog(n->device, r.label).c_str(),
                                 radio->rateHz());
         patchRadioOpenedAs_[id] = as;
+        patchRadioOpenedKey_[id] = n->device;
         patchRadios_[id] = std::move(radio);
         patchRadioSig_.erase(id);
         if (const std::string kind = pc::deviceDriver(n->device); kind != "file" && kind != "siggen") {
@@ -484,6 +496,7 @@ void Engine::patchReconcile() {
             controlWatchdog_.heartbeat();
         }
         patchRadioOpenedAs_.erase(id);
+        patchRadioOpenedKey_.erase(id);
         patchRadioSig_.erase(id);
         patchSpectra_.erase(id);
         patchRefusedBy_.erase(id);
@@ -887,6 +900,7 @@ void Engine::patchStopAll(bool restoreMain) {
         }
     }   // (end of the Stop phase)
     patchRadioOpenedAs_.clear();
+    patchRadioOpenedKey_.clear();
     patchRadioSig_.clear();
     patchSpectra_.clear();
     patchRefusedBy_.clear();
@@ -914,6 +928,45 @@ void Engine::patchStopAll(bool restoreMain) {
     patchRadioPendingKey_.clear();
 
     if (!restoreMain || !patchMainKeep_.valid) { return; }
+    // A PATCH OPEN STILL ON ITS WORKER FOR THE RADIO THE RECEIVER LENT (review D1): the hand-back is an open of that very radio, so it waits until the detached thread has returned
+    // (and dropped what it opened) - the radio is still remembered for the receiver meanwhile (patchMainKeep_), and patchHandBackWhenFree does the hand-back on the first pass after.
+    if (inFlightPatchOpenHolds(pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args))) {
+        patchHandBackWaits_ = true;
+        cascade::core::diagLogf("patch: the receiver's radio is still being opened by the patch - handing it back when that open has returned");
+        return;
+    }
+    patchHandBackMain();
+}
+
+// An open a patch radio handed to a detached thread (STOP) that has not returned, for the radio `key` or one the ledger takes for it.
+bool Engine::inFlightPatchOpenHolds(const std::string& key) const {
+    if (key.empty()) { return false; }
+    for (const InFlightPatchOpen& o : inFlightPatchOpens_) {
+        if (o.done && !o.done->load() && pc::sameDevice(o.key, key)) { return true; }
+    }
+    return false;
+}
+
+// The wait of patchStopAll is over when the detached open has returned; until then, nothing. Called at the head of every pass (the page closed or open). The patch running again
+// ends the wait without a hand-back: the radio stays kept, and the STOP that follows hands it back as ever. A receiver that was pointed at something else meanwhile keeps that
+// choice: the kept radio is forgotten, never handed back over it.
+void Engine::patchHandBackWhenFree() {
+    if (!patchHandBackWaits_) { return; }
+    if (patchRunning_ || !patchMainKeep_.valid) {
+        patchHandBackWaits_ = false;
+        return;
+    }
+    if (inFlightPatchOpenHolds(pc::makeDeviceKey(patchMainKeep_.kind, patchMainKeep_.args))) { return; }
+    patchHandBackWaits_ = false;
+    SlotScope firstRadio(this, 0);
+    if (rx().device_ != nullptr || rx().deviceOpenPending_ || rx().sourceKind_ != "siggen") {
+        patchMainKeep_ = PatchMainKeep{};   // the receiver was given another source while it waited: that choice stands
+        return;
+    }
+    patchHandBackMain();
+}
+
+void Engine::patchHandBackMain() {
     // --- the receiver gets its radio back ---------------------------------------
     const PatchMainKeep keep = patchMainKeep_;
     patchMainKeep_ = PatchMainKeep{};
@@ -1063,6 +1116,7 @@ void Engine::compilePatchPlan() {
 }
 
 void Engine::pumpPatch() {
+    patchHandBackWhenFree();
     syncPatchGraphVersion();
     if (!patchPageOpen_) {
         patchLedgerRefusal_.clear();   // nothing is judged while the page is closed

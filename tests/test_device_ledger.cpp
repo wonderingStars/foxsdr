@@ -25,6 +25,7 @@
 
 #include "core/patch_devices.hpp"
 #include "engine/device_ledger.hpp"
+#include "engine/radio_refusal_data.hpp"
 #include "test_check.hpp"
 
 // test_check.hpp has no CHECK_EQ: a mismatch prints the expression, as CHECK does.
@@ -336,6 +337,57 @@ void testPlutoStoppedNodeDoesNotBlockAReceiverAndARunningOneDoes() {
     CHECK_EQ(running.claim(pluto, DeviceHolder::receiver(1)).refusal, std::string("in use by patch radio 1"));
 }
 
+void testBlockerOfAnswersWhatAReceiversClaimWouldBeTold() {
+    // blockerOf (a source choice, asked before the claim) and claim (RADIO_ADD) must agree for a receiver, whoever holds the radio (review of the holder fix: no unit test of it)
+    DeviceLedger l(8);
+    CHECK(l.blockerOf(kB200).none());                                            // nobody
+    CHECK(l.claim(kB200, DeviceHolder::patchNode(1), /*open=*/false).granted());
+    CHECK(l.blockerOf(kB200).none());                                            // a stopped part only names it
+    CHECK(l.holderOf(kB200) == DeviceHolder::patchNode(1));                       // (holderOf is the old, strict answer)
+    DeviceLedger open(8);
+    CHECK(open.claim(kB200, DeviceHolder::patchNode(2), true).granted());
+    CHECK(open.blockerOf(kB200) == DeviceHolder::patchNode(2));                  // an open part holds
+    CHECK(open.blockerOf(kRtl).none());
+    DeviceLedger rx(8);
+    CHECK(rx.claim(kRtl, DeviceHolder::receiver(0)).granted());
+    CHECK(rx.blockerOf(kRtlViaSoapy) == DeviceHolder::receiver(0));              // a receiver holds, through the other stack's spelling too
+    CHECK(rx.blockerOf("").none());
+    CHECK(rx.blockerOf(pc::kGeneratorKey).none());                               // the generator is exempt
+    // a refused (never granted) node entry only names the device: it blocks nobody
+    DeviceLedger twice(8);
+    CHECK(twice.claim(kB200, DeviceHolder::patchNode(1), true).granted());
+    CHECK(!twice.claim(kB200, DeviceHolder::patchNode(2), true).granted());
+    CHECK(twice.blockerOf(kB200) == DeviceHolder::patchNode(1));
+}
+
+void testAnOpenInFlightHoldsAgainstEveryoneAndNamesItsAsker() {
+    // an open still on its worker after its asker let go (a patch open STOP handed to a thread, an open a receiver set aside): held against a receiver, a node and a second
+    // in-flight open alike, described as whoever asked, and never counted toward the limit
+    DeviceLedger l(2);
+    const DeviceHolder fly = DeviceHolder::inFlight(DeviceHolder::patchNode(4), 1);
+    CHECK(l.claim(kB200, fly, /*open=*/false).granted());
+    CHECK(fly.kind == DeviceHolder::Kind::InFlight);
+    CHECK(fly.owner() == DeviceHolder::patchNode(4));
+    CHECK_EQ(fly.describe(), std::string("patch radio 4"));
+    CHECK_EQ(l.countOpen(), static_cast<std::size_t>(0));                          // not an open radio: no part of the limit
+    CHECK(l.holderOf(kB200) == fly);
+    CHECK(l.blockerOf(kB200) == fly);                                              // holds against a receiver (blockerOf) ...
+    const DeviceLedger::Claim rxClaim = l.claim(kB200, DeviceHolder::receiver(0));
+    CHECK(!rxClaim.granted());                                                     // ... and a receiver's claim
+    CHECK_EQ(rxClaim.refusal, std::string("in use by patch radio 4"));
+    CHECK(rxClaim.holder == fly);
+    const DeviceLedger::Claim nodeClaim = l.claim(kB200, DeviceHolder::patchNode(9), false);
+    CHECK(!nodeClaim.granted());                                                   // ... and a node's
+    CHECK_EQ(nodeClaim.refusal, std::string("in use by patch radio 4"));
+    // the words and the data a refusal carries name the one that asked, never the open
+    const cascade::engine::RefusalHolder who = cascade::engine::refusalHolderOf(fly);
+    CHECK_EQ(who.kind, cascade::engine::refusalHolderOf(DeviceHolder::patchNode(4)).kind);
+    CHECK_EQ(who.number, 4);
+    const cascade::engine::RefusalHolder rxWho = cascade::engine::refusalHolderOf(DeviceHolder::inFlight(DeviceHolder::receiver(2), 2));
+    CHECK_EQ(rxWho.kind, cascade::engine::refusalHolderOf(DeviceHolder::receiver(2)).kind);
+    CHECK_EQ(rxWho.number, 3);                                                     // "Radio 3"
+}
+
 }  // namespace
 
 int main() {
@@ -358,5 +410,7 @@ int main() {
     testDisplacedNodeDoesNotCountTowardTheLimit();
     testTransmitterEntryAlwaysBlocks();
     testPlutoStoppedNodeDoesNotBlockAReceiverAndARunningOneDoes();
+    testBlockerOfAnswersWhatAReceiversClaimWouldBeTold();
+    testAnOpenInFlightHoldsAgainstEveryoneAndNamesItsAsker();
     return testSummary("test_device_ledger");
 }

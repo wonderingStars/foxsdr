@@ -2356,6 +2356,15 @@ private:
         std::shared_ptr<std::atomic<bool>> done;
     };
     std::vector<InFlightPatchOpen> inFlightPatchOpens_;
+    // THE DEVICE KEY EACH OPEN PATCH RADIO WAS OPENED ON (review D3): the node may be re-pointed or deleted while its radio is open, and the pass closes the radio later than the
+    // commands are applied, so the books hold the radio it HAS (set where patchRadios_ gets it, erased where it goes), not what the node names now.
+    std::map<cascade::core::patch::NodeId, std::string> patchRadioOpenedKey_;
+    // THE HAND-BACK WAITS (review D1): STOP found a patch open still on its worker for the very radio the receiver lent (inFlightPatchOpens_), so patchMainKeep_ stays and the
+    // receiver gets its radio back (patchHandBackMain) on the first pass after that open has returned - never an open of it beside the detached one.
+    bool patchHandBackWaits_ = false;
+    bool inFlightPatchOpenHolds(const std::string& key) const;
+    void patchHandBackMain();
+    void patchHandBackWhenFree();
     // Why a radio is not running, when it tried and failed; drawn on its face
     // and turned into Problem::RadioFailed for the plan.
     std::map<cascade::core::patch::NodeId, std::string> patchRadioError_;
