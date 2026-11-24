@@ -632,17 +632,19 @@ bool Rx888Source::open(const std::string& args) {
     // woke it, and a second request sent at once is what would get through
     // then. The log says when that happens, which is also how the next
     // report tells that case from a firmware that has stopped for good. This
-    // request reads and changes nothing, and the firmware drops an unfinished
-    // request when a new one arrives (cyu3usbpp.c, top of its setup handler), so
-    // asking again is safe. The two bounds add up to rx888::kSetupTimeout: a
-    // radio that is not coming back costs the person no longer than one ask.
+    // request reads and changes nothing, so asking it again changes nothing.
+    //
+    // EACH ASK IS GIVEN TWO SECONDS - twice the firmware's longest known pause
+    // - because giving up on a request early is not harmless here: on 24 Nov
+    // a radio left with an abandoned request (0.99.113's TUNERSTDBY) did not
+    // answer the next open nine seconds later (rx888_protocol.hpp, the
+    // timeouts). A radio that is not coming back costs the person four seconds.
     std::uint8_t info4[4] = {0, 0, 0, 0};
     std::size_t moved = 0;
-    constexpr unsigned kFirstAskMs = rx888::kSetupTimeoutMs / 3;
-    constexpr unsigned kSecondAskMs = rx888::kSetupTimeoutMs - kFirstAskMs;
+    constexpr unsigned kAskMs = rx888::kSetupTimeoutMs * 2 / 3;
     const int first = dev_->controlIn(cascade::usb::kRequestTypeVendorIn,
                                       rx888::requestByte(rx888::Command::TestFx3), 0, 0, info4,
-                                      sizeof(info4), kFirstAskMs);
+                                      sizeof(info4), kAskMs);
     bool asked = first >= 0;
     if (asked) {
         moved = static_cast<std::size_t>(first);
@@ -653,10 +655,10 @@ bool Rx888Source::open(const std::string& args) {
     } else {
         core::diagWarnf("rx888: the radio did not answer its first request within %u ms; asking "
                         "once more",
-                        kFirstAskMs);
+                        kAskMs);
     }
     if (!asked && !controlInLocked(rx888::Command::TestFx3, 0, 0, info4, sizeof(info4),
-                                   "reading the hardware information", &moved, kSecondAskMs)) {
+                                   "reading the hardware information", &moved, kAskMs)) {
         // The transfer itself failed. Its own words are already in the error
         // slot (noteTransportFault) and STAY there: 0.99.113 wrote "the RX888
         // did not answer its hardware id" over them, and the failure report

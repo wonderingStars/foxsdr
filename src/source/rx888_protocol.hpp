@@ -226,10 +226,21 @@ constexpr unsigned kSetupTimeoutMs = static_cast<unsigned>(kSetupTimeout.count()
 //
 // It is enough for them: by the time a stream is being stopped the firmware
 // has long finished its start-up work, and what STOPFX3 itself leaves behind
-// is a 10 ms sleep (USBhandler.c:479-487). A teardown request that does run
-// out is logged and the radio is released anyway; per the SDK the firmware
-// then drops the unfinished request by itself (it waits at most 5 seconds for
-// the data, and stops waiting as soon as a new request arrives).
+// is a 10 ms sleep (USBhandler.c:479-487).
+//
+// IT IS NOT A BOUND TO SPEND LIGHTLY, THOUGH. A request that runs out of time
+// is abandoned, and an abandoned request is not harmless on this firmware: on
+// 24 Nov 2026 (16:05 UTC) a radio whose TUNERSTDBY had been abandoned -
+// 0.99.113's 500 ms, inside the sleep above - did not answer the next open
+// nine seconds later and had to be unplugged. The SDK's source says the
+// firmware should have recovered (it waits at most 5 seconds for the data and
+// stops waiting when a new request arrives; the same loop is in our image, at
+// 0x40016AC4), so WHY it did not is not known. What the source does show is
+// that the control transfer's "status pending" state then stays set - link
+// power saving refused, a ready signal repeated every 100 ms - until another
+// control transfer completes (cyu3usbpp.c). So no request is given this bound
+// unless the shutdown budget forces it, and a teardown request that does run
+// out leaves a radio that may have to be replugged before it opens again.
 //
 // A std::chrono duration rather than a bare unsigned so
 // tests/test_shutdown_budget.cpp's scan can DISCOVER it; the transport takes

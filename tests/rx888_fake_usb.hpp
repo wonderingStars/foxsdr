@@ -49,9 +49,14 @@
 //     driver uploads). The request after it waits about a second.
 //   - STOPFX3's sleeps 10 ms (:479-487). The tuner requests do I2C work whose
 //     length is not known here; a test sets it.
-//   - A request whose own timeout runs out first is NOT answered, and the
-//     firmware then waits (up to 5000 ms, looking every 100 ms for a new
-//     request) for data that will never come.
+//   - A request whose own timeout runs out first is NOT answered - it is
+//     abandoned - and AFTER THAT THE RADIO ANSWERS NOTHING. That is the
+//     field's observation, not the source's: on 24 Nov 2026, 16:05 UTC, a
+//     radio whose TUNERSTDBY had been abandoned inside the sleep above did
+//     not answer the next open nine seconds later. By the SDK's source the
+//     firmware would wait up to 5000 ms for the data (looking every 100 ms
+//     for a new request) and then carry on; `abandonedRequestSilences =
+//     false` gives that behaviour instead.
 //   - A firmware whose control thread has stopped (the vendor's CheckStatus()
 //     loops for ever after a failed system call, Support.c:127-144; an I2C
 //     transfer has no bus timeout, i2cmodule.c:30) stays on the bus and answers
@@ -156,6 +161,10 @@ public:
     // show (the host sends exactly that at every start in HF); kept so a test
     // can prove the driver's HF path does not depend on which is true.
     std::atomic<bool> standbyBeforeInitHangs{false};
+    // What an abandoned request does to the radio: true = it answers nothing
+    // afterwards (seen in the field), false = it recovers as the SDK's source
+    // says it should. See the file header.
+    std::atomic<bool> abandonedRequestSilences{true};
     // The next N requests never reach the firmware at all - a USB link that
     // had gone idle and lost them - and are answered from then on.
     std::atomic<int> deafToFirstRequests{0};
@@ -474,6 +483,7 @@ private:
                 rec.waitedMs = rec.timeoutMs;
                 rec.timedOut = true;
                 abandoned_ = true;
+                if (abandonedRequestSilences.load()) { dead_ = true; }
                 return false;
             }
             nowMs_ = ready;
