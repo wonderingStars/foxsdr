@@ -175,6 +175,24 @@ public:
     using UsbListFn = std::function<std::vector<cascade::usb::UsbDeviceInfo>()>;
     void setTransportForTest(UsbListFn lister, UsbOpenFn opener);
 
+    // THE CLOCK THE DRIVER TIMES ITS OWN REQUESTS WITH, in milliseconds. The
+    // real one is the steady clock. A test hands in the stand-in firmware's
+    // virtual clock, so that "the request after the ADC clock waited 1000 ms"
+    // is an exact figure and not a measurement of the test machine.
+    using ClockFn = std::function<std::uint64_t()>;
+    void setClockForTest(ClockFn clock);
+
+    // WHAT THE LAST open() DID, in one line, as it was written to the log:
+    // whether the firmware was loaded by this open or was already running,
+    // each request by name with how long its answer took (or that none came,
+    // or that it was refused, and after how long), how long the request after
+    // the ADC clock waited,
+    // and the transport's description of the USB endpoints (a 1024-byte bulk
+    // packet is a USB 3 link, 512 a USB 2 one). Empty before the first open.
+    // It is the line a failure report's log carries, so that one report from
+    // a real radio settles which request stopped and when.
+    std::string openReport() const;
+
     // --- DeviceSource ----------------------------------------------------
 
     const char* driverKey() const override { return "rx888"; }
@@ -192,9 +210,24 @@ public:
     // That last one is not cosmetic: an SDDC device remembers its GPIO word
     // across a re-open, bias tee included, and a driver that inherits 5 V on
     // somebody's antenna port silently cannot report what the radio is doing.
+    //
+    // IT SENDS THE VHF TUNER NOTHING. The reference host stops the tuner at
+    // every start (RX888R2Radio.cpp:81-86); this driver does not, so that an
+    // HF receiver never depends on a chip it does not use. What that leaves:
+    // a tuner another program left running is still running, with the HF
+    // antenna selected, until VHF is used here or the radio is unplugged.
+    //
+    // IT TAKES A SECOND LONGER THAN THE REQUESTS ADD UP TO, because the
+    // firmware sleeps 1000 ms after STARTADC and the next request waits for
+    // it (rx888_protocol.hpp, the timeouts).
+    //
+    // A radio that is on the bus and answers nothing fails with the one
+    // instruction that helps - unplug it, wait ten seconds, plug it in again,
+    // choose it - and with which request went unanswered.
     bool open(const std::string& args) override;
 
-    // Stops the stream, puts the front end to sleep, releases the device.
+    // Stops the stream, stops the tuner if this session started it, shuts the
+    // front end down, releases the device.
     // Idempotent, safe on a never-opened instance, and safe to call from the
     // destructor. lastError() survives it.
     void closeDevice() override;
@@ -423,6 +456,11 @@ private:
         bool faulted = false;
         bool deviceDead = false;
         std::string deadWhat;
+        // The transport's own words for the transfer that failed first
+        // ("a control transfer did not answer within its timeout", a Windows
+        // error): what failedOpenLocked() reads to tell a radio that answers
+        // nothing from one that refused.
+        std::string deadDetail;
 
         mutable std::mutex healthMutex;
         StreamHealth health;
@@ -446,25 +484,59 @@ private:
     // The *Locked helpers assume devMutex_ is held. Public entry points take
     // it; privates never do, so open() can run a whole opening sequence under
     // one lock without recursing into it.
+    //
+    // THE DEFAULT BOUND IS THE PATIENT ONE (rx888::kSetupTimeout): the
+    // firmware answers a request only when it has finished the work of the
+    // one before, so any request may have to wait. Only the three requests on
+    // the way out pass the short rx888::kControlTimeout by name.
     bool controlOutLocked(rx888::Command c, std::uint16_t value, std::uint16_t index,
                           const std::uint8_t* data, std::size_t len, const char* what,
-                          unsigned timeoutMs = rx888::kControlTimeoutMs);
+                          unsigned timeoutMs = rx888::kSetupTimeoutMs);
     bool controlInLocked(rx888::Command c, std::uint16_t value, std::uint16_t index,
                          std::uint8_t* data, std::size_t len, const char* what,
-                         std::size_t* moved = nullptr);
+                         std::size_t* moved = nullptr,
+                         unsigned timeoutMs = rx888::kSetupTimeoutMs);
 
     // The three shapes every SDDC command takes (rx888_protocol.hpp's
     // encoding note): one zero byte, a little-endian uint32, a uint64.
-    bool commandLocked(rx888::Command c, const char* what);
+    bool commandLocked(rx888::Command c, const char* what,
+                       unsigned timeoutMs = rx888::kSetupTimeoutMs);
     bool commandU32Locked(rx888::Command c, std::uint32_t v, const char* what,
-                          unsigned timeoutMs = rx888::kControlTimeoutMs);
+                          unsigned timeoutMs = rx888::kSetupTimeoutMs);
     bool commandU64Locked(rx888::Command c, std::uint64_t v, const char* what);
     bool setArgLocked(rx888::Argument a, std::uint16_t value, const char* what);
 
     // The GPIO word is written whole; these keep the mirror and send it.
     bool gpioSetLocked(std::uint32_t mask, const char* what);
     bool gpioClearLocked(std::uint32_t mask, const char* what);
-    bool gpioWriteLocked(std::uint32_t word, const char* what);
+    bool gpioWriteLocked(std::uint32_t word, const char* what,
+                         unsigned timeoutMs = rx888::kSetupTimeoutMs);
+
+    // A FAILED OPEN SAYS WHAT TO DO. Called on every way out of open() after
+    // a request failed: when the request RAN OUT OF TIME (the radio is on the
+    // bus and answers nothing - nothing this driver sends can wake it), the
+    // error becomes the one plain instruction that does, followed by which
+    // request it was and that it timed out. Any other failure keeps the words
+    // it already has. Writes the open's report line. Returns false, for
+    // `return failedOpenLocked();`.
+    bool failedOpenLocked();
+
+    // The open's report line (openReport()): built from the trace the control
+    // helpers keep while open() runs, written to the log, kept for the test.
+    void writeOpenReportLocked(bool opened);
+
+    // AFTER A TUNER REQUEST: WAIT UNTIL THE FIRMWARE IS IDLE AGAIN. The
+    // firmware answers TUNERINIT, TUNERTUNE and the two R82XX arguments as
+    // soon as their data has arrived and does the tuner's I2C work afterwards,
+    // on the one thread that serves every request. A read-only TESTFX3 sent
+    // straight after is answered only when that work is done, so when this
+    // returns the firmware has nothing left to finish - and the stop or close
+    // that may come next, on its short teardown bound, cannot be given up on
+    // half way through the tuner's work. `what` names the wait for the error
+    // and the log. On the patient bound; false when the radio did not answer.
+    bool settleTunerLocked(const char* what);
+
+    std::uint64_t nowMs() const;
 
     bool programAdcClockLocked(std::uint32_t hz);
     // Switches the front end and programs that side's two gains. Idempotent
@@ -490,7 +562,12 @@ private:
     std::vector<cascade::usb::UsbDeviceInfo> listDevices();
 
     bool startStreamingLocked();
-    void stopStreamingLocked();
+    // `stopTimeoutMs` bounds the STOPFX3. The default is the short teardown
+    // bound, for stop() and closeDevice(); a stop that is only the first half
+    // of a retune or a rate change is not a shutdown and passes the patient
+    // one, because it may arrive while the firmware is still doing the tuner's
+    // work from the request before.
+    void stopStreamingLocked(unsigned stopTimeoutMs = rx888::kControlTimeoutMs);
 
     // THE READER'S OWN HELPERS ARE STATIC AND TAKE THE LINK, not `this`. An
     // abandoned reader outlives the Rx888Source; a member function reaching
@@ -501,11 +578,15 @@ private:
     static std::string healthLineLocked(ReaderLink& link);  // link.healthMutex held
 
     static void setErrorOn(ReaderLink& link, std::string msg);
+    // `timing` is for the log line only (" after 3000 ms (STARTADC, bound 3000
+    // ms)"): the failure report's reason keeps `what` and `detail` as they were.
     static void noteTransportFaultOn(ReaderLink& link, const char* what,
-                                     const std::string& detail);
+                                     const std::string& detail,
+                                     const std::string& timing = std::string());
     void setError(std::string msg);
     void clearError();
-    void noteTransportFault(const char* what, const std::string& detail);
+    void noteTransportFault(const char* what, const std::string& detail,
+                            const std::string& timing = std::string());
 
     void setName(std::string n);
 
@@ -538,6 +619,12 @@ private:
     // Our copy of the GPIO word, because the FX3 has no way to read it back.
     std::uint32_t gpio_ = 0;
 
+    // True from a TUNERINIT this object sent until the TUNERSTDBY that stops
+    // it. THE TUNER IS ONLY EVER TOLD TO STOP WHEN THIS IS TRUE: a session
+    // that stays on HF sends the tuner nothing at all, so direct sampling
+    // cannot fail on a chip it does not use. Under devMutex_.
+    bool tunerStarted_ = false;
+
     mutable std::mutex nameMutex_;
     std::string name_ = "RX888: (no device)";
 
@@ -545,6 +632,25 @@ private:
     rx888::Model model_ = rx888::Model::None;
     std::uint16_t firmwareVersion_ = 0;
     bool firmwareUploaded_ = false;
+
+    // THE OPEN'S TRACE, under devMutex_. While open() runs (tracingOpen_) the
+    // control helpers add one entry per request: which, how long its answer
+    // took, and whether one came. writeOpenReportLocked() turns it into the
+    // report line.
+    struct Asked {
+        std::uint8_t request = 0;
+        unsigned tookMs = 0;
+        bool answered = false;
+        // Not answered: true when the request ran out of time (the radio said
+        // nothing), false when the radio or the host refused it outright.
+        bool silent = false;
+    };
+    std::vector<Asked> openTrace_;
+    bool tracingOpen_ = false;
+    std::uint64_t openStartMs_ = 0;
+    std::string usbLayout_;
+    std::string openReport_;
+    ClockFn clock_;
 
     // The test seam (see setTransportForTest). An empty opener means the real
     // WinUSB transport.

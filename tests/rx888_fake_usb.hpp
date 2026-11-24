@@ -33,6 +33,54 @@
 // bounded join's whole reason for existing), a bootloader that refuses the
 // image, and a control request that fails. Each of those is one flag here.
 //
+// IT KEEPS THE FIRMWARE'S TIME AND ORDER TOO (added 2026-11-24, after the first
+// RX888 mk2 in the field could not be opened). The first version of this file
+// answered every request at once, and the driver passed every test against it
+// while no real radio could be opened at all. What the real firmware does, read
+// from the vendor's published SDDC_FX3/USBhandler.c (MIT) and from Cypress's
+// FX3 SDK 1.3.1 cyu3usb.c (CyU3PUsbGetEP0Data):
+//
+//   - ONE thread serves every vendor request. A request that carries data is
+//     ANSWERED AS SOON AS ITS DATA HAS ARRIVED (the SDK acknowledges it inside
+//     CyU3PUsbGetEP0Data), and the handler's own work is done AFTERWARDS. So
+//     the cost of a slow handler is paid by the NEXT request, which waits.
+//   - STARTADC's handler programs the clock chip and then sleeps 1000 ms
+//     (USBhandler.c:264-273; the same instructions are in the image this
+//     driver uploads). The request after it waits about a second.
+//   - STOPFX3's sleeps 10 ms (:479-487). The tuner requests do I2C work whose
+//     length is not known here; a test sets it.
+//   - A request whose own timeout runs out first is NOT answered - it is
+//     abandoned. WHAT THE RADIO DOES NEXT is `afterAbandon`, and the default
+//     is what the field showed. On 24 Nov 2026, 16:05 UTC, a radio whose
+//     TUNERSTDBY had been abandoned inside the sleep above REFUSED the first
+//     request of the next open nine seconds later, in 18 ms: "a control
+//     transfer failed (Windows error 31)". (The first reading of that
+//     evidence, from the site's event rows alone, took it for a silence; the
+//     report's own log line says otherwise.) The image explains a refusal:
+//     the handler takes the abandoned request once the thread is free, waits
+//     for data that never comes - at most 5000 ms, looking every 100 ms for a
+//     new request (CyU3PUsbGetEP0Data, 0x40016AC4 in the image) - and reports
+//     the request NOT HANDLED (the branch to `mov r7,#0` at 0x400052C8), which
+//     is what makes the SDK stall endpoint 0. Whether the request AFTER the
+//     refused one is served (a stall on endpoint 0 ends at the next request,
+//     by the USB rules) has not been seen on a real radio, so RefusesAlways,
+//     Silent and Recovers are here as the rivals.
+//   - `answersAfterWork` is the rival of the whole timing model: a firmware
+//     that finishes a handler's work BEFORE its request completes, so the
+//     slow request itself waits and the next does not.
+//   - A firmware whose control thread has stopped (the vendor's CheckStatus()
+//     loops for ever after a failed system call, Support.c:127-144; an I2C
+//     transfer has no bus timeout, i2cmodule.c:30) stays on the bus and answers
+//     nothing: `controlThreadDead`.
+//   - The tuner requests have an order: TUNERINIT fills the structure that
+//     TUNERTUNE and the two R82XX arguments use. A request sent out of order,
+//     with the wrong length, or one the mk2's firmware has no case for is
+//     recorded in violations().
+//
+// TIME HERE IS VIRTUAL: a clock that moves only when a request waits or times
+// out. Nothing sleeps, so the suite is no slower and no test can pass or fail
+// by how busy the machine is.
+//
 // Everything is guarded, like the HackRF's fake and unlike the shared
 // src/usb/usb_fake.hpp: Rx888Source's reader thread calls readBulk()
 // concurrently with control transfers on the GUI thread, deliberately, so a
@@ -69,7 +117,29 @@ struct Rx888ControlRecord {
     // answered with - so a test can check what the driver was told as well as
     // what it asked.
     std::vector<std::uint8_t> data;
+    // How long the firmware kept this request waiting before it took it, on
+    // the fake's virtual clock, and whether the request's own timeout ran out
+    // first (then it was never answered).
+    unsigned waitedMs = 0;
+    bool timedOut = false;
+    // The firmware answered it with a refusal (a stalled endpoint 0) rather
+    // than with nothing.
+    bool refused = false;
 };
+
+// The sentence both real transports report for a control transfer that ran out
+// of time (winusb_device.cpp and usbfs_device.cpp; tests/test_winusb_abandon.cpp
+// holds the WinUSB one).
+inline const char* rx888FakeTimeoutText() {
+    return "a control transfer did not answer within its timeout";
+}
+
+// The sentence WinUSB's transport reports for a control transfer the device
+// refused (a stalled endpoint 0): the first field radio's own log line of
+// 24 Nov 2026, 16:05 UTC (winusb_device.cpp, lastErrorText).
+inline const char* rx888FakeRefusedText() {
+    return "a control transfer failed (Windows error 31)";
+}
 
 class FakeRx888Usb : public cascade::usb::UsbDevice {
 public:
@@ -95,6 +165,75 @@ public:
     // The bootloader refuses any write whose destination address is at or
     // past this. Zero means it refuses nothing.
     std::atomic<std::uint32_t> refuseWritesAtOrAbove{0};
+
+    // --- the firmware's time and order (see the file header) ----------------
+    // Virtual milliseconds the control thread is busy AFTER it has answered
+    // each of these requests.
+    std::atomic<unsigned> adcStartSleepMs{1000};  // USBhandler.c:264-273
+    std::atomic<unsigned> stopSleepMs{10};        // USBhandler.c:479-487
+    std::atomic<unsigned> tunerInitWorkMs{0};     // I2C work; not known for a real R828D
+    std::atomic<unsigned> tunerTuneWorkMs{0};
+    std::atomic<unsigned> tunerGainWorkMs{0};     // the two R82XX arguments: I2C work too
+    // The control thread has stopped: on the bus, answering nothing.
+    std::atomic<bool> controlThreadDead{false};
+    // The thread stops after it has answered this request (0 = never): a
+    // handler that never returns, in the answer-first model.
+    std::atomic<std::uint8_t> dieAfterRequest{0};
+    // The thread takes this request and never completes it (0 = never): the
+    // same handler in the rival, work-first model (answersAfterWork).
+    std::atomic<std::uint8_t> hangInsideRequest{0};
+    // The theory of the first field report: a TUNERSTDBY before any TUNERINIT
+    // stops the control thread. NOT what the vendor's source or its own host
+    // show (the host sends exactly that at every start in HF); kept so a test
+    // can prove the driver's HF path does not depend on which is true.
+    std::atomic<bool> standbyBeforeInitHangs{false};
+    // What an abandoned request does to the radio. See the file header.
+    enum class AfterAbandon {
+        RefusesNext,    // the next request is refused at once, then it serves again (the field's
+                        // 18 ms refusal, and the USB rule for what follows it)
+        RefusesAlways,  // every later request is refused at once
+        Silent,         // it answers nothing afterwards
+        Recovers,       // it gives up on the abandoned request and serves the next one
+    };
+    std::atomic<AfterAbandon> afterAbandon{AfterAbandon::RefusesNext};
+    // THE RIVAL TIMING MODEL: a handler's work is done BEFORE its request
+    // completes, so STARTADC itself takes the second and the request after it
+    // waits for nothing.
+    std::atomic<bool> answersAfterWork{false};
+    // Real milliseconds slept per virtual second a request waited. Zero (the
+    // default) keeps the clock wholly virtual; a test that has to see a
+    // SECOND THREAD wait behind a request in flight sets it.
+    std::atomic<unsigned> realMsPerVirtualSecond{0};
+    // What endpointLayout() answers: the transport's own description of the
+    // endpoints, which is how a USB 2 port is told from a USB 3 one.
+    std::string endpointLayoutText;
+    // The next N requests never reach the firmware at all - a USB link that
+    // had gone idle and lost them - and are answered from then on.
+    std::atomic<int> deafToFirstRequests{0};
+    // How many bytes TESTFX3 answers with (the firmware sends four).
+    std::atomic<unsigned> testFx3ReplyBytes{4};
+
+    // Requests the real firmware has no good answer to: sent out of order,
+    // with the wrong length, or unknown to the mk2. Empty on every healthy run.
+    std::vector<std::string> violations() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return violations_;
+    }
+    // The virtual clock, in milliseconds since the fake was made.
+    std::uint64_t nowMs() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return nowMs_;
+    }
+    // Time passing with nothing sent: the nine seconds between two opens.
+    void idle(unsigned ms) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        nowMs_ += ms;
+    }
+    // TUNERSTDBY requests that arrived before any TUNERINIT.
+    int standbyBeforeInitCount() const { return standbyBeforeInit_.load(); }
+    bool tunerInitialised() const { return tunerInit_.load(); }
+    bool adcStarted() const { return adcStarted_.load(); }
+    std::uint32_t gpioWord() const { return gpioWord_.load(); }
 
     // What readBulk does once the scripted queue is empty.
     enum class Exhausted {
@@ -159,6 +298,26 @@ public:
     int controlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
                    std::uint16_t index, const std::uint8_t* data, std::size_t len,
                    unsigned timeoutMs) override {
+        const std::uint64_t before = nowMs();
+        const int ret = controlOutNow(requestType, request, value, index, data, len, timeoutMs);
+        realWait(nowMs() - before);
+        return ret;
+    }
+
+    int controlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
+                  std::uint16_t index, std::uint8_t* data, std::size_t len,
+                  unsigned timeoutMs) override {
+        const std::uint64_t before = nowMs();
+        const int ret = controlInNow(requestType, request, value, index, data, len, timeoutMs);
+        realWait(nowMs() - before);
+        return ret;
+    }
+
+    std::string endpointLayout() override { return endpointLayoutText; }
+
+    int controlOutNow(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
+                      std::uint16_t index, const std::uint8_t* data, std::size_t len,
+                      unsigned timeoutMs) {
         Rx888ControlRecord rec;
         rec.in = false;
         rec.requestType = requestType;
@@ -167,6 +326,32 @@ public:
         rec.index = index;
         rec.timeoutMs = timeoutMs;
         if (data != nullptr && len > 0) { rec.data.assign(data, data + len); }
+        if (identity_ == Identity::Streamer && !fails(request)) {
+            // The running firmware: its one control thread takes the request
+            // when it is free, or the request's own timeout runs out first.
+            std::lock_guard<std::mutex> lk(mutex_);
+            const Admit taken = admitLocked(rec);
+            if (taken != Admit::Taken) {
+                controls_.push_back(rec);
+                lastError_ =
+                    taken == Admit::Refused ? rx888FakeRefusedText() : rx888FakeTimeoutText();
+                return -1;
+            }
+            const bool known = serveOutLocked(rec);
+            controls_.push_back(rec);
+            if (!known) {
+                lastError_ = "fake: the firmware stalled an unknown vendor request";
+                return -1;
+            }
+            if (rec.timedOut) {
+                // answersAfterWork: the host gave up while the handler was
+                // still working. The firmware finishes it all the same.
+                lastError_ = rx888FakeTimeoutText();
+                return -1;
+            }
+            requestCount.fetch_add(1);
+            return static_cast<int>(len);
+        }
         {
             std::lock_guard<std::mutex> lk(mutex_);
             controls_.push_back(rec);
@@ -211,9 +396,9 @@ public:
         return static_cast<int>(len);
     }
 
-    int controlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
-                  std::uint16_t index, std::uint8_t* data, std::size_t len,
-                  unsigned timeoutMs) override {
+    int controlInNow(std::uint8_t requestType, std::uint8_t request, std::uint16_t value,
+                     std::uint16_t index, std::uint8_t* data, std::size_t len,
+                     unsigned timeoutMs) {
         Rx888ControlRecord rec;
         rec.in = true;
         rec.requestType = requestType;
@@ -231,22 +416,33 @@ public:
             return -1;
         }
 
-        int answered = 0;
-        if (request == 0xAC) {  // TESTFX3
-            // SDDC_FX3/USBhandler.c:496-503, in that order.
-            const std::uint8_t reply[4] = {model, static_cast<std::uint8_t>(firmware >> 8),
-                                           static_cast<std::uint8_t>(firmware & 0xFF),
-                                           requestCount.load()};
-            const std::size_t n = std::min<std::size_t>(len, sizeof(reply));
-            if (data != nullptr && n > 0) { std::memcpy(data, reply, n); }
-            answered = static_cast<int>(n);
-            requestCount.fetch_add(1);
-        }
-        if (data != nullptr && answered > 0) { rec.data.assign(data, data + answered); }
-        {
-            std::lock_guard<std::mutex> lk(mutex_);
+        std::lock_guard<std::mutex> lk(mutex_);
+        const Admit taken = admitLocked(rec);
+        if (taken != Admit::Taken) {
             controls_.push_back(rec);
+            lastError_ = taken == Admit::Refused ? rx888FakeRefusedText() : rx888FakeTimeoutText();
+            return -1;
         }
+        if (request != 0xAC) {
+            // The driver sends one read, TESTFX3. The firmware's other two
+            // (raw I2C, its debug console) are requests it must never send.
+            violations_.push_back("an IN request other than TESTFX3: 0x" + hex2(request));
+            controls_.push_back(rec);
+            lastError_ = "fake: the firmware stalled an unknown vendor request";
+            return -1;
+        }
+        // SDDC_FX3/USBhandler.c:496-503, in that order.
+        const std::uint8_t reply[4] = {model, static_cast<std::uint8_t>(firmware >> 8),
+                                       static_cast<std::uint8_t>(firmware & 0xFF),
+                                       requestCount.load()};
+        const std::size_t n = std::min<std::size_t>(std::min<std::size_t>(len, sizeof(reply)),
+                                                    testFx3ReplyBytes.load());
+        if (data != nullptr && n > 0) { std::memcpy(data, reply, n); }
+        const int answered = static_cast<int>(n);
+        requestCount.fetch_add(1);
+        if (data != nullptr && answered > 0) { rec.data.assign(data, data + answered); }
+        controls_.push_back(rec);
+        afterAnswerLocked(request, 0);
         return answered;
     }
 
@@ -323,8 +519,209 @@ private:
         return false;
     }
 
+    static std::string hex2(unsigned v) {
+        static const char* const kDigits = "0123456789abcdef";
+        std::string out;
+        out += kDigits[(v >> 4) & 0xF];
+        out += kDigits[v & 0xF];
+        return out;
+    }
+
+    void realWait(std::uint64_t virtualMs) {
+        const unsigned scale = realMsPerVirtualSecond.load();
+        if (scale == 0 || virtualMs == 0) { return; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(virtualMs * scale / 1000));
+    }
+
+    enum class Admit { Taken, TimedOut, Refused };
+
+    // THE CONTROL THREAD'S QUEUE. Taken when the firmware takes the request
+    // (its data stage completes, the host's transfer succeeds); TimedOut when
+    // the request's own timeout runs out first; Refused when it meets the
+    // stall an abandoned request left on endpoint 0. mutex_ held.
+    Admit admitLocked(Rx888ControlRecord& rec) {
+        auto ranOut = [&] {
+            nowMs_ += rec.timeoutMs;
+            rec.waitedMs = rec.timeoutMs;
+            rec.timedOut = true;
+            return Admit::TimedOut;
+        };
+        if (deafToFirstRequests.load() > 0) {
+            deafToFirstRequests.fetch_sub(1);
+            return ranOut();  // the firmware never saw it, so nothing is left unfinished
+        }
+        if (controlThreadDead.load() || dead_) { return ranOut(); }
+        if (stalled_) {
+            rec.refused = true;
+            return Admit::Refused;
+        }
+        const AfterAbandon after = afterAbandon.load();
+        std::uint64_t ready = busyUntilMs_;
+        bool refuse = false;
+        if (abandoned_) {
+            // The thread, once free, took the abandoned request and is waiting
+            // on it: for its data (an OUT) or for the host to take the answer
+            // (an IN). It looks for a new request every 100 ms and gives up
+            // after 5000 (0x40016AC4 in the image: the constant 5000, the
+            // 100 ms wait, the early return of 0x51).
+            const std::uint64_t arrive = std::max(nowMs_, busyUntilMs_);
+            ready = std::max<std::uint64_t>(
+                nowMs_, std::min<std::uint64_t>(arrive + 100, busyUntilMs_ + 5000));
+            // An OUT that never got its data is reported NOT HANDLED and
+            // endpoint 0 is stalled; an IN nobody took is not.
+            refuse = abandonedOut_ &&
+                     (after == AfterAbandon::RefusesNext || after == AfterAbandon::RefusesAlways);
+        }
+        if (ready > nowMs_) {
+            const std::uint64_t wait = ready - nowMs_;
+            if (rec.timeoutMs < wait) {
+                abandoned_ = true;
+                abandonedOut_ = !rec.in;
+                if (after == AfterAbandon::Silent) { dead_ = true; }
+                return ranOut();
+            }
+            nowMs_ = ready;
+            rec.waitedMs = static_cast<unsigned>(wait);
+        }
+        busyUntilMs_ = nowMs_;
+        if (refuse) {
+            rec.refused = true;
+            abandoned_ = false;
+            if (after == AfterAbandon::RefusesAlways) { stalled_ = true; }
+            return Admit::Refused;
+        }
+        abandoned_ = false;
+        return Admit::Taken;
+    }
+
+    // What the firmware does with an OUT request it has taken. False for a
+    // request it has no case for (it stalls the endpoint, USBhandler.c:544-549).
+    // mutex_ held.
+    bool serveOutLocked(Rx888ControlRecord& rec) {
+        const std::size_t len = rec.data.size();
+        auto wantLen = [&](std::size_t n, const char* name) {
+            if (len != n) {
+                violations_.push_back(std::string(name) + " with " + std::to_string(len) +
+                                      " bytes of data instead of " + std::to_string(n));
+            }
+        };
+        unsigned workMs = 0;
+        switch (rec.request) {
+            case 0xAD:  // GPIOFX3
+                wantLen(4, "GPIOFX3");
+                if (len >= 4) {
+                    gpioWord_.store(static_cast<std::uint32_t>(rec.data[0]) |
+                                    (static_cast<std::uint32_t>(rec.data[1]) << 8) |
+                                    (static_cast<std::uint32_t>(rec.data[2]) << 16) |
+                                    (static_cast<std::uint32_t>(rec.data[3]) << 24));
+                }
+                break;
+            case 0xB2:  // STARTADC
+                wantLen(4, "STARTADC");
+                adcStarted_.store(true);
+                workMs = adcStartSleepMs.load();
+                break;
+            case 0xB4:  // TUNERINIT
+                wantLen(4, "TUNERINIT");
+                tunerInit_.store(true);
+                tunerStandby_ = false;
+                workMs = tunerInitWorkMs.load();
+                break;
+            case 0xB5:  // TUNERTUNE
+                wantLen(8, "TUNERTUNE");
+                if (!tunerInit_.load() || tunerStandby_) {
+                    violations_.push_back("TUNERTUNE before TUNERINIT");
+                }
+                workMs = tunerTuneWorkMs.load();
+                break;
+            case 0xB8:  // TUNERSTDBY
+                wantLen(1, "TUNERSTDBY");
+                if (!tunerInit_.load()) {
+                    standbyBeforeInit_.fetch_add(1);
+                    if (standbyBeforeInitHangs.load()) { dead_ = true; }
+                }
+                tunerStandby_ = true;
+                break;
+            case 0xB6:  // SETARGFX3: the argument number is wIndex
+                wantLen(1, "SETARGFX3");
+                if (rec.index >= 1 && rec.index <= 3) {
+                    if (!tunerInit_.load() || tunerStandby_) {
+                        violations_.push_back("a tuner argument (" + std::to_string(rec.index) +
+                                              ") before TUNERINIT");
+                    }
+                    workMs = tunerGainWorkMs.load();
+                } else if (rec.index != 10 && rec.index != 11) {
+                    // The mk2 has cases for DAT31_ATT and AD8340_VGA only
+                    // (USBhandler.c:395-436); anything else is left unhandled.
+                    violations_.push_back("SETARGFX3 argument " + std::to_string(rec.index) +
+                                          " that the mk2's firmware does not handle");
+                }
+                break;
+            case 0xAA:  // STARTFX3
+                wantLen(1, "STARTFX3");
+                if (!adcStarted_.load()) { violations_.push_back("STARTFX3 before STARTADC"); }
+                break;
+            case 0xAB:  // STOPFX3
+                wantLen(1, "STOPFX3");
+                workMs = stopSleepMs.load();
+                break;
+            default:
+                violations_.push_back("a vendor request the driver should never send: 0x" +
+                                      hex2(rec.request));
+                return false;
+        }
+        if (hangInsideRequest.load() != 0 && hangInsideRequest.load() == rec.request) {
+            // Taken, and never completed: the request's own timeout runs out
+            // and the thread is gone for good.
+            const unsigned left = rec.timeoutMs > rec.waitedMs ? rec.timeoutMs - rec.waitedMs : 0;
+            nowMs_ += left;
+            rec.waitedMs = rec.timeoutMs;
+            rec.timedOut = true;
+            dead_ = true;
+            return true;
+        }
+        if (answersAfterWork.load() && workMs > 0) {
+            // The rival model: the work comes first and the request waits for
+            // it. If its own timeout runs out the host gives up, and the
+            // firmware finishes the work regardless.
+            const unsigned left = rec.timeoutMs > rec.waitedMs ? rec.timeoutMs - rec.waitedMs : 0;
+            if (left < workMs) {
+                nowMs_ += left;
+                rec.waitedMs = rec.timeoutMs;
+                rec.timedOut = true;
+                workMs -= left;
+            } else {
+                nowMs_ += workMs;
+                rec.waitedMs += workMs;
+                workMs = 0;
+            }
+        }
+        afterAnswerLocked(rec.request, workMs);
+        return true;
+    }
+
+    // The handler's own work, done after the request was answered. mutex_ held.
+    void afterAnswerLocked(std::uint8_t request, unsigned workMs) {
+        busyUntilMs_ = nowMs_ + workMs;
+        const std::uint8_t die = dieAfterRequest.load();
+        if (die != 0 && die == request) { dead_ = true; }
+    }
+
     Identity identity_;
     mutable std::mutex mutex_;
+    // The firmware model's state, under mutex_ except the atomics.
+    std::uint64_t nowMs_ = 0;
+    std::uint64_t busyUntilMs_ = 0;
+    bool dead_ = false;
+    bool abandoned_ = false;
+    bool abandonedOut_ = false;
+    bool stalled_ = false;
+    bool tunerStandby_ = false;
+    std::atomic<bool> tunerInit_{false};
+    std::atomic<bool> adcStarted_{false};
+    std::atomic<std::uint32_t> gpioWord_{0};
+    std::atomic<int> standbyBeforeInit_{0};
+    std::vector<std::string> violations_;
     std::vector<Rx888ControlRecord> controls_;
     std::vector<BootWrite> bootWrites_;
     std::deque<std::vector<std::uint8_t>> bulk_;
@@ -480,6 +877,7 @@ private:
         void endBulkStream() override { d_->endBulkStream(); }
         bool streaming() const override { return d_->streaming(); }
         bool resetPipe(std::uint8_t ep) override { return d_->resetPipe(ep); }
+        std::string endpointLayout() override { return d_->endpointLayout(); }
         const std::string& path() const override { return d_->path(); }
         const std::string& lastError() const override { return d_->lastError(); }
 
