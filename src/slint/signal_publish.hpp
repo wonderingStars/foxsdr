@@ -58,6 +58,11 @@ public:
     const SignalModels& models() const { return last_; }
     std::size_t commandsSent() const { return sent_; }
 
+    // A REFUSED RADIO CHOICE SAYS WHY (0.99.113, core/radio_refusal.hpp): every SELECT_SOURCE this bank sends is reported to the host with its ticket and the label of the row the person clicked
+    // (empty for a choice that is not a row), so the host can match the engine's answer to THIS window's own click and raise its popup. The bank itself shows the engine's sentence on the
+    // Source error line, as it always read fact.status.sourceError.
+    void setChoiceNoted(std::function<void(std::uint64_t ticket, const std::string& radioLabel)> fn) { choiceNoted_ = std::move(fn); }
+
     // A BOUNDED RUN'S FILE SEAMS (docs 6.63; the classic's FOXSDR_FILE_PICK): FOXSDR_FILE_PICK=<path> is the file the I/Q row's file dialog "chooses" (set and empty = cancelled),
     // FOXSDR_FILE_CLIPBOARD=<path> the file Ctrl+V finds on the clipboard (set and empty = none). A native dialog cannot be pressed from a test, and the desk's clipboard is
     // never the test's. Read only when the run is bounded, so a release can never be steered by them; call once, after construction and before wire().
@@ -142,6 +147,8 @@ private:
     bool haveModels_ = false;
     FoxReceiverState state_{};
     std::size_t sent_ = 0;
+    std::function<void(std::uint64_t, const std::string&)> choiceNoted_;
+    std::string clickedRowLabel_;          // the label of the Source row being sent (set around that one send)
     std::int64_t lastReadMs_ = 0;
     bool forceRead_ = true;
     bool txPageOpen_ = false;

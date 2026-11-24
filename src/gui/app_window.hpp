@@ -180,6 +180,7 @@ struct GLFWwindow;
 #include "usb/usb_device.hpp"
 // The bias tee checkbox's state and rules (no ImGui in it).
 #include "core/bias_tee.hpp"
+#include "core/radio_refusal_popup.hpp"   // 0.99.113: a refused radio choice says why (the popup's state)
 
 namespace cascade::gui {
 
@@ -1235,6 +1236,15 @@ private:
     // The modal that offers to stop the plugins holding the audio down, and
     // the banner that stays when the user declines.
     void drawMutePopup();
+    // A REFUSED RADIO CHOICE SAYS WHY (0.99.113, core/radio_refusal.hpp; app_window_refusal_popup.cpp). The Source list's click goes through submitSourceChoice, which notes the ticket and
+    // the row's label; the answer comes back through actOnUiAnswers, and a refusal BECAUSE A PATCH PART NAMES THE RADIO opens this modal: "Open the Patch page" (setMainViewPatch) or "Close".
+    // It is not the hand-off, and it changes nothing. mayShowRefusalPopup() (gui/refusal_gate.hpp) is the one gate for whether it may show.
+    void submitSourceChoice(const std::string& id, const std::string& rowLabel);
+    void drawRefusalPopup();
+    cascade::core::refusal::RefusalPopup& refusalPopup();
+    std::unique_ptr<cascade::core::refusal::RefusalPopup> refusalPopup_;
+    cascade::core::refusal::Popup refusalPopupText_;
+    bool refusalPopupOpenRequest_ = false;
     // What the banner names, or "" when there is no banner to draw. The test
     // seam FOXSDR_FORCE_MUTE_BANNER=<name> draws it naming <name> whatever
     // the audio is doing, so the theme census can place and measure it.

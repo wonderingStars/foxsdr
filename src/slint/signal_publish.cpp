@@ -209,7 +209,11 @@ void SignalPublisher::setSelectedRadio(int radio) { opts_.selected_radio = radio
 void SignalPublisher::send(const Command& c) {
     forceRead_ = true;
     if (!c.valid) { return; }
-    if (kit_.submit(c.q) != 0u) { ++sent_; }
+    const std::uint64_t ticket = kit_.submit(c.q);
+    if (ticket != 0u) {
+        ++sent_;
+        if (c.q.c.op == FOXAPI_OP_SELECT_SOURCE && choiceNoted_) { choiceNoted_(ticket, clickedRowLabel_); }
+    }
 }
 
 void SignalPublisher::sendAll(const std::vector<Command>& cs) {
@@ -1128,7 +1132,11 @@ void SignalPublisher::wire() {
     // The Browse key is drawn only where there is a file dialog to open - the system's on Windows, zenity or kdialog on Linux, the bounded run's seam - never a key that does nothing.
     opts_.iq_browse_offered = filePickSeam_.has_value() || cascade::core::filePickAvailable();
     // ---- Source ----
-    ev.on_source_device_selected([this](int i) { send(opDeviceSelected(table_, last_.source, i)); });
+    ev.on_source_device_selected([this](int i) {
+        clickedRowLabel_ = (i >= 0 && static_cast<std::size_t>(i) < last_.source.devices.size()) ? last_.source.devices[static_cast<std::size_t>(i)].label : std::string();
+        send(opDeviceSelected(table_, last_.source, i));
+        clickedRowLabel_.clear();
+    });
     ev.on_source_refresh([this] { if (last_.source.refresh_enabled) { send(opRefresh()); } });
     ev.on_source_usrps([this](bool on) { send(opUsrps(on)); });
     ev.on_source_setup([this] { opts_.setup_shown = true; startProbe(); forceRead_ = true; });   // [local]: shows the page and starts the probe
