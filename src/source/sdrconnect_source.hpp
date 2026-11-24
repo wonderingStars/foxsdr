@@ -86,6 +86,10 @@ public:
     std::string activeDevice() const;
     std::vector<std::string> validDevices() const;
 
+    // How many property names the connection is holding (a test seam: the reader keeps only the names this
+    // client reads, so the number cannot be grown by the server).
+    std::size_t storedPropertyCountForTest() const;
+
 private:
     struct Conn;
 

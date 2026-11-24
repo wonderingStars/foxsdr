@@ -50,7 +50,8 @@ std::string hexOf(const std::uint8_t* d, std::size_t n) {
 
 // --- the stand-in server ---------------------------------------------------------------
 
-enum class Hs { Normal, Not101, WrongAccept, NotHttp, CloseNow, Silent, Extensions, EarlyPush, NoApiVersion };
+enum class Hs { Normal, Not101, WrongAccept, NotHttp, CloseNow, Silent, Extensions, EarlyPush, NoApiVersion,
+          FloodProps  /* R3-03: 2000 pushes of never-asked-for names, and a 300 KB value for active_antenna */ };
 enum class Sf { None, CloseFrame, Abrupt, HugeLength, MaskedFrame, ReservedOpcode, Stall, FragmentOverrun };
 
 // Server frames: unmasked, FIN set.
@@ -177,6 +178,12 @@ private:
             out.insert(out.end(), e.begin(), e.end());
         }
         if (!sendB(s, out)) { return; }
+        if (mode == Hs::FloodProps) {
+            for (int i = 0; i < 2000; ++i) {
+                json e = {{"event_type", "property_changed"}, {"property", "flood_" + std::to_string(i)}, {"device", "primary"}, {"value", std::string(100, 'x')}};
+                if (!sendB(s, textFrame(e.dump()))) { return; }
+            }
+        }
         for (;;) {
             std::uint8_t op = 0;
             Bytes p;
@@ -193,6 +200,7 @@ private:
                 if (mode == Hs::NoApiVersion && pr == "api_version") { continue; }
                 std::string v;
                 { std::lock_guard<std::mutex> l(m_); v = props_[pr]; }
+                if (mode == Hs::FloodProps && pr == "active_antenna") { v = std::string(300000, 'A'); }
                 json r = {{"event_type", "get_property_response"}, {"property", pr}, {"device", "primary"}, {"value", v}};
                 sendB(s, textFrame(r.dump()));
             } else if (ev == "set_property") {
@@ -716,6 +724,23 @@ void testFuzz() {
 
 #define STEP(call) do { std::fputs(#call, stderr); std::fputc(10, stderr); std::fflush(stderr); call; } while (0)
 
+// R3-03: a server that pushes property names the client never asked for must not grow the client's
+// memory, and one value must not be stored without a bound. 2000 pushes of "flood_<n>" names arrive
+// during the open; the real answers still have to work, and only the names the client reads are kept.
+void testPropertyFloodIsBounded() {
+    FakeSdrConnect fake;
+    CHECK(fake.start());
+    fake.hs.store(Hs::FloodProps);
+    SdrConnectSource src;
+    CHECK(src.open(fake.args("serial=1234")));
+    CHECK(src.apiVersion() == "1.0.3");
+    CHECK(src.activeDevice() == "RSP1A 1234");
+    CHECK_NEAR(src.sampleRateHz(), 2000000.0, 0.001);
+    CHECK(src.storedPropertyCountForTest() <= 16);  // the client reads ten names; 2000 pushed names are not kept
+    CHECK(src.antenna().size() <= 65536);           // a 300 KB value is not kept whole
+    src.closeDevice();
+}
+
 int main() {
     STEP(testWebSocketLayer());
     STEP(testMessages());
@@ -725,6 +750,7 @@ int main() {
     STEP(testStreamFaults());
     STEP(testStartStopAndShutdown());
     STEP(testCloseWithSilentServer());
+    STEP(testPropertyFloodIsBounded());
     STEP(testFuzz());
     return testSummary("test_sdrconnect_source");
 }
