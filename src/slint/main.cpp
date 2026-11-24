@@ -125,6 +125,7 @@
 #include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
+#include "handover_sheet.hpp"   // 0.99.113: who owns the one Handover sheet
 #include "handover_host.hpp"   // engine fixes 7: Legacy as a choice in the Layouts menu
 #include "radio_move_host.hpp"   // field fix A2: a radio held by another FoxSDR window - move it here, or leave it
 #include "radio_refusal_gate.hpp"   // 0.99.113: a refused radio choice says why - the popup's one gate (mayShowRefusalPopup)
@@ -1382,39 +1383,47 @@ int main(int argc, char** argv) {
         publishLayouts();
     };
     // ENGINE FIXES 7: LEGACY IS A CHOICE (src/slint/handover_host.hpp): the Layouts menu's "Legacy" entry (id 1993), the question while something runs, and the sentence a failed switch leaves.
+    foxsdr::slinthost::HandoverSheet handoverSheet;   // 0.99.113: who owns the one Handover sheet now (slint/handover_sheet.hpp); its keys go to that owner only
     foxsdr::slinthost::HandoverHost handoverHost(
         {[&] { cascade::core::handover::Busy b; b.recording = lists.recording; b.patch = (state.flags & FOXAPI_RX_PATCH_RUNNING) != 0; return b; },
          [] { slint::quit_event_loop(); },
          [&](const foxsdr::slinthost::HandoverHost::Sheet& s) {
              auto& g = ui->global<Handover>();
+             handoverSheet.took(foxsdr::slinthost::HandoverSheet::Who::Legacy);
              g.set_title(ss(s.title)); g.set_text(ss(s.text)); g.set_go_label(ss(s.goLabel)); g.set_stay_label(ss(s.stayLabel)); g.set_open(true);
          },
-         [&] { ui->global<Handover>().set_open(false); },
+         [&] { if (handoverSheet.released(foxsdr::slinthost::HandoverSheet::Who::Legacy)) { ui->global<Handover>().set_open(false); } },
          [](const char* s) { return std::string(cascade::i18n::tr(s)); }},
         handoverExit, configPath, boot.safePlugins);
     // FIELD FIX A2 (src/slint/radio_move_host.hpp): the same sheet asks whether to move a radio here from another FoxSDR window, and says when this window's radio was moved away.
     foxsdr::slinthost::RadioMoveHost radioMoveHost(
         {[&](const cascade::core::handoff::Sheet& s) {
              auto& g = ui->global<Handover>();
+             handoverSheet.took(foxsdr::slinthost::HandoverSheet::Who::Move);
              g.set_title(ss(s.title)); g.set_text(ss(s.text)); g.set_go_label(ss(s.goLabel)); g.set_stay_label(ss(s.stayLabel)); g.set_open(true);
          },
-         [&] { ui->global<Handover>().set_open(false); },
+         [&] { if (handoverSheet.released(foxsdr::slinthost::HandoverSheet::Who::Move)) { ui->global<Handover>().set_open(false); } },
          [&](bool move) { FoxCommand c = op(FOXAPP_OP_RADIO_HANDOFF); c.ival[0] = move ? 1 : 0; submit(c); }});
     // 0.99.113: A REFUSED RADIO CHOICE SAYS WHY (core/radio_refusal.hpp). When the radio the person clicked is refused because a Radio part of the patch names it, the same sheet (the Handover
     // global: title, text, two keys) says so - "Open the Patch page" shows the patch view, "Close" puts the sheet away. It is NOT the hand-off question: it never goes through radioMoveHost, never
     // submits FOXAPP_OP_RADIO_HANDOFF, and changes neither the patch nor who holds the radio. Only the answer to THIS window's own click opens it (the ticket the Source list or the add card noted).
     cascade::core::refusal::RefusalPopup refusalPopup(
-        {[&] { return foxsdr::slinthost::mayShowRefusalPopup() && !radioMoveHost.open(); },
+        {[&] { return foxsdr::slinthost::mayShowRefusalPopup(handoverSheet.mayRaiseRefusal() && !radioMoveHost.open()); },
          [&](const cascade::core::refusal::Popup& p) {
              auto& g = ui->global<Handover>();
+             handoverSheet.took(foxsdr::slinthost::HandoverSheet::Who::Refusal);
              g.set_title(ss(p.title)); g.set_text(ss(p.text)); g.set_go_label(ss(p.goLabel)); g.set_stay_label(ss(p.stayLabel)); g.set_open(true);
          },
-         [&] { ui->global<Handover>().set_open(false); },
+         [&] { if (handoverSheet.released(foxsdr::slinthost::HandoverSheet::Who::Refusal)) { ui->global<Handover>().set_open(false); } },
          [&] { ui->set_view_index(1); patchBank.setViewShown(true); },   // the PATCH tab's own route (view_selected)
          [&](int part) { return patchBank.partCaption(part); }});        // the caption the Patch page shows on that part
     signalBank.setChoiceNoted([&](std::uint64_t ticket, const std::string& label) { refusalPopup.noteSubmitted(ticket, label); });
-    ui->global<Handover>().on_go([&] { if (radioMoveHost.open()) { radioMoveHost.confirm(); } else if (refusalPopup.open()) { refusalPopup.goToPatchPage(); } else { handoverHost.confirm(); } });
-    ui->global<Handover>().on_stay([&] { if (radioMoveHost.open()) { radioMoveHost.cancel(); } else if (refusalPopup.open()) { refusalPopup.dismiss(); } else { handoverHost.cancel(); } });
+    handoverSheet.setUsers({[&] { radioMoveHost.confirm(); }, [&] { radioMoveHost.cancel(); },
+                            [&] { handoverHost.confirm(); }, [&] { handoverHost.cancel(); },
+                            [&] { refusalPopup.goToPatchPage(); }, [&] { refusalPopup.dismiss(); },
+                            [&] { refusalPopup.superseded(); }});   // a hand-off or Legacy question took the sheet: the popup is dropped, none of its callbacks fires later
+    ui->global<Handover>().on_go([&] { handoverSheet.go(); });
+    ui->global<Handover>().on_stay([&] { handoverSheet.stay(); });
     int handoverAt = 0;   // FOXSDR_HANDOVER_AT=<tick>: a drive script chooses Legacy at that tick (window_handover.hpp, test seams)
     if (const char* e = std::getenv(cascade::core::handover::kAtEnv); e != nullptr) { handoverAt = std::atoi(e); }
     handoverHost.showNote(cascade::core::handover::noteSentence(boot.handover, cascade::core::handover::Window::New));   // started by a hand-over that could not open the other window

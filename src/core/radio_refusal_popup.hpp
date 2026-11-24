@@ -92,6 +92,8 @@ public:
     void dismiss() {
         if (open_) { close(); }
     }
+    // Another user of the window's one sheet (a hand-off or Legacy question) has taken it over: this popup is no longer open, and neither key of it fires later. Nothing is hidden: the sheet is theirs now.
+    void superseded() { open_ = false; }
     bool open() const { return open_; }
     int part() const { return part_; }
     int shown() const { return shown_; }   // how many popups this window has raised (a test counts them)
