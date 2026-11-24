@@ -8939,7 +8939,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                         // window can offer more without reading a sentence. NOTHING here counts a failed open, files a report or raises the hand-off question: the radio never failed to open.
                         const RefusalHolder who = refusalHolderOf(holder);
                         const std::string args = text.substr(colon + 1);
-                        rx().sourceError_ = cascade::core::refusal::sourceSentence(who.kind, who.number);
+                        const cascade::core::patch::Node* holdingPart = holder.kind == DeviceHolder::Kind::PatchNode ? patchGraph_.find(static_cast<cascade::core::patch::NodeId>(holder.id)) : nullptr;   // named by its caption: what the Patch page shows
+                        rx().sourceError_ = cascade::core::refusal::sourceSentence(who.kind, who.number, holdingPart != nullptr ? holdingPart->name : std::string());
                         std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args) : modelFromNativeLabel(nativeLabelFor(kind, args));
                         if (label.empty() || label == args) { label = kind; }
                         const std::string last4 = cascade::core::handoff::lastFour(cascade::core::handoff::serialOfKey(cascade::core::handoff::radioKey(kind, args)));

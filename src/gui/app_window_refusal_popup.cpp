@@ -32,6 +32,17 @@ cascade::core::refusal::RefusalPopup& AppWindow::refusalPopup() {
         };
         h.hide = [] {};   // the modal closes itself on the frame it finds the state closed (drawRefusalPopup)
         h.openPatchPage = [this] { setMainViewPatch(true); };   // the same switch as the rail's view keys and the Patch row
+        // The caption the Patch page draws on that part, by the id the refusal carried. The engine's PUBLISHED graph (patchLook, the one the page adopts its draft from) answers whether or not the
+        // Patch page has been open: the page's own draft is only brought up to date on a frame that draws it. The draft answers when the look cannot.
+        h.partCaption = [this](int part) {
+            const auto id = static_cast<cascade::core::patch::NodeId>(part);
+            const PatchLook& l = patchLook();
+            if (l.valid) {
+                if (const cascade::core::patch::Node* n = l.graph.find(id)) { return n->name; }
+            }
+            const cascade::core::patch::Node* n = patchDraft_.find(id);
+            return n != nullptr ? n->name : std::string();
+        };
         refusalPopup_ = std::make_unique<cascade::core::refusal::RefusalPopup>(std::move(h));
     }
     return *refusalPopup_;

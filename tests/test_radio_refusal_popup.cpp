@@ -41,16 +41,21 @@ struct Hooked {
     int shows = 0, hides = 0, patchPages = 0;
     bool gate = true;
     rf::Popup last;
-    rf::RefusalPopup popup{rf::RefusalPopup::Hooks{[this] { return gate; }, [this](const rf::Popup& p) { ++shows; last = p; }, [this] { ++hides; }, [this] { ++patchPages; }}};
+    rf::RefusalPopup popup{rf::RefusalPopup::Hooks{[this] { return gate; }, [this](const rf::Popup& p) { ++shows; last = p; }, [this] { ++hides; }, [this] { ++patchPages; }, [](int part) { return part == 1 ? std::string("Aerial B200") : std::string(); }}};
 };
 
 void testThePopupWords() {
-    const rf::Popup p = rf::popupFor("B200 (serial ending 4ZDB)", 1);
+    const rf::Popup p = rf::popupFor("B200 (serial ending 4ZDB)", "Aerial B200");
     CHECK_EQ(p.title, std::string("Radio in use"));
-    CHECK_EQ(p.text, std::string("B200 (serial ending 4ZDB) is set as the radio of Radio part 1 on the Patch page. Change or remove that part there, or start the patch to use the radio there."));
+    CHECK_EQ(p.text, std::string("B200 (serial ending 4ZDB) is set as the radio of the part \"Aerial B200\" on the Patch page. Change or remove that part, or start the patch to use the radio there."));
     CHECK_EQ(p.goLabel, std::string("Open the Patch page"));
     CHECK_EQ(p.stayLabel, std::string("Close"));
-    CHECK(rf::popupFor("", 2).text.rfind("This radio is set as the radio of Radio part 2", 0) == 0);
+    // no screen label: the Source line's own whole sentence (never a fragment glued on), no number anywhere
+    CHECK_EQ(rf::popupFor("", "Aerial B200").text, std::string("This radio is set as the radio of the part \"Aerial B200\" on the Patch page. Change or remove that part, or start the patch to use the radio there."));
+    // a part with its caption cleared still shows its kind; two parts with the same caption are named alike (the page shows nothing else to tell them apart)
+    CHECK(rf::popupFor("", "  ").text.find("the part \"Radio\" on the Patch page") != std::string::npos);
+    CHECK_EQ(rf::popupFor("x", "Radio").text, rf::popupFor("x", "Radio").text);
+    CHECK(rf::popupFor("", "Radio 4").text.find("Radio part") == std::string::npos);
 }
 
 void testTheData() {
@@ -77,7 +82,7 @@ void testThePopup() {
         h.popup.noteSubmitted(7, "B200 EDR04ZDB2");
         CHECK(h.popup.onAnswer(answer(FOXAPI_OP_SELECT_SOURCE, FOXAPI_BUSY, 7, rf::kHolderPatchPart, 1)));
         CHECK(h.popup.open() && h.popup.part() == 1 && h.shows == 1);
-        CHECK(h.last.text.find("B200 EDR04ZDB2") == 0 && h.last.text.find("Radio part 1") != std::string::npos);
+        CHECK(h.last.text.find("B200 EDR04ZDB2") == 0 && h.last.text.find("the part \"Aerial B200\"") != std::string::npos);
         // the same answer is not shown again (its ticket was spent)
         CHECK(!h.popup.onAnswer(answer(FOXAPI_OP_SELECT_SOURCE, FOXAPI_BUSY, 7, rf::kHolderPatchPart, 1)));
         CHECK_EQ(h.shows, 1);

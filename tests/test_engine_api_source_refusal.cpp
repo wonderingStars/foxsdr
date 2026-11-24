@@ -57,8 +57,8 @@ struct AppWindowTestAccess {
         Engine::testHooks_.soapyScan = nullptr;
     }
     // A Radio node on the patch graph, switched off and the patch stopped (the owner's saved, stopped patch), naming `device`.
-    static std::uint32_t addRadio(Engine& e, const std::string& device) {
-        const pc::NodeId id = e.patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+    static std::uint32_t addRadio(Engine& e, const std::string& device, const std::string& caption = "Radio") {
+        const pc::NodeId id = e.patchGraph_.addNode(pc::NodeKind::Radio, caption);
         pc::Node* n = e.patchGraph_.mutableNode(id);
         n->device = device;
         n->on = false;
@@ -193,9 +193,9 @@ int logCount(const std::string& needle) {
 
 const std::string kKey = pc::makeDeviceKey(engine_api_test::kFakeRadioDriver, engine_api_test::kFakeRadioArgs);
 
-std::string partSentence(std::uint32_t node) {
-    return "This radio is set as the radio of Radio part " + std::to_string(node) +
-           " on the patch page. Change or remove that part, or start the patch to use the radio there.";
+std::string partSentence(const std::string& caption) {
+    return "This radio is set as the radio of the part \"" + caption +
+           "\" on the Patch page. Change or remove that part, or start the patch to use the radio there.";
 }
 
 // A, C, D: the owner's case.
@@ -204,7 +204,7 @@ void testAPatchPartHoldsTheRadio() {
     testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
     CHECK(s.ok());
     CHECK(scanFakeRadio(d, s));
-    const std::uint32_t part = Access::addRadio(d.eng, kKey);
+    const std::uint32_t part = Access::addRadio(d.eng, kKey, "Aerial B200");
     passes(d.eng, 3);
     const std::uint64_t failsBefore = Access::openFailures(d.eng);
     const auto queuedBefore = cascade::core::radioreport::global().stats().failuresQueued;
@@ -221,7 +221,7 @@ void testAPatchPartHoldsTheRadio() {
     CHECK_EQ(static_cast<int>(o.result.applied[1]), static_cast<int>(part));
     // the sentence on the Source error line, and still there after the passes that follow (nothing overwrites it)
     passes(d.eng, 5);
-    CHECK_EQ(fact(s, "status.sourceError"), partSentence(part));
+    CHECK_EQ(fact(s, "status.sourceError"), partSentence("Aerial B200"));
     // still refused: the radio is not opened
     CHECK((s.state().flags & FOXAPI_RX_DEVICE_OPEN) == 0u);
     // one log line, naming the holder and only the last four of the serial
@@ -273,7 +273,7 @@ void testRadioAddForAPartsDevice() {
     testing::Session s(api(), d.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
     CHECK(s.ok());
     CHECK(scanFakeRadio(d, s));
-    const std::uint32_t part = Access::addRadio(d.eng, kKey);
+    const std::uint32_t part = Access::addRadio(d.eng, kKey, "Aerial B200");
     passes(d.eng, 3);
     const testing::Outcome o = pumped(d.eng, s, testing::cmd(FOXAPI_OP_RADIO_ADD, 0, 2, engine_api_test::kFakeRadioId));
     CHECK(o.landed);

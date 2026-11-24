@@ -75,7 +75,7 @@ struct AppWindowTestAccess {
     static std::uint32_t addPart(AppWindow& a, const std::string& device) {
         std::uint32_t id = 0;
         passseam::on(eng(a), [&] {
-            id = eng(a).patchGraph_.addNode(pc::NodeKind::Radio, "Radio");
+            id = eng(a).patchGraph_.addNode(pc::NodeKind::Radio, "Aerial B200");
             pc::Node* n = eng(a).patchGraph_.mutableNode(id);
             n->device = device;
             n->on = false;
@@ -150,9 +150,9 @@ void looks(AppWindow& a, int n) {
     for (int i = 0; i < n; ++i) { Access::look(a); }
 }
 
-std::string partSentence(std::uint32_t node) {
-    return "This radio is set as the radio of Radio part " + std::to_string(node) +
-           " on the patch page. Change or remove that part, or start the patch to use the radio there.";
+std::string partSentence(const std::string& caption) {
+    return "This radio is set as the radio of the part \"" + caption +
+           "\" on the Patch page. Change or remove that part, or start the patch to use the radio there.";
 }
 
 void testTheClassicWindow(AppWindow& a) {
@@ -180,13 +180,13 @@ void testTheClassicWindow(AppWindow& a) {
     // A, B: the person's own click, refused because the part names the radio.
     Access::choose(a, engine_api_test::kFakeRadioId, "RTL-SDR (serial ending 0001)");
     looks(a, 4);
-    CHECK_EQ(Access::fact(a, "fact.status.sourceError"), partSentence(part));
+    CHECK_EQ(Access::fact(a, "fact.status.sourceError"), partSentence("Aerial B200"));
     CHECK(Access::popup(a).open() && Access::popup(a).shown() == 1 && Access::popup(a).part() == static_cast<int>(part));
     CHECK(Access::openRequested(a));
     const rf::Popup& p = Access::text(a);
     CHECK_EQ(p.title, std::string("Radio in use"));
     CHECK(p.text.find("RTL-SDR (serial ending 0001)") == 0);
-    CHECK(p.text.find("Radio part " + std::to_string(part) + " on the Patch page") != std::string::npos);
+    CHECK_EQ(p.text, std::string("RTL-SDR (serial ending 0001) is set as the radio of the part \"Aerial B200\" on the Patch page. Change or remove that part, or start the patch to use the radio there."));
     CHECK_EQ(p.goLabel, std::string("Open the Patch page"));
     CHECK_EQ(p.stayLabel, std::string("Close"));
     // the modal draws: in the frame it is opened in ImGui, not only held in the state
@@ -219,7 +219,7 @@ void testTheClassicWindow(AppWindow& a) {
     CHECK_EQ(Access::partCount(a), partsBefore);
     Access::choose(a, engine_api_test::kFakeRadioId, "x");
     looks(a, 4);
-    CHECK_EQ(Access::fact(a, "fact.status.sourceError"), partSentence(part));
+    CHECK_EQ(Access::fact(a, "fact.status.sourceError"), partSentence("Aerial B200"));
     CHECK_EQ(Access::failures(a), failsBefore);
 }
 

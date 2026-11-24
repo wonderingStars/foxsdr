@@ -1410,7 +1410,8 @@ int main(int argc, char** argv) {
              g.set_title(ss(p.title)); g.set_text(ss(p.text)); g.set_go_label(ss(p.goLabel)); g.set_stay_label(ss(p.stayLabel)); g.set_open(true);
          },
          [&] { ui->global<Handover>().set_open(false); },
-         [&] { ui->set_view_index(1); patchBank.setViewShown(true); }});   // the PATCH tab's own route (view_selected)
+         [&] { ui->set_view_index(1); patchBank.setViewShown(true); },   // the PATCH tab's own route (view_selected)
+         [&](int part) { return patchBank.partCaption(part); }});        // the caption the Patch page shows on that part
     signalBank.setChoiceNoted([&](std::uint64_t ticket, const std::string& label) { refusalPopup.noteSubmitted(ticket, label); });
     ui->global<Handover>().on_go([&] { if (radioMoveHost.open()) { radioMoveHost.confirm(); } else if (refusalPopup.open()) { refusalPopup.goToPatchPage(); } else { handoverHost.confirm(); } });
     ui->global<Handover>().on_stay([&] { if (radioMoveHost.open()) { radioMoveHost.cancel(); } else if (refusalPopup.open()) { refusalPopup.dismiss(); } else { handoverHost.cancel(); } });

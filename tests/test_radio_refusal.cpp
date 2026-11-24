@@ -18,7 +18,8 @@ namespace rf = cascade::core::refusal;
 namespace {
 
 void testTheSentences() {
-    CHECK_EQ(rf::sourceSentence(rf::kHolderPatchPart, 3), std::string("This radio is set as the radio of Radio part 3 on the patch page. Change or remove that part, or start the patch to use the radio there."));
+    CHECK_EQ(rf::sourceSentence(rf::kHolderPatchPart, 3, "Aerial B200"), std::string("This radio is set as the radio of the part \"Aerial B200\" on the Patch page. Change or remove that part, or start the patch to use the radio there."));
+    CHECK_EQ(rf::sourceSentence(rf::kHolderPatchPart, 3, ""), std::string("This radio is set as the radio of the part \"Radio\" on the Patch page. Change or remove that part, or start the patch to use the radio there."));   // cleared caption: the kind the part still shows
     CHECK_EQ(rf::sourceSentence(rf::kHolderReceiver, 2), std::string("This radio is in use by Radio 2. Choose another radio there first."));
     CHECK_EQ(rf::sourceSentence(rf::kHolderTransmitter, 0), std::string("This radio is in use by the transmitter."));
     CHECK_EQ(rf::sourceSentence(rf::kHolderNone, 0), std::string());

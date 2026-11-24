@@ -30,15 +30,20 @@ inline bool isPatchPartRefusal(const FoxCommandResult& r, int& part) {
     return true;
 }
 
-// The popup's words. The window supplies the radio's screen label (the row it clicked); an empty one reads "This radio".
+// The popup's words. The window supplies the radio's screen label (the row it clicked) and the Radio part's caption as the Patch page shows it (see partCaptionFor). TWO WHOLE-SENTENCE KEYS, never a
+// fragment glued in front of a sentence: with a label, "<label> is set as ..."; without one, the Source line's own sentence (a language may order the words as it must in each).
 struct Popup {
     std::string title, text, goLabel, stayLabel;
 };
-inline Popup popupFor(const std::string& radioLabel, int part) {
+inline Popup popupFor(const std::string& radioLabel, const std::string& partCaption) {
     Popup p;
     p.title = i18n::tr("Radio in use");
-    const std::string who = radioLabel.empty() ? std::string(i18n::tr("This radio")) : radioLabel;
-    p.text = formatText(i18n::tr("%s is set as the radio of Radio part %d on the Patch page. Change or remove that part there, or start the patch to use the radio there."), who.c_str(), part);
+    if (radioLabel.empty()) {
+        p.text = sourceSentence(kHolderPatchPart, 0, partCaption);
+    } else {
+        p.text = formatText(i18n::tr("%s is set as the radio of the part \"%s\" on the Patch page. Change or remove that part, or start the patch to use the radio there."), radioLabel.c_str(),
+                            partCaptionFor(partCaption).c_str());
+    }
     p.goLabel = i18n::tr("Open the Patch page");
     p.stayLabel = i18n::tr("Close");
     return p;
@@ -54,6 +59,7 @@ public:
         std::function<void(const Popup&)> show;          // draw it
         std::function<void()> hide;                      // put it away
         std::function<void()> openPatchPage;             // the window's own route to the Patch page
+        std::function<std::string(int part)> partCaption;   // the caption the Patch page shows on that part (looked up by the part's node id in the window's own draft); empty when it cannot say
     };
     explicit RefusalPopup(Hooks hooks) : hooks_(std::move(hooks)) {}
 
@@ -74,7 +80,7 @@ public:
         open_ = true;
         part_ = part;
         ++shown_;
-        if (hooks_.show) { hooks_.show(popupFor(label, part)); }
+        if (hooks_.show) { hooks_.show(popupFor(label, hooks_.partCaption ? hooks_.partCaption(part) : std::string())); }
         return true;
     }
     // The popup's two keys. "Open the Patch page" shows the page and closes the popup; "Close" only closes it. Neither changes the patch, the part or who holds the radio.
