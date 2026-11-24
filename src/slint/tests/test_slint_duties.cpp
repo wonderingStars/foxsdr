@@ -1496,6 +1496,48 @@ int main() {
         CHECK(countOf(w.calls, "applyDiagnosticsSwitches:0:1") == 1);
     }
     {
+        // DIAGNOSTICS SWITCHED OFF IN THE RUNNING PROGRAM STOPS THE SWEEP AT ONCE (owner's rule of 2026-11-24, report 61 gap: the sweep was armed once at launch and
+        // never disarmed): the transfer is stopped and its memory kept, no new sweep starts while the switch is off, and switching on again starts one without a restart.
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        tellFacts(w);
+        d.start(interactive());
+        d.poll({});
+        CHECK(countOf(w.calls, "sweepStart") == 1);
+        CHECK(d.sweepRunning());
+        w.sweepOutcome.considered = 2;
+        core::AppConfig half = d.interfaceHalf();
+        half.diagnosticsEnabled = false;
+        (void)d.saveInterfaceHalf(half);
+        d.diagnosticsChanged();
+        CHECK(countOf(w.calls, "sweepStop") == 1);                 // the running sweep is stopped at the switch
+        CHECK(!d.sweepRunning());
+        for (int i = 0; i < 5; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "sweepStart") == 1);                // and none is started while the switch is off
+        half.diagnosticsEnabled = true;
+        (void)d.saveInterfaceHalf(half);
+        d.diagnosticsChanged();
+        d.poll({});
+        CHECK(countOf(w.calls, "sweepStart") == 2);                // on again: a sweep, with no restart
+        CHECK(d.sweepRunning());
+        d.finish();
+        CHECK(countOf(w.calls, "sweepStop") == 2);                 // the quit stops the second one as before
+        // a switch moved OFF before the first sweep started: it never starts
+        FakeWorld n;
+        HostDuties e(n, [] {});
+        n.facts["fact.config.interface"] = interfaceDoc(true, true);
+        e.start(interactive());                                     // the engine has not published yet: the sweep is armed and waiting
+        core::AppConfig h2 = e.interfaceHalf();
+        h2.diagnosticsEnabled = false;
+        (void)e.saveInterfaceHalf(h2);
+        e.diagnosticsChanged();
+        tellFacts(n);
+        for (int i = 0; i < 5; ++i) { e.poll({}); }
+        CHECK(countOf(n.calls, "sweepStart") == 0);
+        CHECK(countOf(n.calls, "sweepStop") == 0);                  // nothing was started, nothing to stop
+    }
+    {
         // the Updates tick and the channel: off discards the answer, on asks again, another channel asks again, a check in flight is left alone
         FakeWorld w;
         HostDuties d(w, [] {});

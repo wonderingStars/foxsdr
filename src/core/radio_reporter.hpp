@@ -108,7 +108,7 @@ struct Event {
 
 // Who is sending, and what is true of this install right now.
 struct Identity {
-    std::string installId;        // empty: Usage reporting is off (only radio failures are sent, anonymously)
+    std::string installId;        // empty: Usage reporting is off (from 0.99.115 NOTHING is sent: no failure report either; 0.99.109 to 0.99.114 still sent it, anonymously)
     std::string version, os, arch, channel, updateChannel;
     std::string window;           // "new", "legacy" or ""
     bool diagOn = false;          // the Diagnostics switch
@@ -164,8 +164,8 @@ public:
     void configure(const Options& options);
     bool active() const;
 
-    // Who is sending. Turning Usage reporting OFF (installId empty) deletes every queued message that carries an install id and re-issues queued
-    // identified failures anonymously; nothing of the old identity stays on disk.
+    // Who is sending. Turning Usage reporting OFF (installId empty) deletes EVERY queued message - the journal, the first-session record and the queued
+    // failure reports (owner's decision of 2026-11-24: off sends nothing; nothing of the old identity stays on disk).
     void setIdentity(const Identity& id);
     Identity identity() const;
     // The Diagnostics switch as it is now: it changes nothing that is sent, it is a field of every failure report (`diagOn`).
@@ -176,9 +176,12 @@ public:
     // The clock used for what is kept before configure() (default: the system clock). For the tests.
     void setNowSource(std::function<std::int64_t()> now);
 
-    // ONE report for one radio that did not open, EVERY time (never folded, never skipped for a cap). Sent with the Diagnostics switch on or off
-    // and with Usage reporting on or off (without an install id the message is the anonymous form of contract 1.2).
-    void fileFailure(const FailureInput& in, const std::vector<std::string>& logRing);
+    // ONE report for one radio that did not open, EVERY time (never folded, never skipped for a cap). Sent with the Diagnostics switch on or off, and ONLY with
+    // Usage reporting on (owner's decision of 2026-11-24, which reversed decision 12 of the 2026-11-15 contract): with it off nothing is built, counted,
+    // buffered, queued, written or sent. Returns false when it was not accepted for that reason (true: filed, or kept in memory because the queue is not open yet).
+    bool fileFailure(const FailureInput& in, const std::vector<std::string>& logRing);
+    // False when a failure filed now would be dropped because Usage reporting is off: lets a caller skip the work of building one. True before the queue is opened.
+    bool acceptsFailures() const;
 
     // Events of this radio that a caller folded into an earlier one (a refusal repeated within seconds): counted into the radio's `dropped`, which the next event
     // of this radio that is sent carries, so the number is said and never lost.

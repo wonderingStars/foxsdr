@@ -221,7 +221,7 @@ void passes(AppWindow& a, int n) {
 bool has(const std::string& hay, const std::string& needle) { return hay.find(needle) != std::string::npos; }
 
 // must-fix lane A: the line under the Usage tick while it is off. BEFORE "Off. Nothing is transmitted." (untrue: a radio that does not open is still reported); AFTER the approved wording (owner, 2026-11-16).
-const std::string kOffLine = "With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off.";
+const std::string kOffLine = "With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open.";   // reversed by the owner on 2026-11-24 (off sends nothing, the radio failure report included)
 
 struct Tap {
     AppWindow& a;

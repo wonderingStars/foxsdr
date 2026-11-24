@@ -12,8 +12,8 @@ field of the file.
 Owner rules this implements (HANDOVER-FABLE-2026-11-16.md, OWNER-ANSWERS-2026-11-16.md): D4 ("I want to know every fail of every
 radio, not an accumulation", sent whether or not the Diagnostics switch is on), D5 (the site shows RADIOS: one row per physical radio,
 the serial stored and the key of the row, everything that happened to it, the FoxSDR versions it ran under; always on, kept forever;
-C2 nothing lost to a crash; C8 a daily bound must never drop silently), decision 12 (the Usage reporting switch turns the journal off,
-radio failure reports are still sent always), decision 13 (journals kept forever go to the NAS first), L7 (one-time users are seen
+C2 nothing lost to a crash; C8 a daily bound must never drop silently), decision 12 (the Usage reporting switch turns the journal off;
+radio failure reports were "still sent always" in 0.99.109 to 0.99.114 - REVERSED by the owner on 2026-11-24, see "Decision 12, reversed" below), decision 13 (journals kept forever go to the NAS first), L7 (one-time users are seen
 during their first session).
 
 ## 1. The messages and the shared envelope
@@ -69,7 +69,13 @@ stores nothing). The marker is never stored, so it never appears in the canonica
 
 ### 1.2 A radio failure from an install with Usage reporting OFF
 
-Decision 12: the Usage reporting switch turns the journal off, but radio failure reports are still sent, always. Such an install has
+**Decision 12, reversed (owner, 2026-11-24: "off sends nothing"). From 0.99.115 an install with Usage reporting OFF sends NO radio failure
+report, in any form: none is built, counted, queued, written or sent, and switching Usage reporting off deletes every failure report
+already queued, as it deletes the journal. This section and sections 2, 2.3, 8 and 10 describe the ANONYMOUS FORM that versions 0.99.109 to
+0.99.114 sent. The server (Worker and site) keeps accepting that form, because those versions are still installed and send it, and its
+fixtures stay; no version from 0.99.115 on produces it. Usage reporting ON behaves as before: the failure report carries the install id.**
+
+Decision 12 as it stood in 0.99.109 to 0.99.114: the Usage reporting switch turns the journal off, but radio failure reports are still sent, always. Such an install has
 no install id (the id exists only while Usage reporting is on and is deleted when it is turned off). So a `radio_fail` is valid
 WITHOUT `installId`, and then, and only then:
 
@@ -91,7 +97,7 @@ WITHOUT `installId`, and then, and only then:
 
 ONE message per failed open, every time: the start-up restore, a radio the user picked, the saved-radio retry, a patch page radio,
 the automatic reopen after a driver fault, the sound-card input. Sent whether or not the Diagnostics switch is on (owner answer
-2026-11-15, "Send them always") AND whether or not Usage reporting is on (decision 12, section 1.2). Repeats are NOT folded by the
+2026-11-15, "Send them always") AND, in 0.99.109 to 0.99.114, whether or not Usage reporting was on (decision 12, section 1.2); from 0.99.115 ONLY with Usage reporting on. Repeats are NOT folded by the
 sender. ONE EXCEPTION, in the app and not in the sender (field fix A3, 2026-11-19; no field and no value changes): a busy-again try in the MIDDLE of the
 saved radio's retry series (2, 4, 8 and 16 s after the start-up restore) is not sent. The restore's own failure is sent (`attempt` 1), the series' last
 failure is sent (`attempt` 5, the fourth retry, "giving up"), a retry that fails for another reason is sent at once, and `attempt` still counts the tries
@@ -145,8 +151,9 @@ Back-off: 1 minute, 5 minutes, 1 hour, then every 6 hours; a queued message is d
 
 1. Queue first, send second (section 3.9 for the queue's shape). The message is written to disk before any network call, so a crash or a
    quit does not lose it; whatever is left is sent at the next start (C2).
-2. Not gated by Diagnostics and NOT gated by Usage reporting (decision 12). Gated only by an endpoint being configured. With an install id
-   the message carries it; without one it is the anonymous form of 1.2.
+2. Not gated by Diagnostics. Gated by an endpoint being configured and, from 0.99.115, by Usage reporting being ON (an install id exists;
+   decision 12 reversed, 1.2): with it off nothing is built, queued or sent, and a message queued before the switch went off is deleted
+   unsent. (0.99.109 to 0.99.114: not gated by Usage reporting; without an id it was the anonymous form of 1.2.)
 3. THE DAILY BOUND. At most 100 `radio_fail` messages are sent per install per UTC day (per application data folder: the sender keeps the
    count itself; nothing on the server needs an id for it). At the bound: (a) the FIRST failure of every distinct (`radioKey`,
    `reasonClass`) of the day is always sent, bound or not; (b) later failures of the same pair are not sent but are counted, and the
@@ -528,11 +535,17 @@ Names starting `valid-` must be accepted, names starting `refuse-` must be refus
 beside them lists each file's SHA-256 (of the file with CRLF turned into LF, so an autocrlf checkout agrees; a reader of the manifest itself splits it on `\r\n` as well as `\n`, because an autocrlf checkout gives the manifest CRLF too); the site keeps a copy of the
 directory (and of `radio-text-rules.json` and `radio-journal-spec.json`) and its test fails when the copy and the manifest differ.
 
-## 10. What an install with Usage reporting OFF still sends
+## 10. What an install with Usage reporting OFF sends
 
-One list, because it is what the privacy page has to say. With Usage reporting switched off the journal, the environment record, the
-first-session record, the running-now beat and the usage record are NOT sent. What IS still sent, always (decision 12), is a radio failure
-report, and only when a radio does not open, containing: the driver word, the radio's model and its SERIAL NUMBER, its firmware and library
+**From 0.99.115: NOTHING (owner's decision of 2026-11-24, reversing decision 12). With Usage reporting switched off the journal, the
+environment record, the first-session record, the running-now beat, the usage record AND the radio failure report are all NOT sent, and any
+failure report queued is deleted when the switch goes off. With the Updates switch and Diagnostics off as well, the program contacts no
+server of its own; what a person presses (the plugin store, the bug or feature page, an installer download) is their own act.** Versions
+0.99.109 to 0.99.114 still send the anonymous radio failure report described next, and the server keeps accepting it.
+
+The rest of this section is what those earlier versions sent. One list, because it was what the privacy page said. With Usage reporting switched off the journal, the environment record, the
+first-session record, the running-now beat and the usage record were NOT sent. What WAS still sent, always (decision 12), was a radio failure
+report, and only when a radio did not open, containing: the driver word, the radio's model and its SERIAL NUMBER, its firmware and library
 version where known, the driver's reason for failing with serial numbers, user names, host names, quoted names and frequencies removed and
 every file path replaced by `<path>`, a class word for the reason, which call site opened it, how many times this radio has failed in this
 run, how long the open took and the sample rate asked for, whether the user had already moved on, how many failures were not sent because of

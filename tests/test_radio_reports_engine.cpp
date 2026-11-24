@@ -1509,9 +1509,9 @@ int main(int argc, char** argv) {
         keep(q);
     }
 
-    // --- Diagnostics off and Usage reporting off: the failure is still reported, anonymously ------------------------------------------------------
+    // --- Usage reporting off: NOTHING is queued, not even the failure (the owner's decision of 2026-11-24 reversed "reported anonymously") ------------------------------------------------------
     {
-        std::printf("  Usage reporting off: the failure is queued with no install id, the journal is not\n");
+        std::printf("  Usage reporting off: no failure report and no journal are queued\n");
         resetFake();
         g_failures = 1;
         g_failText = "the radio is already in use by another program";
@@ -1520,12 +1520,9 @@ int main(int argc, char** argv) {
         rig.start(/*usageOn=*/false);
         Access::restore(app, savedRadio());
         const std::vector<json> q = queued(rig.qdir());
-        CHECK(q.size() == 1);
-        if (q.size() == 1) {
-            CHECK(q[0]["kind"] == "radio_fail" && !q[0].contains("installId") && q[0].contains("messageId"));
-            CHECK(q[0]["body"]["diagOn"] == false || q[0]["body"]["diagOn"] == true);
-        }
-        keep(q);
+        CHECK(q.empty());
+        std::lock_guard<std::mutex> lk(rig.mu);
+        CHECK(rig.bodies.empty());   // and nothing was posted
     }
 
     // --- THE OPEN THE USER MOVED ON FROM is still a failed open ------------------------------------------------------------------------------------
@@ -1931,7 +1928,7 @@ int main(int argc, char** argv) {
         g_failText = "this dongle's tuner is not one this driver supports yet";
         th::TestWindow app;
         Rig rig("fallback");
-        rig.start(/*usageOn=*/false);   // the failure report needs no install id: the fallback's own failure reaches the owner with Usage reporting off too
+        rig.start(/*usageOn=*/true);   // the failure report needs Usage reporting ON (owner's decision of 2026-11-24 reversed "reaches the owner with it off too")
         cascade::core::AppConfig cfg;
         cfg.sourceKind = "soapy";
         cfg.soapyArgs = "driver=rtlsdr, serial=00000001";

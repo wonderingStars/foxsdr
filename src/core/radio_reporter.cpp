@@ -313,29 +313,17 @@ struct Reporter::Impl {
     }
     static bool carriesInstallId(const json& env) { return env.is_object() && env.contains("installId"); }
 
-    // USAGE REPORTING IS OFF (the id is empty): everything queued that carries the install id goes. The journal and first-session lines are deleted (a segment that cannot be deleted
-    // now is held back from every listing, and is deleted again at the next start while Usage reporting is still off: the re-scan rule, so no marker file is kept), and a queued
-    // failure is kept as the anonymous form (the owner's rule of 2026-11-15 is that every failed radio open reaches him, with Diagnostics and Usage reporting off alike).
-    // Called with `mu` held, from setIdentity (the opt-out) and from configure (a start with Usage reporting already off). Returns false when a failure file could not be rewritten:
-    // it still carries the id on disk, and the send-time rule in runBatch strips it from what is posted.
-    bool purgeForOptOut() {
+    // USAGE REPORTING IS OFF (the id is empty): EVERYTHING queued goes - the journal, the first-session lines AND every queued radio failure report, whether it carries the install id or is
+    // the anonymous form an earlier version (0.99.109 to 0.99.114) queued with Usage reporting off. The owner's decision of 2026-11-24 ("off sends nothing") reversed the rule of 2026-11-15
+    // that every failed radio open reaches him whatever the switch says. A file that cannot be deleted now is held back from every listing, and is deleted again at the next start while Usage
+    // reporting is still off: the re-scan rule, so no marker file is kept; the send-time rule in runBatch posts none of it meanwhile.
+    // Called with `mu` held, from setIdentity (the opt-out) and from configure (a start with Usage reporting already off).
+    void purgeForOptOut() {
         for (const Seg& g : listSegments()) { removeOrDefer(g.path); removeOrDefer(posPathOf(g.path)); }
         segReady = false;
-        bool allRewritten = true;
-        for (const fs::path& f : listFailFiles()) {
-            json w = json::parse(readAll(f), nullptr, false);
-            if (!w.is_object() || !w.contains("msg") || !w["msg"].is_object()) { continue; }
-            if (!carriesInstallId(w["msg"])) { continue; }
-            anonymize(w["msg"]);
-            if (!writeAtomic(f, dumpJson(w), 12, false)) {   // (a rewrite: never delete the report to replace it)
-                allRewritten = false;
-                ++st.guardRefused;
-                diagLogf("radio reports: a queued failure report could not be rewritten without the install id; it is sent without it");
-            }
-        }
+        for (const fs::path& f : listFailFiles()) { removeOrDefer(f); }
         envSent = false;
         firstSessionSent = 0;
-        return allRewritten;
     }
 
     void retryUnsaved() {
@@ -940,12 +928,21 @@ struct Reporter::Impl {
                 // WHAT MAY BE POSTED IS JUDGED AGAINST THE CURRENT INSTALL ID, read under `mu` at this moment (review of fix/freezes part 3, F5 to F7).
                 //  - A journal or first-session line is posted only when it carries the CURRENT id: an opt-out (no id) or an id change makes every older line unsendable. It is consumed without being
                 //    sent (it can never be sent), unless the opt-out has just deleted its segment, when it is left alone.
-                //  - A radio_fail is always sent (the owner's rule), but in the anonymous form (contract 1.2) when the id it carries is not the current one: an item this batch read before an
-                //    opt-out is not posted with the id after it.
+                //  - A radio_fail is posted only while Usage reporting is ON (owner's decision of 2026-11-24): with no current id it is consumed without being sent (its file is deleted, or held
+                //    back and deleted later), and that holds again after a degraded resend or any other pass round this loop. When the id it carries is not the current one (an id change
+                //    with Usage reporting still on) it is posted as before, in the anonymous form (contract 1.2): an item this batch read before the change is not posted with the old id.
                 std::string curId;
                 {
                     std::lock_guard<stall::TaggedMutex> lk(mu);
                     curId = id.installId;
+                }
+                if (it.isFail && curId.empty()) {
+                    {
+                        std::lock_guard<stall::TaggedMutex> lk(mu);
+                        ++st.unsendable;
+                    }
+                    if (!advance(it)) { return accepted; }
+                    break;
                 }
                 if (!it.isFail) {
                     if (optOutGen.load(std::memory_order_acquire) != optOutAtStart) { break; }   // the segment is being deleted
@@ -989,8 +986,8 @@ struct Reporter::Impl {
                 std::string code;
                 if (body.rfind("refused: ", 0) == 0) { code = body.substr(9); }
                 if ((res.status == 400 || res.status == 413) && !code.empty()) {
-                    if (textRefusalCode(code) && !it.degraded && !resent) {
-                        // send it once more with the text withheld: the failure itself must still reach the owner
+                    if (textRefusalCode(code) && !it.degraded && !resent && !(it.isFail && id.installId.empty())) {
+                        // send it once more with the text withheld: the failure itself must still reach the owner (not when Usage reporting has been switched off meanwhile: it goes unsent, below)
                         it.degraded = true;
                         resent = true;
                         ++st.degradedResends;
@@ -1015,8 +1012,12 @@ struct Reporter::Impl {
         return accepted;
     }
 
+    // A radio failure report exists only while Usage reporting is ON (an install id exists). With it off nothing is built, counted, queued or written: this is the gate nearest
+    // the sender, and the one that holds for a failure filed before the queue was opened (it is filed at configure through here) and for every trigger.
+    bool failuresAccepted() const { return on && !id.installId.empty(); }
+
     void fileFailureLocked(const FailureInput& in, const std::vector<std::string>& logRing, std::int64_t t) {
-    if (!on) { return; }
+        if (!failuresAccepted()) { return; }
         const RadioIdentity rid = in.soundCard ? soundCardIdentity() : identify(in.driverKind, in.args, in.nativeLabel);
         if (in.countOnly) { ++failAttempt[rid.key]; return; }   // a retry inside a series: the ordinal moves, nothing is queued
             Impl::Pending p;
@@ -1283,14 +1284,22 @@ void Reporter::setDiagOn(bool on) {
 
 Identity Reporter::identity() const { std::lock_guard<stall::TaggedMutex> lk(p_->mu); return p_->id; }
 
-void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
+bool Reporter::acceptsFailures() const {
+    std::lock_guard<stall::TaggedMutex> lk(p_->mu);
+    // before the queue is opened nothing is known yet: the failure is kept in memory and the gate is applied when it is filed (configure)
+    return !p_->configuredOnce || p_->failuresAccepted();
+}
+
+bool Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
     std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
+    if (s.configuredOnce && !s.failuresAccepted()) { return false; }   // Usage reporting is off: no report, nothing buffered, nothing written
     if (!s.configuredOnce) {   // before the queue is opened (the start-up restore runs first): kept in memory and filed at configure
         if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now(), s.preOrder++}); }
-        return;
+        return true;
     }
     s.fileFailureLocked(in, logRing, s.now());
+    return true;
 }
 
 void Reporter::countDropped(const std::string& radioKey, long long n) {

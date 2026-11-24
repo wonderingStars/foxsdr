@@ -1470,13 +1470,13 @@ struct AppConfig {
     // flip, and PRIVACY.md, README.md and the website all describe the
     // default in words that would need to change with it.
     //
-    // WHAT OFF DOES NOT SWITCH OFF (owner answers 2026-11-15 and 2026-11-16, decision 12;
-    // docs/radio-reports-contract.md section 10): with Usage reporting OFF a radio that fails
-    // is STILL reported. Each failure to open a radio is sent as its own anonymous report
-    // (the model, the radio's serial as its own field, the failure's reason, no install id),
-    // with the Diagnostics switch on or off. What off DOES stop is the usage record, the
-    // radio journal and the first-session record. The wording a person reads for this is
-    // the owner's approved text in PRIVACY.md and the in-app Usage text; it is not changed here.
+    // WHAT OFF SWITCHES OFF (owner, 2026-11-24, which REVERSED decision 12 of the answers of
+    // 2026-11-15 and 2026-11-16; docs/radio-reports-contract.md section 10): from 0.99.115 with
+    // Usage reporting OFF NOTHING about the radios or their use is sent: the usage record, the
+    // radio journal, the first-session record, the beat AND the failure report of a radio that
+    // does not open; a failure report already queued is deleted when the switch goes off.
+    // (0.99.109 to 0.99.114 still sent an anonymous failure report, with no install id.) The
+    // wording a person reads for this is PRIVACY.md and the in-app Usage text.
     bool telemetryEnabled = true;
 
     // Random 32-hex-character install id, created when reporting is switched

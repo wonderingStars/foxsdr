@@ -62,6 +62,8 @@ struct AppWindowTestAccess {
     static void finish(AppWindow& a) { a.crashUploadFinish(); }
     static std::string& crashDir(AppWindow& a) { return a.diagCrashDir_; }
     static bool& diagnostics(AppWindow& a) { return a.diagnosticsEnabled_; }
+    static void applyDiagnostics(AppWindow& a, bool on) { a.applyDiagnosticsEnabled(on); }
+    static bool& diagStartApplied(AppWindow& a) { return a.diagStartApplied_; }
     static cascade::core::CrashUploader& uploader(AppWindow& a) { return a.crashUploader_; }
     // One pass of the engine, as the engine's own frame runs it: the first one publishes the facts a sweep reads (fact.telemetry.enabled).
     static void pump(AppWindow& a) { passseam::whole(th::engine(a), [&] { th::engine(a).pump(); }); }
@@ -226,6 +228,25 @@ int main() {
     CHECK(logLinesWith("crash upload: ") > outcomesBefore);   // (the outcome line, and a line for each note the sweep left)
     CHECK(!A::wanted(app));
     CHECK(A::uploader(app).outcome().considered >= 1);   // it listed the report filed while it was pending
+
+    // F. DIAGNOSTICS SWITCHED OFF IN THE RUNNING PROGRAM STOPS THE UPLOAD AT ONCE, AND ON AGAIN WORKS WITH NO RESTART (owner's rule of 2026-11-24)
+    A::diagStartApplied(app) = true;               // the session's first call has been made: what follows is a switch pressed mid-session
+    A::applyDiagnostics(app, false);
+    CHECK(!A::diagnostics(app));
+    CHECK(!A::uploader(app).busy());               // nothing in flight is left (the thread is joined)
+    CHECK(!A::wanted(app));
+    (void)cascade::core::issue::fileIssueReport(Recovered::Viewport);   // (a word already filed this session writes nothing: the folder holds the earlier reports)
+    for (int i = 0; i < 20; ++i) { A::poll(app); }
+    CHECK(!A::uploader(app).busy());               // and no sweep starts while the switch is off, whatever is filed
+    CHECK(!A::wanted(app));
+    A::applyDiagnostics(app, true);                // switched on again: the folder is swept with no restart
+    CHECK(A::diagnostics(app));
+    CHECK(A::wanted(app));
+    A::poll(app);
+    CHECK(A::uploader(app).busy());
+    CHECK(waitFor([&] { return !A::uploader(app).running(); }));
+    A::finish(app);
+    CHECK(A::uploader(app).outcome().considered >= 1);
 
     fs::remove_all(scratch, ec);
     return testSummary("test_crash_upload_poll_app");

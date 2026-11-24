@@ -742,17 +742,7 @@ void HostDuties::finish() {
     // file, and before anything else on this path, so a transfer in flight is cancelled rather than waited out (crashUploadFinish). This
     // is the line that makes "a hanging endpoint does not delay shutdown" true; it is measured against the real binary in
     // tests/test_crash_upload.cpp.
-    if (sweepRunning_) {
-        const core::SweepOutcome out = w_.sweepStop();
-        sweepRunning_ = false;
-        crashState_ = out.state;
-        if (out.considered > 0) {
-            w_.diag("crash upload: " + std::to_string(out.considered) + " considered, " + std::to_string(out.sent) + " sent, " +
-                    std::to_string(out.duplicate) + " duplicate, " + std::to_string(out.limited) + " held, " + std::to_string(out.failed) +
-                    " failed, " + std::to_string(out.abandoned) + " abandoned, " + std::to_string(out.refused) + " refused");
-            for (const std::string& note : out.notes) { w_.diag("crash upload: " + note); }
-        }
-    }
+    stopSweep();
     // 3. THE TWO SENDERS CANCELLED: a feature request or a problem report sent moments before the close must not delay it either. Nothing
     // is kept of their outcome - there is no sweep and nothing to retry (core/feature_request.hpp).
     w_.sendersCancel();
@@ -800,6 +790,19 @@ bool HostDuties::sendHeldHalf() {
     return true;
 }
 
+void HostDuties::stopSweep() {
+    if (!sweepRunning_) { return; }
+    const core::SweepOutcome out = w_.sweepStop();
+    sweepRunning_ = false;
+    crashState_ = out.state;
+    if (out.considered > 0) {
+        w_.diag("crash upload: " + std::to_string(out.considered) + " considered, " + std::to_string(out.sent) + " sent, " +
+                std::to_string(out.duplicate) + " duplicate, " + std::to_string(out.limited) + " held, " + std::to_string(out.failed) +
+                " failed, " + std::to_string(out.abandoned) + " abandoned, " + std::to_string(out.refused) + " refused");
+        for (const std::string& note : out.notes) { w_.diag("crash upload: " + note); }
+    }
+}
+
 bool HostDuties::saveInterfaceHalf(const core::AppConfig& half) {
     const bool diagnosticsFlipped = half.diagnosticsEnabled != iface_.diagnosticsEnabled;
     iface_ = half;
@@ -819,6 +822,17 @@ bool HostDuties::saveInterfaceHalf(const core::AppConfig& half) {
 void HostDuties::diagnosticsChanged() {
     w_.applyDiagnosticsSwitches(iface_.diagnosticsEnabled, iface_.diagnosticsMinidump);
     w_.diag(std::string("diagnostics: recording ") + (iface_.diagnosticsEnabled ? "on" : "off") + ", memory dump " + (iface_.diagnosticsMinidump ? "on" : "off"));
+    // THE CRASH-REPORT SWEEP FOLLOWS THE SWITCH IN THE RUNNING PROGRAM (owner's rule of 2026-11-24; report 61 found it armed once at launch and never disarmed): switched OFF, the
+    // transfer in flight is stopped and none starts again; switched ON, the sweep is armed again (the next poll starts it, once the engine has published its facts) with no restart.
+    if (!iface_.diagnosticsEnabled) {
+        sweepArmed_ = false;
+        stopSweep();
+        w_.say(sweepPlanLine(SweepPlan::OffBySwitch));
+    } else if (!sweepArmed_ && !sweepRunning_) {
+        const SweepPlan plan = sweepPlanFor(iface_.diagnosticsEnabled, cfg_.diagnosticsDir);
+        sweepArmed_ = plan == SweepPlan::Armed;
+        w_.say(sweepPlanLine(plan));
+    }
 }
 
 void HostDuties::updateSettingChanged() {

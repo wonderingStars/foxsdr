@@ -482,7 +482,7 @@ int main() {
             rep.setDiagOn(diag == 1);
             const std::string tag = std::string("usage ") + (usage ? "ON" : "OFF") + ", diagnostics " + (diag ? "ON" : "OFF");
 
-            // a radio fails to open: ONE report, always
+            // a radio fails to open: ONE report with Usage reporting on, NONE with it off (the owner's decision of 2026-11-24 reversed "always")
             rep.fileFailure(failure(), {"12:01:07.331 warn rtlsdr: open failed"});
             // journal events, the machine description and the first-session record: only with Usage reporting on
             rr::RadioIdentity rid = rr::identify("rtlsdr", "serial=00000001", "RTL-SDR (serial 00000001)");
@@ -498,7 +498,7 @@ int main() {
             rep.event(env);
             rep.firstSession("{\"v\":\"0.99.109\",\"os\":\"Windows 10.0.22631\",\"arch\":\"x64\",\"launches\":1}", "on-failure");
             clock += 5;
-            CHECK(rep.runBatchNow() >= 1);
+            if (usage == 1) { CHECK(rep.runBatchNow() >= 1); } else { CHECK(rep.runBatchNow() == 0); }
 
             std::size_t fails = 0, journal = 0, first = 0;
             for (const json& m : sent) {
@@ -508,13 +508,8 @@ int main() {
                     CHECK(m["body"]["diagOn"] == (diag == 1));                       // "whether Diagnostics was on" is a field; it changes nothing sent
                     CHECK(m["body"]["serial"] == "00000001" && m["body"]["driver"] == "rtlsdr");
                     CHECK(!m["body"]["logLines"].empty());
-                    if (usage == 0) {
-                        // "no install identifier, no session identifier and no sequence number, only a random number made for that one message"
-                        CHECK(!m.contains("installId") && !m.contains("sessionId") && !m.contains("seq"));
-                        CHECK(m.contains("messageId") && m["messageId"].get<std::string>().size() == 16);
-                    } else {
-                        CHECK(m["installId"] == kInstallId && m.contains("sessionId") && m.contains("seq") && !m.contains("messageId"));
-                    }
+                    CHECK(usage == 1);   // a failure report exists only with Usage reporting on
+                    CHECK(m["installId"] == kInstallId && m.contains("sessionId") && m.contains("seq") && !m.contains("messageId"));
                 } else if (kind == "first_session") {
                     ++first;
                 } else {
@@ -522,8 +517,10 @@ int main() {
                 }
             }
             std::printf("%s: %zu failure report(s), %zu journal/description message(s), %zu first-session\n", tag.c_str(), fails, journal, first);
-            CHECK(fails == 1);                      // sent with the Diagnostics switch on or off and with Usage reporting on or off
+            CHECK(fails == (usage == 1 ? 1u : 0u));   // sent with the Diagnostics switch on or off, and ONLY with Usage reporting on
             if (usage == 0) {
+                CHECK(sent.empty());                 // "with Usage reporting off FoxSDR sends nothing about your radios or your use"
+                CHECK(failFiles(rep.dir()) == 0);
                 CHECK(journal == 0 && first == 0);   // "Turning Usage reporting off stops the journal, the machine description, the first-session record"
             } else {
                 CHECK(journal == 2);                // the open event and the machine description
@@ -531,7 +528,7 @@ int main() {
             rep.shutdown();
         }
     }
-    // switching Usage reporting OFF deletes every queued message that carries the install id, and the failures still queued are re-issued anonymously
+    // switching Usage reporting OFF deletes every queued message: the journal and the queued failures alike (owner's decision of 2026-11-24)
     {
         std::atomic<std::int64_t> clock{kT0};
         Temp t("off");
@@ -564,7 +561,7 @@ int main() {
             everything.append(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
         }
         CHECK(everything.find(kInstallId) == std::string::npos);
-        CHECK(failFiles(rep.dir()) == 1);   // the failure is still there, anonymous
+        CHECK(failFiles(rep.dir()) == 0);   // the queued failure is gone with the rest
         rep.shutdown();
     }
     // the still-running beat: off without an install id

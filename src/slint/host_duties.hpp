@@ -406,6 +406,8 @@ private:
 
     bool sweepArmed_ = false;
     bool sweepRunning_ = false;
+    // Stops the running crash-report sweep (the transfer in flight is cancelled), keeps its memory for the next one and logs its tally. A no-op when none runs.
+    void stopSweep();
 
     bool updateAsked_ = false;
     bool updatePending_ = false;

@@ -315,7 +315,8 @@ int main(int argc, char** argv) {
         keep(q);
     }
 
-    // --- sent with Diagnostics OFF, and with Usage reporting OFF: the anonymous form (decision 12, contract 1.2) -----------------------------------
+    // --- Diagnostics OFF sends the failure; Usage reporting OFF sends NOTHING (the owner's decision of 2026-11-24 reversed decision 12 of the 2026-11-15 contract:
+    //     from 0.99.115 there is no anonymous failure report; this block used to expect two anonymous reports) ----------------------------------------
     {
         Rig r("anon");
         Reporter::Options o = r.options();
@@ -325,20 +326,11 @@ int main(int argc, char** argv) {
         r.rep.fileFailure(failure("rtlsdr", "index=0", "the radio is in use by another program", "busy", Trigger::UserPick), {});
         r.rep.fileFailure(failure("rtlsdr", "index=0", "the radio is in use by another program", "busy", Trigger::SavedRetry), {});
         r.rep.event(openStart(rtl));       // the journal does not exist without an id
-        const std::vector<json> q = queued(r.rep.dir());
-        CHECK(q.size() == 2);
-        std::set<std::string> ids;
-        for (const json& m : q) {
-            CHECK(!m.contains("installId") && !m.contains("sessionId") && !m.contains("seq"));   // nothing that links two reports
-            CHECK(m.contains("messageId") && m["messageId"].get<std::string>().size() == 16);
-            ids.insert(m["messageId"].get<std::string>());
-            CHECK(m["body"]["diagOn"] == false);
-            CHECK(m["radioKey"] == "rtl-sdr:-");
-        }
-        CHECK(ids.size() == 2);
-        CHECK(r.rep.runBatchNow() == 2);
-        CHECK(r.server->count() == 2);
-        keep(q);
+        CHECK(queued(r.rep.dir()).empty());                  // nothing queued
+        CHECK(filesIn(r.rep.dir(), "fail-").empty());        // no failure file on disk
+        CHECK(r.rep.stats().failuresQueued == 0);
+        CHECK(r.rep.runBatchNow() == 0);
+        CHECK(r.server->count() == 0);                       // nothing sent
         // with Diagnostics ON the same failure says so (it changes nothing else)
         Reporter::Options o2 = r.options();
         o2.identity.diagOn = true;
@@ -370,6 +362,7 @@ int main(int argc, char** argv) {
         const fs::path dir = fs::path(CASCADE_SOURCE_ROOT) / "telemetry-worker" / "test-fixtures" / "radio-reports";
         int built = 0;
         int differ = 0;
+        int anonymousFixtures = 0;
         for (fs::directory_iterator it(dir), end; it != end; ++it) {
             const std::string name = it->path().filename().string();
             if (name.rfind("valid-radio-fail-", 0) != 0 || it->path().extension() != ".json") { continue; }
@@ -387,6 +380,19 @@ int main(int argc, char** argv) {
             o.identity.updateChannel = b.value("uch", std::string());
             o.identity.diagOn = b.value("diagOn", false);
             r.start(o);
+            if (!fx["request"].contains("installId")) {
+                // THE ANONYMOUS FORM (contract 1.2): versions 0.99.109 to 0.99.114 sent it with Usage reporting off and the Worker still accepts it (the fixture stays, and the Worker's own
+                // tests hold it to the validator), but from 0.99.115 nothing builds it: the owner's decision of 2026-11-24 ("off sends nothing"). Counted, not rebuilt.
+                FailureInput none;
+                none.driverKind = b["driver"].get<std::string>();
+                none.args = "index=0";
+                none.reason = b.value("reason", std::string());
+                none.reasonClass = b.value("reasonClass", std::string());
+                r.rep.fileFailure(none, {});
+                CHECK(queued(r.rep.dir()).empty());
+                ++anonymousFixtures;
+                continue;
+            }
             FailureInput in;
             in.driverKind = b["driver"].get<std::string>();
             const std::string serial = b.value("serial", std::string());
@@ -441,7 +447,9 @@ int main(int argc, char** argv) {
             keep({mine});
         }
         std::printf("fixture parity: %d valid radio_fail fixtures rebuilt, %d differ\n", built, differ);
-        CHECK(built >= 6);
+        std::printf("fixture parity: %d anonymous-form fixtures are for the Worker only (nothing builds them from 0.99.115)\n", anonymousFixtures);
+        CHECK(built >= 6 + anonymousFixtures);
+        CHECK(anonymousFixtures >= 2);
         CHECK(differ == 0);
     }
 
@@ -727,7 +735,7 @@ int main(int argc, char** argv) {
         CHECK(queued(r.rep.dir()).empty());
     }
     {
-        // turning Usage reporting OFF deletes what carries the install id, and re-issues a queued failure anonymously
+        // turning Usage reporting OFF deletes what carries the install id AND the queued failure (the owner's decision of 2026-11-24: off sends nothing)
         Rig r("consent");
         r.start();
         r.rep.event(openStart(hf));
@@ -737,13 +745,11 @@ int main(int argc, char** argv) {
         id.installId.clear();
         r.rep.setIdentity(id);
         const std::vector<json> q = queued(r.rep.dir());
-        CHECK(q.size() == 1);
-        if (q.size() == 1) {
-            CHECK(!q[0].contains("installId") && !q[0].contains("sessionId") && !q[0].contains("seq") && q[0].contains("messageId"));
-        }
+        CHECK(q.empty());
+        CHECK(filesIn(r.rep.dir(), "fail-").empty());
         const std::string all = [&]() { std::string s; for (const std::string& f : readQueueFiles(r.rep.dir())) { s += f; } return s; }();
         CHECK(all.find(kInstallId) == std::string::npos);
-        keep(q);
+        CHECK(r.rep.runBatchNow() == 0 && r.server->count() == 0);
     }
 
     // --- THE KINDS: every journal kind through the Worker's validator -----------------------------------------------------------------------------
@@ -1100,17 +1106,14 @@ int main(int argc, char** argv) {
         CHECK(q.size() == 3);
         for (const json& m : q) { CHECK(m.contains("synthetic") && m["synthetic"] == 1); }   // every kind, so the Worker drops all of it
         keep(q);
-        // an install with Usage reporting off sends its failure anonymously, and the marker still rides
+        // an install with Usage reporting off files and sends no failure at all (owner's decision of 2026-11-24)
         Rig anon("syn2");
         Reporter::Options oa = anon.options();
         oa.identity.installId.clear();
         oa.identity.synthetic = true;
         anon.start(oa);
         anon.rep.fileFailure(failure("rtlsdr", "index=0", "the radio is in use by another program", "busy"), {});
-        const std::vector<json> qa = queued(anon.rep.dir());
-        CHECK(qa.size() == 1);
-        if (qa.size() == 1) { CHECK(qa[0].contains("messageId") && !qa[0].contains("installId") && qa[0]["synthetic"] == 1); }
-        keep(qa);
+        CHECK(queued(anon.rep.dir()).empty());
     }
 
     // --- MUST-FIX LANE E, issue 4: lines with no radio key that the folder's bounds drop are counted and said on the next keyless message -----------------

@@ -9,8 +9,8 @@
 //   E  THE OPT-OUT ACROSS A RESTART (review of fix/freezes part 3, F5): Usage reporting OFF, the delete fails, the program quits, starts again: nothing queued under the install id is sent, with the
 //      delete still failing and when it can succeed; a delete that fails is retried at quit;
 //   F  AN ID CHANGE: a line stored under another install id is never posted under the current one;
-//   G  A FAILURE READ BEFORE THE OPT-OUT is posted in the anonymous form (no install id, no session id, no seq, a message id), never with the id; a failure file that could not be rewritten at the
-//      opt-out is rewritten at the next start. The failure itself is always sent (the owner's rule of 2026-11-15).
+//   G  A FAILURE READ BEFORE THE OPT-OUT is not posted after it (the owner's decision of 2026-11-24 reversed the rule of 2026-11-15: Usage reporting OFF sends NOTHING, a queued failure
+//      is deleted like the journal); a failure file that could not be deleted at the opt-out is never posted and is deleted at the next start.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -358,8 +358,17 @@ void testAnIdChangeMakesOlderLinesUnsendable() {
     }
 }
 
-// G  a failure read before the opt-out, and a failure file that could not be rewritten
-void testAFailureReadBeforeTheOptOutIsPostedAnonymously() {
+std::size_t failFilesOnDisk(Bench& b) {
+    std::size_t n = 0;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(b.root / "radio-reports", ec)) {
+        if (e.path().filename().string().rfind("fail-", 0) == 0 && e.path().extension() == ".json") { ++n; }
+    }
+    return n;
+}
+
+// G  a failure read before the opt-out, and a failure file that could not be deleted
+void testAFailureReadBeforeTheOptOutIsNeverPosted() {
     std::printf("G  a failure read before the opt-out\n");
     Bench b("g");
     rr::Reporter rep;
@@ -377,15 +386,16 @@ void testAFailureReadBeforeTheOptOutIsPostedAnonymously() {
     rep.setLiveSend(true);
     (void)rep.runBatchNow();
     std::printf("    failures sent: %zu, of which anonymous %zu, with the id %zu\n", b.sentOfKind("radio_fail"), sentWithoutInstallIdOfKind(b, "radio_fail"), b.sentWithInstallId());
-    CHECK(b.sentOfKind("radio_fail") == 3u);                       // every failure still reaches the owner
-    CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 2u);      // the two read before the opt-out go without the id; the one in flight could not be recalled
+    CHECK(b.sentOfKind("radio_fail") == 1u);                       // the one in flight could not be recalled; the two read before the opt-out are NOT posted, in any form
+    CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 0u);
     CHECK(b.sentWithInstallId() == 1u);
     CHECK(!b.anyFileHoldsInstallId());
+    CHECK(failFilesOnDisk(b) == 0u);
     rep.shutdown();
 }
 
-void testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart() {
-    std::printf("G2 a failure file that could not be rewritten at the opt-out\n");
+void testAFailureFileThatCouldNotBeDeletedIsNeverPostedAndGoesAtTheNextStart() {
+    std::printf("G2 a failure file that could not be deleted at the opt-out\n");
     Bench b("g2");
     {
         rr::Reporter rep;
@@ -393,80 +403,50 @@ void testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart() {
         o.liveSend = false;
         rep.configure(o);
         rep.fileFailure(failureOf("00000004"), kNoRing);
-        // the REPLACE of a failure file fails at the opt-out (the file is open elsewhere: neither a rename over it nor a delete of it can be done)
-        rr::Reporter::setFileFaultHookForTest([](const char*, const std::string& path) { return path.find("fail-") != std::string::npos; });
+        // the DELETE of a failure file fails at the opt-out (the file is open elsewhere)
+        rr::Reporter::setFileFaultHookForTest([](const char* op, const std::string& path) { return std::string(op) == "remove" && path.find("fail-") != std::string::npos; });
         identityOff(rep);
-        CHECK(rep.stats().guardRefused >= 1u);       // the failed rewrite is counted, not ignored
-        CHECK(b.anyFileHoldsInstallId());            // it is still on disk with the id...
+        CHECK(b.anyFileHoldsInstallId());            // it is still on disk...
+        rep.setLiveSend(true);
+        (void)rep.runBatchNow();
+        CHECK(b.sentOfKind("radio_fail") == 0u);     // ...and is posted in no form
+        CHECK(b.sent.empty());
         rr::Reporter::setFileFaultHookForTest(nullptr);
     }                                                // ...and the program ends
     rr::Reporter rep;
     rr::Reporter::Options o = b.options();
     o.identity.installId.clear();
-    rep.configure(o);                                // the start with Usage reporting off rewrites it
+    rep.configure(o);                                // the start with Usage reporting off deletes it
     CHECK(!b.anyFileHoldsInstallId());
+    CHECK(failFilesOnDisk(b) == 0u);
     (void)rep.runBatchNow();
-    CHECK(b.sentOfKind("radio_fail") == 1u);
-    CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 1u);
+    CHECK(b.sentOfKind("radio_fail") == 0u);
+    CHECK(b.sent.empty());
     rep.shutdown();
 }
 
-// G3 (final review of fix/freezes, R4): the anonymous REWRITE of a queued failure file must never delete the failure when the atomic replace fails. Only the RENAME is made to fail
-// (the temporary file is held by a scanner while the target is free): the old delete-then-rename fallback removed the target, found the rename failing and removed the temporary file too,
-// so the report was gone. Now the original stays where it is, carrying the id, the send-time rule posts it without the id, and the next start rewrites it.
-std::size_t failFilesOnDisk(Bench& b) {
-    std::size_t n = 0;
-    std::error_code ec;
-    for (const auto& e : fs::directory_iterator(b.root / "radio-reports", ec)) {
-        if (e.path().filename().string().rfind("fail-", 0) == 0 && e.path().extension() == ".json") { ++n; }
-    }
-    return n;
-}
-
-void testARewriteThatCannotRenameNeverDeletesTheFailure() {
-    std::printf("G3 a rewrite whose rename fails keeps the failure report\n");
+// G3 a failure whose delete keeps failing at the opt-out is held back, posted in no batch, and deleted by the retry at quit once the file can go
+void testAStuckFailureDeleteIsRetriedAtQuitAndNothingIsPosted() {
+    std::printf("G3 a stuck failure delete is retried at quit, nothing posted\n");
     Bench b("g3");
-    {
-        rr::Reporter rep;
-        rr::Reporter::Options o = b.options();
-        o.liveSend = false;
-        rep.configure(o);
-        rep.fileFailure(failureOf("00000005"), kNoRing);
-        CHECK(failFilesOnDisk(b) == 1u);
-        rr::Reporter::setFileFaultHookForTest([](const char* op, const std::string& path) { return std::string(op) == "rename" && path.find("fail-") != std::string::npos; });
-        identityOff(rep);
-        CHECK(rep.stats().guardRefused >= 1u);       // the failed rewrite is counted
-        CHECK(failFilesOnDisk(b) == 1u);             // THE REPORT IS STILL THERE (the delete-then-rename fallback made this 0)
-        CHECK(b.anyFileHoldsInstallId());            // as the original, with the id, which the send-time rule strips
-        // a batch while the rename still fails: the failure is posted, anonymously
-        rep.setLiveSend(true);
-        (void)rep.runBatchNow();
-        CHECK(b.sentOfKind("radio_fail") == 1u);
-        CHECK(sentWithoutInstallIdOfKind(b, "radio_fail") == 1u);
-        CHECK(b.sentWithInstallId() == 0u);
-        rr::Reporter::setFileFaultHookForTest(nullptr);
-        rep.shutdown();
-    }
-    // and a failure that is NOT sent (live sending off) is rewritten at the next start, once the files can be replaced
-    Bench c("g3b");
-    {
-        rr::Reporter rep;
-        rr::Reporter::Options o = c.options();
-        o.liveSend = false;
-        rep.configure(o);
-        rep.fileFailure(failureOf("00000006"), kNoRing);
-        rr::Reporter::setFileFaultHookForTest([](const char* op, const std::string& path) { return std::string(op) == "rename" && path.find("fail-") != std::string::npos; });
-        identityOff(rep);
-        CHECK(failFilesOnDisk(c) == 1u);
-        rr::Reporter::setFileFaultHookForTest(nullptr);
-    }
     rr::Reporter rep;
-    rr::Reporter::Options o = c.options();
-    o.identity.installId.clear();
+    rr::Reporter::Options o = b.options();
+    o.liveSend = true;
     rep.configure(o);
-    CHECK(failFilesOnDisk(c) == 1u);
-    CHECK(!c.anyFileHoldsInstallId());               // retried at the next start, now rewritten
-    rep.shutdown();
+    rep.setLiveSend(false);
+    rep.fileFailure(failureOf("00000005"), kNoRing);
+    std::atomic<bool> locked{true};
+    rr::Reporter::setFileFaultHookForTest([&](const char* op, const std::string& path) { return locked.load() && std::string(op) == "remove" && path.find("fail-") != std::string::npos; });
+    identityOff(rep);
+    rep.setLiveSend(true);
+    (void)rep.runBatchNow();
+    (void)rep.runBatchNow();
+    CHECK(b.sent.empty());
+    locked.store(false);
+    rep.flushAtQuit(200);
+    CHECK(failFilesOnDisk(b) == 0u);
+    CHECK(b.sent.empty());
+    rr::Reporter::setFileFaultHookForTest(nullptr);
 }
 
 }  // namespace
@@ -479,8 +459,8 @@ int main() {
     testOptOutSurvivesARestart();
     testDeferredDeleteIsRetriedAtQuit();
     testAnIdChangeMakesOlderLinesUnsendable();
-    testAFailureReadBeforeTheOptOutIsPostedAnonymously();
-    testAFailureFileThatCouldNotBeRewrittenIsFixedAtTheNextStart();
-    testARewriteThatCannotRenameNeverDeletesTheFailure();
+    testAFailureReadBeforeTheOptOutIsNeverPosted();
+    testAFailureFileThatCouldNotBeDeletedIsNeverPostedAndGoesAtTheNextStart();
+    testAStuckFailureDeleteIsRetriedAtQuitAndNothingIsPosted();
     return testSummary("test_radio_reporter_optout");
 }

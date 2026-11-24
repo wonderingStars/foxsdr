@@ -985,8 +985,8 @@ UsageModel readUsage(TableReader& t, const ReadOptions& o) {
                          "FoxSDR is open, a \"still running\" beat every five minutes. This switch "
                          "stops both."));
     } else {
-        // THE APPROVED WORDING (owner, 2026-11-16, PRIVACY-DRAFT part 1; must-fix lane A): "Off. Nothing is transmitted." was untrue - a radio that does not open is still reported
-        m.state_line = std::string(tr("With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off."));
+        // OWNER, 2026-11-24 (brief 62): off sends nothing, the radio failure report included. This replaces the 2026-11-16 wording (must-fix lane A), which said a radio that does not open is still reported.
+        m.state_line = std::string(tr("With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open."));
     }
     // D5.11: the install identifier (above, while Usage reporting is on) and each radio's serial number, so a person can quote them when asking for their records to be erased.
     {

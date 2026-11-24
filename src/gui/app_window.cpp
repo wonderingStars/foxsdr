@@ -20857,7 +20857,7 @@ void AppWindow::drawUsageReportingSection() {
                "stops both."));
         ImGui::PopStyleColor();
     } else {
-        ImGui::TextDisabled("%s", tr("With Usage reporting switched off, FoxSDR sends no usage report, no still-running beat, no journal, no machine description and no first-session record. It still sends one report whenever a radio does not open, whether Diagnostics is on or off."));   // the approved wording (owner, 2026-11-16): a radio that does not open is still reported
+        ImGui::TextDisabled("%s", tr("With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open."));   // owner, 2026-11-24: off sends nothing, the radio failure report included (it reversed the 2026-11-16 wording, which said a radio that does not open is still reported)
     }
     if (ImGui::SmallButton(trId("What exactly is sent?"))) {
         privacyNoticeOpen_ = !privacyNoticeOpen_;
@@ -21207,6 +21207,15 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
         }
     }
     watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    // AND THE CRASH-REPORT UPLOAD, by the same switch, in the running program (owner's rule of 2026-11-24: off sends nothing from that moment): a sweep in flight is stopped (the
+    // transfer is cancelled; its memory is journalled at the quit by crashUploadFinish), and one is asked for again when the switch is turned back ON after the start, so the
+    // folder is swept with no restart. crashUploadStart() already refuses to begin one while the switch is off.
+    if (!diagnosticsEnabled_) {
+        crashUploader_.stop();
+        crashUploadWanted_ = false;
+    } else if (diagStartApplied_) {
+        crashUploadWanted_ = true;
+    }
     // AND THE SENTINEL, by the same switch (core/sentinel.hpp): off ends the watcher
     // and forbids any report from it; on starts one if this run may have one at all
     // (main() armed it only for an interactive session, or a test that asked) and

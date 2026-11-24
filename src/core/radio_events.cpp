@@ -405,6 +405,7 @@ void noteServiceFault(const char* driverKey, const char* what, const std::string
 
 void fileSideRadioFailure(const char* driverKey, const std::string& args, const std::string& reason, const char* trigger) {
     try {
+        if (!global().acceptsFailures()) { return; }   // Usage reporting is off: no failure report is built (owner's decision of 2026-11-24)
         const std::string kind = driverKey != nullptr ? driverKey : "other";
         FailureInput in;
         in.driverKind = kind;

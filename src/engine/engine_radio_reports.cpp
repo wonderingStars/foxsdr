@@ -118,6 +118,10 @@ cascade::core::TelemetryReport Engine::telemetrySnapshot() {
 void Engine::reportFailedOpen(const std::string& kind, const std::string& args, const std::string& reason, rr::Trigger trigger, bool superseded,
                               double requestRateHz, long long openMs, bool seriesRetry) {
     if (!physicalKind(kind)) { return; }   // the generator and a recording are not radios that failed to open
+    // USAGE REPORTING OFF SENDS NOTHING (owner's decision of 2026-11-24): no failure report is built, its counter is not raised, and the first-session record a failure raises on a first
+    // launch is not asked for. (The reporter holds the same gate at the sender, and for a failure filed before its queue was opened.)
+    rr::Reporter& g = rr::global();
+    if (!g.acceptsFailures()) { return; }
     rr::FailureInput in;
     in.driverKind = kind;
     in.args = args;
@@ -131,7 +135,6 @@ void Engine::reportFailedOpen(const std::string& kind, const std::string& args, 
     in.sampleRateSps = rateSps(requestRateHz);
     in.countOnly = seriesRetry;
     ++radioOpenFailures_;
-    rr::Reporter& g = rr::global();
     {
         std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
         g.setDiagOn(interfaceCfg_.diagnosticsEnabled);

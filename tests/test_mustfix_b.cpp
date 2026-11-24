@@ -221,7 +221,7 @@ int main() {
     // ---- 3. A RADIO THAT IS NOT A REGISTERED SOURCE ----------------------------------------------------------------------------------------------
     {
         Rig t;
-        t.start(/*usage=*/false);   // the failure report needs no install id
+        t.start();   // usage ON: the failure report exists only with Usage reporting on (owner's decision of 2026-11-24 reversed "needs no install id")
         rr::fileSideRadioFailure("hackrf", "serial=0000000000000000a06063c8234e925f", "the HackRF refused the sweep settings", "other");
         const std::vector<json> fails = ofKind(t.flush(), "radio_fail");
         CHECK(fails.size() == 1);
@@ -241,7 +241,7 @@ int main() {
     }
     {   // the one-click installer: a failed install is a radio_fail, a finished or declined one is not
         Rig t;
-        t.start(/*usage=*/false);
+        t.start();   // usage ON (owner's decision of 2026-11-24: with it off no failure report is made)
         namespace wu = cascade::core::winusb;
         for (const wu::Outcome o : {wu::Outcome::Installed, wu::Outcome::AlreadyWinUsb, wu::Outcome::Cancelled}) {
             wu::Result r;

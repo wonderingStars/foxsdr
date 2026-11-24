@@ -131,7 +131,7 @@ const std::vector<HelpTopic> kTopics = {
     }, 4, 6, "diagnostics report crash freeze copy log"},
     {"sys-usage", FOX_TR_NOOP("Usage reporting"), {
         FOX_TR_NOOP("The Send anonymous usage reports switch turns the usage reports on or off. Show what is sent shows what a report holds."),   // C: system_bank.slint "Send anonymous usage reports", "Show what is sent"
-        FOX_TR_NOOP("When a radio does not open, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on and whether or not Usage reporting is on."),   // C: PRIVACY.md "Radio failure reports and the radio journal", its first sentence, in the approved words
+        FOX_TR_NOOP("When a radio does not open and Usage reporting is on, FoxSDR sends one report about that failure, every time it happens, whether or not Diagnostics is on. With Usage reporting off it sends nothing about your radios."),   // C: PRIVACY.md "Radio failure reports and the radio journal", first sentence; owner, 2026-11-24: off sends nothing (wording pending approval, PRIVACY-FOR-APPROVAL-0.99.115-OFF.md)
     }, 4, 7, "usage reporting privacy anonymous reports send"},
     {"controllers", FOX_TR_NOOP("Controllers"), {
         FOX_TR_NOOP("A ShuttleXpress or a PowerMate can tune the radio and press a few of the window's keys. Nothing is opened until you turn this on and choose the device."),   // C: knob_host.hpp, lanex_publish.cpp knobRows
