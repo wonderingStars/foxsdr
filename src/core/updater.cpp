@@ -21,6 +21,7 @@
 
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
+#include "core/package_identity.hpp"
 #include "core/plugin_repo.hpp"
 #include "core/plugin_repo_data.hpp"
 
@@ -239,6 +240,8 @@ bool wellFormedMessageId(const std::string& id) {
 }
 
 bool updateManifestFakeSet() {
+    // A PRODUCT run ignores the seam (security review R1, finding F4): engine/process_boot.cpp calls lockFakePackageSeams() for a run with no --frames and no --seconds.
+    if (!fakePackageSeamsOpen()) { return false; }
     const char* const v = std::getenv("FOXSDR_FAKE_UPDATE_MANIFEST");
     return v != nullptr && *v != '\0';
 }
@@ -415,14 +418,17 @@ bool parseUpdateManifest(const std::string& text, const std::string& currentVers
 }
 
 std::string updateEndpoint() {
+    // The override is for bounded runs and tests only: a PRODUCT run ignores it (security review R1, finding F4; see updateManifestFakeSet).
+    if (fakePackageSeamsOpen()) {
 #if defined(_WIN32)
-    char buf[512] = {0};
-    const DWORD n = ::GetEnvironmentVariableA("FOXSDR_UPDATE_URL", buf, sizeof(buf));
-    if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
+        char buf[512] = {0};
+        const DWORD n = ::GetEnvironmentVariableA("FOXSDR_UPDATE_URL", buf, sizeof(buf));
+        if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
 #else
-    const char* v = std::getenv("FOXSDR_UPDATE_URL");
-    if (v != nullptr && *v != '\0') { return std::string(v); }
+        const char* v = std::getenv("FOXSDR_UPDATE_URL");
+        if (v != nullptr && *v != '\0') { return std::string(v); }
 #endif
+    }
     return "https://foxsdr.com/api/update";
 }
 

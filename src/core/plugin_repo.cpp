@@ -10,6 +10,7 @@
 #include "core/file_read.hpp"
 #include "core/i18n.hpp"
 #include "core/companion_programs.hpp"   // companion applications shelf
+#include "core/package_identity.hpp"     // fakePackageSeamsOpen (the product-run gate on the test seams)
 #include "core/plugin_repo_helper.hpp"   // wire-c
 #include "core/utf8_text.hpp"
 
@@ -1271,18 +1272,23 @@ std::string PluginRepo::regionalIndexUrl() {
     // Same seam shape as every other FOXSDR_*_URL override in this codebase
     // (feature_request.cpp, telemetry.cpp, ...): GetEnvironmentVariableA on
     // Windows, getenv on POSIX, an empty value treated the same as unset.
+    // For bounded runs and tests only: a PRODUCT run ignores the variable (security review R1, finding F4;
+    // engine/process_boot.cpp calls lockFakePackageSeams() for a run with no --frames and no --seconds).
+    if (fakePackageSeamsOpen()) {
 #if defined(_WIN32)
-    char buf[512] = {0};
-    const DWORD n = ::GetEnvironmentVariableA("FOXSDR_REGIONAL_CATALOGUE_URL", buf, sizeof(buf));
-    if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
+        char buf[512] = {0};
+        const DWORD n = ::GetEnvironmentVariableA("FOXSDR_REGIONAL_CATALOGUE_URL", buf, sizeof(buf));
+        if (n > 0 && n < sizeof(buf)) { return std::string(buf, n); }
 #else
-    const char* v = std::getenv("FOXSDR_REGIONAL_CATALOGUE_URL");
-    if (v != nullptr && v[0] != '\0') { return std::string(v); }
+        const char* v = std::getenv("FOXSDR_REGIONAL_CATALOGUE_URL");
+        if (v != nullptr && v[0] != '\0') { return std::string(v); }
 #endif
+    }
     return "https://foxsdr.com/api/plugins/regional";
 }
 
 bool PluginRepo::regionalOverrideSet() {
+    if (!fakePackageSeamsOpen()) { return false; }   // a product run ignores the override (finding F4)
 #if defined(_WIN32)
     char buf[512] = {0};
     const DWORD n = ::GetEnvironmentVariableA("FOXSDR_REGIONAL_CATALOGUE_URL", buf, sizeof(buf));
