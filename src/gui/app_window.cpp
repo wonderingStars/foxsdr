@@ -3775,6 +3775,8 @@ void AppWindow::drawUi() {
     // would nest it in that window's ID stack, where the dim overlay it draws
     // would sit under the panels it is meant to block.
     drawMutePopup();
+    // A refused radio choice that a patch part explains (0.99.113), beside it for the same reason.
+    drawRefusalPopup();
     // The "Import a frequency list" window (0.99.80), beside it for the same reason.
     drawImportDialog();
     // The deck's bias tee question, at the top level for the same reason.
@@ -7882,9 +7884,7 @@ void AppWindow::drawSourceSection() {
                               static_cast<unsigned long long>(c.rows[static_cast<std::size_t>(i)].id));
                 std::string id;
                 readFactText(key, id);
-                if (!id.empty()) {
-                    uiSubmit(cascade::core::cmd::makeText(FOXAPI_OP_SELECT_SOURCE, id));
-                }
+                if (!id.empty()) { submitSourceChoice(id, rowLabel(i)); }
             }
             ImGui::EndDisabled();
             if (patchHasRadios && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -17923,6 +17923,8 @@ void AppWindow::actOnUiAnswers(bool stateRead) {
     for (int i = 0; i < a.nResults; ++i) {
         const FoxCommandResult& r = a.results[i];
         if (uiAnswerTap_ != nullptr) { (*uiAnswerTap_)(r); }
+        // THE ANSWER TO A RADIO CHOICE THIS WINDOW SENT (0.99.113): refused because a patch part names the radio -> the popup. Only a ticket submitSourceChoice noted can open it.
+        if (r.op == FOXAPI_OP_SELECT_SOURCE) { refusalPopup().onAnswer(r); }
         const bool keyOp = r.op == FOXAPI_OP_TX_LATCH || r.op == FOXAPI_OP_TX_REMOTE_ARM;
         if (keyOp && r.status != FOXAPI_OK && r.status != FOXAPI_NO_CHANGE) {
             transmitKeyNote_ = r.message;

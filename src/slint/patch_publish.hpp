@@ -57,6 +57,8 @@ public:
     std::string summaryLine() const;
     std::size_t commandsSent() const { return sent_; }
     // A bounded run's read-back of the Spectrum and Map faces (`state patchface.<s|m><k>.<what>`, docs/multi-radio-records/patch-faces.md): empty string = answered into `out`, else the complaint.
+    // The caption the Patch page draws on the part with this node id (the page's own draft); empty when there is no such part.
+    std::string partCaption(int nodeId) const;
     std::string faceState(const std::string& name, std::string& out) const;
 
 private:

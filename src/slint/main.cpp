@@ -125,8 +125,11 @@
 #include "core/zoom_select.hpp"
 #include "workspace_testseam.hpp"
 #include "plugin_kit.hpp"
+#include "handover_sheet.hpp"   // 0.99.113: who owns the one Handover sheet
 #include "handover_host.hpp"   // engine fixes 7: Legacy as a choice in the Layouts menu
 #include "radio_move_host.hpp"   // field fix A2: a radio held by another FoxSDR window - move it here, or leave it
+#include "radio_refusal_gate.hpp"   // 0.99.113: a refused radio choice says why - the popup's one gate (mayShowRefusalPopup)
+#include "core/radio_refusal_popup.hpp"
 #include "core/window_handover.hpp"
 #include "core/sentinel.hpp"
 #include "signal_publish.hpp"
@@ -1380,26 +1383,47 @@ int main(int argc, char** argv) {
         publishLayouts();
     };
     // ENGINE FIXES 7: LEGACY IS A CHOICE (src/slint/handover_host.hpp): the Layouts menu's "Legacy" entry (id 1993), the question while something runs, and the sentence a failed switch leaves.
+    foxsdr::slinthost::HandoverSheet handoverSheet;   // 0.99.113: who owns the one Handover sheet now (slint/handover_sheet.hpp); its keys go to that owner only
     foxsdr::slinthost::HandoverHost handoverHost(
         {[&] { cascade::core::handover::Busy b; b.recording = lists.recording; b.patch = (state.flags & FOXAPI_RX_PATCH_RUNNING) != 0; return b; },
          [] { slint::quit_event_loop(); },
          [&](const foxsdr::slinthost::HandoverHost::Sheet& s) {
              auto& g = ui->global<Handover>();
+             handoverSheet.took(foxsdr::slinthost::HandoverSheet::Who::Legacy);
              g.set_title(ss(s.title)); g.set_text(ss(s.text)); g.set_go_label(ss(s.goLabel)); g.set_stay_label(ss(s.stayLabel)); g.set_open(true);
          },
-         [&] { ui->global<Handover>().set_open(false); },
+         [&] { if (handoverSheet.released(foxsdr::slinthost::HandoverSheet::Who::Legacy)) { ui->global<Handover>().set_open(false); } },
          [](const char* s) { return std::string(cascade::i18n::tr(s)); }},
         handoverExit, configPath, boot.safePlugins);
     // FIELD FIX A2 (src/slint/radio_move_host.hpp): the same sheet asks whether to move a radio here from another FoxSDR window, and says when this window's radio was moved away.
     foxsdr::slinthost::RadioMoveHost radioMoveHost(
         {[&](const cascade::core::handoff::Sheet& s) {
              auto& g = ui->global<Handover>();
+             handoverSheet.took(foxsdr::slinthost::HandoverSheet::Who::Move);
              g.set_title(ss(s.title)); g.set_text(ss(s.text)); g.set_go_label(ss(s.goLabel)); g.set_stay_label(ss(s.stayLabel)); g.set_open(true);
          },
-         [&] { ui->global<Handover>().set_open(false); },
+         [&] { if (handoverSheet.released(foxsdr::slinthost::HandoverSheet::Who::Move)) { ui->global<Handover>().set_open(false); } },
          [&](bool move) { FoxCommand c = op(FOXAPP_OP_RADIO_HANDOFF); c.ival[0] = move ? 1 : 0; submit(c); }});
-    ui->global<Handover>().on_go([&] { if (radioMoveHost.open()) { radioMoveHost.confirm(); } else { handoverHost.confirm(); } });
-    ui->global<Handover>().on_stay([&] { if (radioMoveHost.open()) { radioMoveHost.cancel(); } else { handoverHost.cancel(); } });
+    // 0.99.113: A REFUSED RADIO CHOICE SAYS WHY (core/radio_refusal.hpp). When the radio the person clicked is refused because a Radio part of the patch names it, the same sheet (the Handover
+    // global: title, text, two keys) says so - "Open the Patch page" shows the patch view, "Close" puts the sheet away. It is NOT the hand-off question: it never goes through radioMoveHost, never
+    // submits FOXAPP_OP_RADIO_HANDOFF, and changes neither the patch nor who holds the radio. Only the answer to THIS window's own click opens it (the ticket the Source list or the add card noted).
+    cascade::core::refusal::RefusalPopup refusalPopup(
+        {[&] { return foxsdr::slinthost::mayShowRefusalPopup(handoverSheet.mayRaiseRefusal() && !radioMoveHost.open()); },
+         [&](const cascade::core::refusal::Popup& p) {
+             auto& g = ui->global<Handover>();
+             handoverSheet.took(foxsdr::slinthost::HandoverSheet::Who::Refusal);
+             g.set_title(ss(p.title)); g.set_text(ss(p.text)); g.set_go_label(ss(p.goLabel)); g.set_stay_label(ss(p.stayLabel)); g.set_open(true);
+         },
+         [&] { if (handoverSheet.released(foxsdr::slinthost::HandoverSheet::Who::Refusal)) { ui->global<Handover>().set_open(false); } },
+         [&] { ui->set_view_index(1); patchBank.setViewShown(true); },   // the PATCH tab's own route (view_selected)
+         [&](int part) { return patchBank.partCaption(part); }});        // the caption the Patch page shows on that part
+    signalBank.setChoiceNoted([&](std::uint64_t ticket, const std::string& label) { refusalPopup.noteSubmitted(ticket, label); });
+    handoverSheet.setUsers({[&] { radioMoveHost.confirm(); }, [&] { radioMoveHost.cancel(); },
+                            [&] { handoverHost.confirm(); }, [&] { handoverHost.cancel(); },
+                            [&] { refusalPopup.goToPatchPage(); }, [&] { refusalPopup.dismiss(); },
+                            [&] { refusalPopup.superseded(); }});   // a hand-off or Legacy question took the sheet: the popup is dropped, none of its callbacks fires later
+    ui->global<Handover>().on_go([&] { handoverSheet.go(); });
+    ui->global<Handover>().on_stay([&] { handoverSheet.stay(); });
     int handoverAt = 0;   // FOXSDR_HANDOVER_AT=<tick>: a drive script chooses Legacy at that tick (window_handover.hpp, test seams)
     if (const char* e = std::getenv(cascade::core::handover::kAtEnv); e != nullptr) { handoverAt = std::atoi(e); }
     handoverHost.showNote(cascade::core::handover::noteSentence(boot.handover, cascade::core::handover::Window::New));   // started by a hand-over that could not open the other window
@@ -2414,6 +2438,8 @@ int main(int argc, char** argv) {
         addTicket = 0;
         submit(c);
         addTicket = lastTicket;
+        // 0.99.113 (review M1): a refused ADD raises NO popup. The Add-a-radio sheet stays open for a refusal and is declared after the Handover sheet in main.slint, so a popup raised on that sheet would be
+        // drawn under it and show up later. The card shows the engine's refusal sentence itself (addNote); only the Source list's click (signal_publish.cpp) raises the popup.
         addSwitchLayout = workspace.radioCount() == 1 && workspace.layout() == kLayoutOne;   // the first radio added shows beside the first (Side by side)
     };
     {
@@ -3558,6 +3584,7 @@ int main(int argc, char** argv) {
         FoxCommandResult r[8]; for (auto& x2 : r) { x2.structSize = sizeof(x2); }
         const int32_t got = api->poll_results(session, r, 8);
         for (int32_t i = 0; i < got; ++i) {
+            refusalPopup.onAnswer(r[i]);   // 0.99.113: the answer to a radio choice THIS window sent, refused because a patch part holds the radio -> the popup
             toolsBank.onAnswer(r[i]);   // the answers the airband section waits for (an airport's rows, a preset's chunks, Listen, Export, Remove)
             extendBank.onAnswer(r[i]);  // a SERVER_CONFIG's (Web access and CAT control): a refusal becomes the web box's red line
             patchBank.onAnswer(r[i]);   // the draft's SET_GRAPH (its commit is settled by this answer) and the radio scan's
@@ -3578,7 +3605,7 @@ int main(int argc, char** argv) {
         // the browser's tiles, the track-info lines, the plugin-use table, the events and the tickets - then its pages (kit_publish.cpp).
         kit.tick(state, listMoved, face == Face::Nixie ? "nixie" : face == Face::Drum ? "neon" : "plain");
         extendBank.publish(state);   // before the kit's pages: the store page of kind 9 is built from the model this hands over
-        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } if (laneS1p) { laneS1p->onAnswer(r2); } if (laneS2p) { laneS2p->onAnswer(r2); } if (s4p) { s4p->onAnswer(r2); } if (s5p) { s5p->onAnswer(r2); } if (laneS3p) { laneS3p->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
+        for (const FoxCommandResult& r2 : kit.takeUnclaimedResults()) { refusalPopup.onAnswer(r2); patchBank.onAnswer(r2); transmitBank.onAnswer(r2); deckOnAnswer(r2); if (laneLp) { laneLp->onAnswer(r2); } if (laneMp) { laneMp->onAnswer(r2); } if (laneS1p) { laneS1p->onAnswer(r2); } if (laneS2p) { laneS2p->onAnswer(r2); } if (s4p) { s4p->onAnswer(r2); } if (s5p) { s5p->onAnswer(r2); } if (laneS3p) { laneS3p->onAnswer(r2); } }   // an answer the kit's own poll took first: the draft waits for it
         patchBank.publish(state);    // before the kit's pages too: the Patch presets page of kind 10 is built from the model this hands over
         transmitBank.publish(state); // ... and the Transmit page of kind 11 (and the key's batch for this tick)
         // THE MAP'S LOOK, from the interface half each tick (SYSTEM > Display saves it there): the aircraft icon size, the trail width and the trail style, bounded

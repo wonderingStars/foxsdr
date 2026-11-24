@@ -1075,6 +1075,11 @@ void PatchPublisher::publish(const FoxReceiverState& state) {
 
 // A BOUNDED RUN'S READ-BACK OF THE FACES (main.cpp: `state patchface.<s|m><k>.<what>`; s = the k-th Spectrum part, m = the k-th Map part, in the draft's order). Every figure is
 // measured from the pictures and the view the faces were painted from, so a drive script reads what the eye would.
+std::string PatchPublisher::partCaption(int nodeId) const {
+    const pc::Node* n = impl_->page.draft().graph().find(static_cast<pc::NodeId>(nodeId));
+    return n != nullptr ? n->name : std::string();
+}
+
 std::string PatchPublisher::faceState(const std::string& name, std::string& out) const {
     const Impl& m = *impl_;
     if (name.size() < 4 || (name[0] != 's' && name[0] != 'm')) { return "patchface.<s|m><k>.<what>, not patchface." + name; }
