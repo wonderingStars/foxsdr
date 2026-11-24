@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/updater.hpp"
+#include "core/sys_hash.hpp"
 #include "core/sys_manifest_sig.hpp"   // wire-c
 
 #include <nlohmann/json.hpp>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -545,7 +547,110 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
         progress->store(1.0f, std::memory_order_relaxed);
     }
     outPath = dest.string();
+    recordVerifiedInstaller(outPath, info.sha256);   // F1: what the launchers re-check and hold right before they start it
     return true;
+}
+
+// ---- F1 (review R1, 0.99.114): the installer that runs is the installer that was verified ---------------------------------------------------------
+namespace {
+std::mutex g_verifiedInstallersMutex;
+std::map<std::string, std::string> g_verifiedInstallers;   // path as downloadUpdate returned it -> lower-case sha256 it was verified against
+
+std::string lowerHexOf(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'F') { c = static_cast<char>(c - 'A' + 'a'); }
+    }
+    return out;
+}
+}  // namespace
+
+void recordVerifiedInstaller(const std::string& path, const std::string& sha256) {
+    std::lock_guard<std::mutex> lk(g_verifiedInstallersMutex);
+    g_verifiedInstallers[path] = lowerHexOf(sha256);
+}
+
+void InstallerHold::release() {
+#if defined(_WIN32)
+    if (handle_ != nullptr) { ::CloseHandle(static_cast<HANDLE>(handle_)); }
+#endif
+    handle_ = nullptr;
+    held_ = false;
+}
+
+bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::string& error) {
+    hold.release();
+    error.clear();
+    const auto refuse = [&error](const char* why) {
+        error = why;
+        diagWarnf("update: the installer was not started: %s", why);   // no path, no content
+        return false;
+    };
+    std::string expected;
+    {
+        std::lock_guard<std::mutex> lk(g_verifiedInstallersMutex);
+        const auto it = g_verifiedInstallers.find(path);
+        if (it != g_verifiedInstallers.end()) { expected = it->second; }
+    }
+    if (expected.empty()) { return refuse("that file is not an installer this program verified"); }
+
+    cascade::core::sys::Sha256 hasher;
+    std::uint64_t total = 0;
+    std::vector<char> buf(64 * 1024);
+#if defined(_WIN32)
+    std::wstring wide;
+    try {
+        wide = fs::path(path).wstring();
+    } catch (...) {
+        return refuse("the installer's path cannot be read");
+    }
+    if (wide.empty()) { return refuse("the installer's path is empty"); }
+    // FILE_SHARE_READ only: while this handle lives nobody can open the file for writing or deleting, rename it or replace it; the shell and the loader only read it.
+    // FILE_FLAG_OPEN_REPARSE_POINT so a link is opened AS a link and refused below, not followed to a target nobody checked.
+    HANDLE h = ::CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
+                             nullptr);
+    if (h == INVALID_HANDLE_VALUE) { return refuse("the installer cannot be opened"); }
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!::GetFileInformationByHandle(h, &info) || (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+        ::CloseHandle(h);
+        return refuse("the installer is not a plain file");
+    }
+    for (;;) {
+        DWORD got = 0;
+        if (!::ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr)) {
+            ::CloseHandle(h);
+            return refuse("the installer cannot be read");
+        }
+        if (got == 0) { break; }
+        total += got;
+        if (total > kMaxInstallerBytes) {
+            ::CloseHandle(h);
+            return refuse("the installer is larger than any this program downloads");
+        }
+        hasher.update(buf.data(), got);
+    }
+    if (cascade::core::sys::toHex(hasher.finish().data(), 32) != expected) {
+        ::CloseHandle(h);
+        return refuse("the installer is not the file that was verified");
+    }
+    hold.handle_ = h;
+    hold.held_ = true;
+    return true;
+#else
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { return refuse("the installer cannot be opened"); }
+    while (in) {
+        in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        const std::streamsize got = in.gcount();
+        if (got <= 0) { break; }
+        total += static_cast<std::uint64_t>(got);
+        if (total > kMaxInstallerBytes) { return refuse("the installer is larger than any this program downloads"); }
+        hasher.update(buf.data(), static_cast<std::size_t>(got));
+    }
+    if (cascade::core::sys::toHex(hasher.finish().data(), 32) != expected) { return refuse("the installer is not the file that was verified"); }
+    hold.held_ = true;   // no share-mode lock off Windows: the digest check is all there is
+    return true;
+#endif
 }
 
 // UpdateCheckTask: a template now (AbandonableTask), defined in the header.

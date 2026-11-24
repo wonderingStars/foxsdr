@@ -221,6 +221,51 @@ bool downloadUpdate(const UpdateInfo& info, std::string& outPath, std::string& e
                     std::atomic<float>* progress = nullptr,
                     std::atomic<bool>* cancel = nullptr);
 
+// THE VERIFIED INSTALLER MUST BE THE ONE THAT RUNS (security review R1, finding F1, 0.99.114).
+// downloadUpdate hashes the file and renames it into a per-user temp folder under a name anyone can predict; the user then reads the banner for as long as they like
+// before pressing "Install now and restart", and ShellExecute starts whatever is at that path THEN. A process on the same account could replace the file in
+// between and borrow the elevation prompt the user expects. So the two launchers (gui/app_window.cpp launchInstaller, slint/host_duties.cpp shellOpenInstaller) call
+// holdVerifiedInstaller immediately before ShellExecute and keep the InstallerHold alive across that call:
+//   * downloadUpdate records (path, sha256) of each installer it has verified (recordVerifiedInstaller, in memory only);
+//   * holdVerifiedInstaller refuses a path this process did not verify, opens the file with READ-ONLY SHARING (nobody else can write, delete or rename it while the hold
+//     lives; reading and executing it stay allowed), refuses a link or other reparse point, re-hashes the bytes through that same handle and refuses a file whose
+//     digest is not the recorded one - so there is no gap between the check and the handle that stays open;
+//   * the caller starts the installer, then lets the hold go.
+// A refusal is the same "could not start the installer" the launchers already report, so the user sees no new wording; the reason goes to the diagnostic log (no path,
+// no content). On non-Windows builds the hold is the digest check alone.
+void recordVerifiedInstaller(const std::string& path, const std::string& sha256);
+
+class InstallerHold {
+public:
+    InstallerHold() = default;
+    ~InstallerHold() { release(); }
+    InstallerHold(InstallerHold&& other) noexcept : handle_(other.handle_), held_(other.held_) { other.handle_ = nullptr; other.held_ = false; }
+    InstallerHold& operator=(InstallerHold&& other) noexcept {
+        if (this != &other) {
+            release();
+            handle_ = other.handle_;
+            held_ = other.held_;
+            other.handle_ = nullptr;
+            other.held_ = false;
+        }
+        return *this;
+    }
+    InstallerHold(const InstallerHold&) = delete;
+    InstallerHold& operator=(const InstallerHold&) = delete;
+
+    bool held() const { return held_; }
+    void release();
+
+private:
+    friend bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::string& error);
+    void* handle_ = nullptr;   // the Windows file HANDLE; null elsewhere
+    bool held_ = false;
+};
+
+// False (and `hold` empty, `error` a short fixed sentence) when `path` was not verified by this process, cannot be opened, is a link, is over the installer size cap, or
+// no longer hashes to the digest downloadUpdate verified.
+bool holdVerifiedInstaller(const std::string& path, InstallerHold& hold, std::string& error);
+
 // What one update check came back with - the whole of it, BY VALUE, so the
 // worker that produced it writes nothing that anybody else owns.
 struct UpdateCheckOutcome {

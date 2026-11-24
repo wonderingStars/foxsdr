@@ -69,6 +69,11 @@ bool shellOpenInstaller(const std::string& path) {
         return false;
     }
     if (wide.empty()) { return false; }
+    // F1 (security review R1, 0.99.114): re-hash the file through a handle that stays open - nobody can replace it - until the shell has started it; a file that is not the
+    // one core::downloadUpdate verified is "could not start" (core/updater.hpp InstallerHold).
+    core::InstallerHold hold;
+    std::string holdError;
+    if (!core::holdVerifiedInstaller(path, hold, holdError)) { return false; }
     const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);

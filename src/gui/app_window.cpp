@@ -7704,6 +7704,11 @@ bool AppWindow::launchInstaller(const std::string& path) {
         // prompt. ShellExecuteEx returns whether activation succeeded.
         const std::wstring wide = cascade::gui::installerPathWide(path);
         if (wide.empty()) { return false; }
+        // F1 (security review R1, 0.99.114): the file is re-hashed through a handle that stays open - nobody can replace it - until the shell has started it. A file that
+        // is not the one downloadUpdate verified is "could not start", the same refusal as any other (core/updater.hpp InstallerHold).
+        cascade::core::InstallerHold hold;
+        std::string holdError;
+        if (!cascade::core::holdVerifiedInstaller(path, hold, holdError)) { return false; }
         SHELLEXECUTEINFOW sei{};
         sei.cbSize = sizeof(sei);
         // The worker exits after this call; finish any asynchronous shell activation first.
