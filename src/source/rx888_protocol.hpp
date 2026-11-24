@@ -170,38 +170,72 @@ constexpr std::uint16_t kFirmwareVersion = 0x0202;
 
 // --- the timeouts ---------------------------------------------------------
 
-// The ordinary per-control-transfer bound. The reference's Linux backend uses
-// 5000 ms for every command (Core/arch/linux/usb_device.c:359); this driver
-// splits that in two, because one command is slow and the rest are not, and
-// the slow one is not on the shutdown path. Behind every request that uses
-// THIS number is a GPIO write, a register write or a short I2C burst.
+// HOW THE FIRMWARE ANSWERS, WHICH IS WHAT THESE TWO NUMBERS ARE ABOUT. One
+// thread in the FX3 serves every vendor request (the setup callback,
+// SDDC_FX3/USBhandler.c:145). For a request that carries data, the handler
+// first calls CyU3PUsbGetEP0Data, and THAT CALL COMPLETES THE HOST'S TRANSFER
+// (FX3 SDK cyu3usb.c: it clears the setup-busy bit and takes the data). The
+// handler's own work - GPIO writes, I2C to the clock chip or the tuner, a
+// sleep - is done AFTERWARDS, on the same thread. So the host sees every
+// request answered in a few milliseconds, and the cost of a slow handler is
+// paid by the NEXT request, which is not looked at until the thread is free.
 //
-// 500 rather than 1000 BECAUSE OF THE SHUTDOWN BUDGET, and the arithmetic is
-// worth writing down. An RX888 teardown can spend, at worst: one of these
-// for the STOPFX3 in stopStreamingLocked, kReaderJoinWait for the bounded
-// join, then TWO more of these in closeDevice (the tuner to standby when the
-// radio was in VHF, and the GPIO word that unpowers both bias tees), and
+// The slow one is STARTADC: `si5351aSetFrequencyA(freq); CyU3PThreadSleep(1000);`
+// after the data has been taken (USBhandler.c:264-273, and the same
+// instructions are in the image this driver uploads, at 0x4000536C). For a
+// full second after STARTADC the firmware answers nothing.
+//
+// THE FAULT THIS REPLACED (0.99.113, the first RX888 mk2 in the field). This
+// file used to give STARTADC itself a 3000 ms bound and every other request
+// 500 ms, on the belief that the firmware sleeps BEFORE it answers. It sleeps
+// after. So STARTADC returned at once and the request sent straight after it
+// (TUNERSTDBY) ran out of its 500 ms half way through the firmware's sleep:
+// "transfer failed while stopping the VHF tuner: a control transfer did not
+// answer within its timeout", 511 ms after the firmware was loaded, on every
+// open of every real radio. The stand-in the tests used answered everything
+// at once, so nothing showed it.
+//
+// The reference host never meets this because it never gives up early: CyAPI's
+// control endpoint waits 10 seconds (Core/arch/win32/CyAPI/CyAPI.cpp, "10 Sec
+// timeout is default") and the Linux backend 5 (Core/arch/linux/usb_device.c).
+
+// EVERY REQUEST THAT IS NOT ON THE WAY OUT: the open, a tune, a gain, a mode
+// change, the start of the stream. Long enough to wait behind the firmware
+// finishing whatever came before - three times STARTADC's second, and the
+// same for the tuner's I2C work after TUNERINIT and TUNERTUNE, whose length on
+// a real R828D is not known here. Never spent on a healthy radio except as
+// that wait; on a radio that has stopped answering it is how long the person
+// waits to be told so.
+constexpr std::chrono::milliseconds kSetupTimeout{3000};
+constexpr unsigned kSetupTimeoutMs = static_cast<unsigned>(kSetupTimeout.count());
+
+// THE THREE REQUESTS ON THE WAY OUT: the STOPFX3 in stopStreamingLocked, and
+// in closeDevice the tuner to standby (when this session started it) and the
+// GPIO word that unpowers both bias tees. (The bootloader's block writes use
+// it too: a bootloader is not this firmware, it takes a block at once or not
+// at all, and that path is unchanged from the one that loaded the first field
+// radio's firmware in 187 ms.)
+//
+// 500 BECAUSE OF THE SHUTDOWN BUDGET, and the arithmetic is worth writing
+// down. An RX888 teardown can spend, at worst: one of these for the STOPFX3,
+// kReaderJoinWait for the bounded join, two more of these in closeDevice, and
 // finally the transport's kAbortDrainWait. At 500 that is
 // 500 + 1000 + 500 + 500 + 250 = 2750 ms, which fits inside the 3000 ms the
 // Soapy column already charges and which an RX888 teardown is spent INSTEAD
 // OF. At 1000 it would be 4250 and would not.
+//
+// It is enough for them: by the time a stream is being stopped the firmware
+// has long finished its start-up work, and what STOPFX3 itself leaves behind
+// is a 10 ms sleep (USBhandler.c:479-487). A teardown request that does run
+// out is logged and the radio is released anyway; per the SDK the firmware
+// then drops the unfinished request by itself (it waits at most 5 seconds for
+// the data, and stops waiting as soon as a new request arrives).
 //
 // A std::chrono duration rather than a bare unsigned so
 // tests/test_shutdown_budget.cpp's scan can DISCOVER it; the transport takes
 // milliseconds as an unsigned, so the call sites convert.
 constexpr std::chrono::milliseconds kControlTimeout{500};
 constexpr unsigned kControlTimeoutMs = static_cast<unsigned>(kControlTimeout.count());
-
-// STARTADC, AND ONLY STARTADC. Its firmware handler programs the Si5351 and
-// then SLEEPS FOR A FULL SECOND before it answers - SDDC_FX3/USBhandler.c:
-// 264-273, `si5351aSetFrequencyA(freq); CyU3PThreadSleep(1000);` - so the
-// ordinary bound above would time out on the one request that ALWAYS takes a
-// second. This is the number the reference's blanket 5000 was really for.
-//
-// It is NOT on the teardown path: the ADC clock is set at open and at a
-// sample-rate change, never at stop.
-constexpr std::chrono::milliseconds kAdcStartTimeout{3000};
-constexpr unsigned kAdcStartTimeoutMs = static_cast<unsigned>(kAdcStartTimeout.count());
 
 // --- the bulk stream ------------------------------------------------------
 

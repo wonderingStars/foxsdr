@@ -526,6 +526,14 @@ thereafter.
 FoxSDR has to reach both: `04B4:00F3` (the FX3 bootloader, before the
 firmware) and `04B4:00F1` (the radio, after it). See [Installing](MANUAL.md#installing).
 
+**If FoxSDR says the RX888 is not answering**, the radio is on the USB bus but
+did not answer FoxSDR's first request, which is asked twice. Unplug the RX888,
+wait ten seconds, plug it in again, then choose it. If you have just changed
+its driver with Zadig while it was running, or another SDR program has been
+using it, close that program and replug the radio before the first use.
+(Opening the radio takes about a second longer than you might expect: the
+firmware pauses for a second after its ADC clock is set.)
+
 Direct sampling gives the whole 0 – 32 MHz band from the 64 MHz ADC clock,
 and above that the R828D tuner takes over up to 1.75 GHz. The sample rates
 offered are 2, 4, 8, 16 and 32 MS/s complex, each a power-of-two decimation

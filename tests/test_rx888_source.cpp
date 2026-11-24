@@ -49,6 +49,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/health_events.hpp"
 #include "rx888_fake_usb.hpp"
 #include "source/rx888_firmware.hpp"
 #include "source/rx888_protocol.hpp"
@@ -153,6 +154,25 @@ bool waitFor(Fn fn, std::chrono::milliseconds bound) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     return fn();
+}
+
+// True when the transcript holds a request with this number.
+bool sentRequest(const std::vector<Rx888ControlRecord>& c, int request) {
+    for (const Rx888ControlRecord& r : c) {
+        if (r.request == static_cast<std::uint8_t>(request)) { return true; }
+    }
+    return false;
+}
+
+// True when the stand-in firmware saw nothing it has no good answer to: no
+// request out of order, none with the wrong length, none the mk2 does not know
+// (rx888_fake_usb.hpp, violations()). Each one found is printed.
+bool noViolations(const char* label, const FakeRx888Usb& fake) {
+    const std::vector<std::string> v = fake.violations();
+    for (const std::string& s : v) {
+        std::printf("     %s: the firmware would not accept: %s\n", label, s.c_str());
+    }
+    return v.empty();
 }
 
 // Attaches a bus to a source. The bus outlives the source in every test here,
@@ -427,7 +447,9 @@ int main() {
         Rx888Source src;
         attach(src, bus);
 
-        CHECK(src.open(""));
+        const bool opened = src.open("");
+        if (!opened) { std::printf("     the open failed: %s\n", src.lastError()); }
+        CHECK(opened);
         CHECK(src.isOpen());
         CHECK(!src.firmwareWasUploaded());
         CHECK(src.model() == rx888::Model::Rx888mk2);
@@ -435,7 +457,13 @@ int main() {
         CHECK(std::string(src.name()) == "RX888: RX888 mkII (serial SDDC0001)");
 
         const std::vector<Rx888ControlRecord> c = fake->controls();
-        CHECK(c.size() == 7);
+        // SIX requests, and none of them a tuner request: HF is direct
+        // sampling and the tuner is not touched until VHF is asked for.
+        CHECK(c.size() == 6);
+        CHECK(!sentRequest(c, 0xB8));
+        CHECK(!sentRequest(c, 0xB4));
+        CHECK(!sentRequest(c, 0xB5));
+        CHECK(noViolations("open", *fake));
         // TESTFX3: IN, four bytes, value 0 (value 1 is the firmware's debug
         // mode - FX3handler.cpp:190-196 and USBhandler.c:504).
         CHECK(isControl("TESTFX3", at(c, 0), true, 0xAC, 0, 0));
@@ -444,26 +472,27 @@ int main() {
         // keeps whatever the last application left it at.
         CHECK(isControl("GPIOFX3", at(c, 1), false, 0xAD, 0, 0));
         CHECK(sameBytes("GPIOFX3", at(c, 1).data, le32(0)));
-        // STARTADC: the ADC clock in Hz, and the ONLY request given the long
-        // timeout, because its handler sleeps a second
-        // (SDDC_FX3/USBhandler.c:264-273).
+        // STARTADC: the ADC clock in Hz. The firmware answers it at once and
+        // THEN programs the clock chip and sleeps a second
+        // (SDDC_FX3/USBhandler.c:264-273), so it is the request AFTER this
+        // one that waits - block 21 holds that.
         CHECK(isControl("STARTADC", at(c, 2), false, 0xB2, 0, 0));
         CHECK(sameBytes("STARTADC", at(c, 2).data, le32(64000000)));
-        CHECK(at(c, 2).timeoutMs == 3000);
-        // ... and every other request gets the ordinary one, which is short
-        // enough that a whole RX888 teardown fits inside the shutdown budget.
-        CHECK(at(c, 1).timeoutMs == 500);
-        CHECK(at(c, 0).timeoutMs == 500);
-        // HF mode: the tuner to standby, then the antenna switch, then the
-        // two HF gains (RX888R2Radio.cpp:81-90).
-        CHECK(isControl("TUNERSTDBY", at(c, 3), false, 0xB8, 0, 0));
-        CHECK(sameBytes("TUNERSTDBY", at(c, 3).data, {0x00}));
-        CHECK(isControl("GPIOFX3 (HF)", at(c, 4), false, 0xAD, 0, 0));
-        CHECK(sameBytes("GPIOFX3 (HF)", at(c, 4).data, le32(0)));
+        // EVERY request of an open after the first is given the patient bound,
+        // because any of them may be waiting behind the firmware finishing the
+        // one before. The first has nothing before it and is asked twice
+        // instead, 1000 ms and then 2000 (block 23).
+        CHECK(at(c, 0).timeoutMs == 1000);
+        for (std::size_t i = 1; i < c.size(); ++i) { CHECK(c[i].timeoutMs == 3000); }
+        // HF mode: the antenna switch, then the two HF gains
+        // (RX888R2Radio.cpp:81-90). No TUNERSTDBY: this driver never started
+        // the tuner, and a receiver sampling HF directly must not depend on it.
+        CHECK(isControl("GPIOFX3 (HF)", at(c, 3), false, 0xAD, 0, 0));
+        CHECK(sameBytes("GPIOFX3 (HF)", at(c, 3).data, le32(0)));
         // SETARGFX3: the value in wValue, the argument number in wIndex, one
         // zero byte of payload (FX3handler.cpp:171-185). DAT31_ATT is 10.
-        CHECK(isControl("DAT31_ATT", at(c, 5), false, 0xB6, 0, 10));
-        CHECK(sameBytes("DAT31_ATT", at(c, 5).data, {0x00}));
+        CHECK(isControl("DAT31_ATT", at(c, 4), false, 0xB6, 0, 10));
+        CHECK(sameBytes("DAT31_ATT", at(c, 4).data, {0x00}));
         // AD8340_VGA is 11, and 0 dB of IF gain is the nearest entry of the
         // reference's own low-gain curve, 20*log10(0.059*(i+1)): i = 16 gives
         // 0.026 dB, which is the closest of the 127. The code is i+1 with no
@@ -481,8 +510,8 @@ int main() {
                 }
             }
             CHECK(want == 16);
-            CHECK(isControl("AD8340_VGA", at(c, 6), false, 0xB6, want + 1, 11));
-            CHECK(sameBytes("AD8340_VGA", at(c, 6).data, {0x00}));
+            CHECK(isControl("AD8340_VGA", at(c, 5), false, 0xB6, want + 1, 11));
+            CHECK(sameBytes("AD8340_VGA", at(c, 5).data, {0x00}));
         }
 
         // The opened state, as the panel will read it.
@@ -603,9 +632,10 @@ int main() {
         // The radio that came back was then opened and configured exactly as
         // one that had never needed the firmware.
         const std::vector<Rx888ControlRecord> c = run->controls();
-        CHECK(c.size() == 7);
+        CHECK(c.size() == 6);
         CHECK(isControl("TESTFX3", at(c, 0), true, 0xAC, 0, 0));
         CHECK(isControl("STARTADC", at(c, 2), false, 0xB2, 0, 0));
+        CHECK(noViolations("open after the firmware upload", *run));
         src.closeDevice();
     }
 
@@ -801,7 +831,15 @@ int main() {
         CHECK(!c.empty());
         if (!c.empty()) {
             CHECK(sameBytes("SHDWN", c.back().data, le32(1u << 5)));
+            // On the way out the short bound is used: a teardown must fit the
+            // shutdown budget (tests/test_shutdown_budget.cpp).
+            CHECK(c.back().timeoutMs == 500);
         }
+        // The tuner was never started in this session, so closing sends it
+        // nothing: one request, the GPIO word.
+        CHECK(c.size() == 1);
+        CHECK(!sentRequest(c, 0xB8));
+        CHECK(noViolations("GPIO controls and close", *fake));
     }
 
     // =====================================================================
@@ -878,6 +916,7 @@ int main() {
         CHECK(std::string(src.lastError()).find("follows the centre frequency") !=
               std::string::npos);
         CHECK(!src.setAntenna("LOOP"));
+        CHECK(noViolations("VHF and back", *fake));
         src.closeDevice();
     }
 
@@ -1203,6 +1242,7 @@ int main() {
             if (r.request == 0xAA) {
                 sawStart = true;
                 CHECK(sameBytes("STARTFX3", r.data, {0x00}));
+                CHECK(r.timeoutMs == 3000);  // a start may wait behind the firmware
             }
         }
         CHECK(sawStart);
@@ -1225,9 +1265,11 @@ int main() {
             if (r.request == 0xAB) {
                 sawStop = true;
                 CHECK(sameBytes("STOPFX3", r.data, {0x00}));
+                CHECK(r.timeoutMs == 500);  // a stop is on the teardown path
             }
         }
         CHECK(sawStop);
+        CHECK(noViolations("streaming", *fake));
         src.closeDevice();
     }
 
@@ -1405,6 +1447,349 @@ int main() {
         CHECK(line.find("with samples ") != std::string::npos);
         CHECK(line.find("overflows ") != std::string::npos);
         CHECK(line.find("longest gap ") != std::string::npos);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 21. THE FIRMWARE'S SECOND OF SILENCE AFTER STARTADC - the fault of the
+    //     first RX888 mk2 in the field (0.99.113, 2026-11-24). The firmware
+    //     answers STARTADC at once and then sleeps 1000 ms on the one thread
+    //     that serves every request, so the NEXT request waits about a second.
+    //     With a 500 ms bound on that next request no real radio could be
+    //     opened: the user's log ends "transfer failed while stopping the VHF
+    //     tuner: a control transfer did not answer within its timeout", 511 ms
+    //     after the firmware was loaded.
+    // =====================================================================
+    {
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0021");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        Rx888Source src;
+        attach(src, bus);
+        const bool opened = src.open("");
+        if (!opened) { std::printf("     the open failed: %s\n", src.lastError()); }
+        CHECK(opened);
+        const std::vector<Rx888ControlRecord> c = fake->controls();
+        std::size_t adc = c.size();
+        for (std::size_t i = 0; i < c.size(); ++i) {
+            if (c[i].request == 0xB2) { adc = i; }
+        }
+        CHECK(adc < c.size());
+        // The request after STARTADC waited the firmware's sleep out and was
+        // answered - it did not give up half way through it.
+        const Rx888ControlRecord& next = at(c, adc + 1);
+        std::printf("     the request after STARTADC (0x%02x) waited %u ms of its %u ms bound\n",
+                    static_cast<unsigned>(next.request), next.waitedMs, next.timeoutMs);
+        CHECK(next.waitedMs == 1000);
+        CHECK(!next.timedOut);
+        // No request of the open can be outlasted by that sleep, with room to
+        // spare: twice the sleep at least.
+        for (std::size_t i = 0; i < c.size(); ++i) {
+            CHECK(!c[i].timedOut);
+            if (i > 0) { CHECK(c[i].timeoutMs >= 2000); }
+        }
+        CHECK(fake->nowMs() >= 1000);
+        // And the radio then streams and closes without a request timing out.
+        CHECK(src.start());
+        src.stop();
+        src.closeDevice();
+        for (const Rx888ControlRecord& r : fake->controls()) { CHECK(!r.timedOut); }
+        CHECK(noViolations("a whole session", *fake));
+    }
+
+    // =====================================================================
+    // 22. HF NEEDS NO TUNER. Whatever a TUNERSTDBY sent before any TUNERINIT
+    //     does to a given unit (the first field report suspected it of
+    //     stopping the firmware; the vendor's host sends it at every start),
+    //     a session that stays below 32 MHz never sends the tuner anything.
+    //     The stand-in here DOES stop for good on that request, and the
+    //     session still opens, tunes, changes gain, streams and closes.
+    // =====================================================================
+    {
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0022");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->standbyBeforeInitHangs.store(true);
+        Rx888Source src;
+        attach(src, bus);
+        const bool opened = src.open("");
+        if (!opened) { std::printf("     the open failed: %s\n", src.lastError()); }
+        CHECK(opened);
+        CHECK(src.setCenterFrequencyHz(7.1e6));
+        CHECK(src.setGainDb("HF ATT", -10.0));
+        CHECK(src.setGainDb("HF IF", 6.0));
+        CHECK(src.setDither(true));
+        CHECK(src.setSampleRateHz(2.0e6));
+        CHECK(src.start());
+        src.stop();
+        src.closeDevice();
+        CHECK(!src.deviceDead());
+        const std::vector<Rx888ControlRecord> c = fake->controls();
+        for (const Rx888ControlRecord& r : c) {
+            CHECK(r.request != 0xB8);  // TUNERSTDBY
+            CHECK(r.request != 0xB4);  // TUNERINIT
+            CHECK(r.request != 0xB5);  // TUNERTUNE
+            CHECK(!(r.request == 0xB6 && r.index >= 1 && r.index <= 4));  // the R82XX arguments
+            CHECK(!r.timedOut);
+        }
+        CHECK(fake->standbyBeforeInitCount() == 0);
+        CHECK(noViolations("an HF-only session", *fake));
+    }
+
+    // =====================================================================
+    // 23. A SILENT RADIO. It is on the bus and answers nothing: what the same
+    //     user's radio did three times before the power cycle, when another
+    //     program's firmware was already running on it. It is asked twice;
+    //     then the person is told the one thing that helps, in one plain
+    //     sentence, and the report keeps which request it was and that it
+    //     timed out.
+    // =====================================================================
+    {
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0023");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->controlThreadDead.store(true);
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(!src.open(""));
+        CHECK(!src.isOpen());
+        const std::string why = src.lastError();
+        std::printf("     a stuck radio says: %s\n", why.c_str());
+        CHECK(why.find("Unplug the RX888, wait ten seconds, plug it in again, then choose it") !=
+              std::string::npos);
+        // The precise cause is still there for the failure report.
+        CHECK(why.find("reading the hardware information") != std::string::npos);
+        CHECK(why.find("did not answer within its timeout") != std::string::npos);
+        // ... and the old sentence that used to be written over it is gone.
+        CHECK(why.find("did not answer its hardware id") == std::string::npos);
+        CHECK(src.faultedWhile() == "reading the hardware information");
+        // It was asked twice and nothing else was sent: 1000 ms, then 2000,
+        // which together are the patient bound and no more.
+        const std::vector<Rx888ControlRecord> c = fake->controls();
+        CHECK(c.size() == 2);
+        CHECK(isControl("TESTFX3", at(c, 0), true, 0xAC, 0, 0));
+        CHECK(isControl("TESTFX3 again", at(c, 1), true, 0xAC, 0, 0));
+        CHECK(at(c, 0).timeoutMs == 1000);
+        CHECK(at(c, 1).timeoutMs == 2000);
+        CHECK(fake->nowMs() == 3000);
+        // The failure report files it as a timeout.
+        CHECK(cascade::core::health::classifyRadioOpen("rx888", why) ==
+              cascade::core::health::RadioReason::Timeout);
+        src.closeDevice();
+        CHECK(fake->controlCount() == 2);  // and closing a radio that never opened sends nothing
+    }
+    {
+        // The same after this driver's own firmware upload: the image went in,
+        // the radio came back, and it answers nothing.
+        FakeRx888Bus bus;
+        bus.addBootloader("0000000000000000", "SDDC0023B");
+        std::shared_ptr<FakeRx888Usb> run = bus.deviceFor(0x00F1);
+        run->controlThreadDead.store(true);
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(!src.open(""));
+        const std::string why = src.lastError();
+        CHECK(why.find("Unplug the RX888, wait ten seconds, plug it in again, then choose it") !=
+              std::string::npos);
+        CHECK(why.find("reading the hardware information") != std::string::npos);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 24. THE PRECISE ERROR SURVIVES to the person and the failure report.
+    //     0.99.113 wrote "the RX888 did not answer its hardware id" over every
+    //     failure of the first request, so the report could not tell a
+    //     timeout from a refusal from a short answer.
+    // =====================================================================
+    {
+        // A first request that FAILS AT ONCE (not a timeout) keeps its own words.
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0024");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->failingRequests.push_back(0xAC);  // TESTFX3
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(!src.open(""));
+        const std::string why = src.lastError();
+        std::printf("     a refused first request says: %s\n", why.c_str());
+        CHECK(why.find("reading the hardware information") != std::string::npos);
+        CHECK(why.find("the device is gone") != std::string::npos);
+        CHECK(why.find("did not answer its hardware id") == std::string::npos);
+        src.closeDevice();
+    }
+    {
+        // A SHORT ANSWER is said as one, with the count.
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0024B");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->testFx3ReplyBytes.store(2);
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(!src.open(""));
+        const std::string why = src.lastError();
+        std::printf("     a short answer says: %s\n", why.c_str());
+        CHECK(why.find("2 bytes instead of 4") != std::string::npos);
+        CHECK(fake->controlCount() == 1);  // a short answer is an answer: not asked again
+        src.closeDevice();
+    }
+    {
+        // A radio that stops answering LATER in the open names the request it
+        // stopped at, says it timed out, and gives the same instruction.
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0024C");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->dieAfterRequest.store(0xB2);  // answers STARTADC, then nothing
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(!src.open(""));
+        CHECK(!src.isOpen());
+        const std::string why = src.lastError();
+        std::printf("     a radio that stops after STARTADC says: %s\n", why.c_str());
+        CHECK(why.find("switching to the HF antenna") != std::string::npos);
+        CHECK(why.find("did not answer within its timeout") != std::string::npos);
+        CHECK(why.find("Unplug the RX888, wait ten seconds, plug it in again, then choose it") !=
+              std::string::npos);
+        CHECK(src.faultedWhile() == "switching to the HF antenna");
+        CHECK(cascade::core::health::classifyRadioOpen("rx888", why) ==
+              cascade::core::health::RadioReason::Timeout);
+        src.closeDevice();
+    }
+
+    // =====================================================================
+    // 25. THE TUNER'S OWN SET-UP MAY BE SLOW. TUNERINIT and TUNERTUNE are
+    //     answered at once like every request and their I2C work is done
+    //     afterwards, so the request AFTER each one waits for it. How long a
+    //     real R828D takes is not known here; a driver that allowed only
+    //     half a second would fail the day it took longer.
+    // =====================================================================
+    {
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0025");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->tunerInitWorkMs.store(800);
+        fake->tunerTuneWorkMs.store(700);
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(src.open(""));
+        fake->clearControls();
+        const bool tuned = src.setCenterFrequencyHz(145.5e6);
+        if (!tuned) { std::printf("     the VHF tune failed: %s\n", src.lastError()); }
+        CHECK(tuned);
+        CHECK(src.vhfMode());
+        CHECK(src.setCenterFrequencyHz(146.0e6));
+        CHECK(src.setGainDb("VHF RF", 20.7));
+        const std::vector<Rx888ControlRecord> c = fake->controls();
+        bool sawInitWait = false;
+        for (std::size_t i = 0; i < c.size(); ++i) {
+            CHECK(!c[i].timedOut);
+            if (i > 0 && c[i - 1].request == 0xB4) {
+                sawInitWait = true;
+                CHECK(c[i].waitedMs == 800);
+            }
+        }
+        CHECK(sawInitWait);
+        CHECK(!src.deviceDead());
+        CHECK(noViolations("a slow tuner", *fake));
+
+        // A STOP THAT IS THE FIRST HALF OF A RATE CHANGE IS NOT A SHUTDOWN.
+        // Straight after a retune the firmware is still doing the tuner's
+        // work, so the STOPFX3 of a rate change waits for it - with the short
+        // teardown bound it would run out and the radio would be given up on.
+        CHECK(src.start());
+        fake->clearControls();
+        CHECK(src.setCenterFrequencyHz(146.5e6));
+        const bool rated = src.setSampleRateHz(4.0e6);
+        if (!rated) { std::printf("     the rate change failed: %s\n", src.lastError()); }
+        CHECK(rated);
+        CHECK(src.running());
+        bool sawPatientStop = false;
+        for (const Rx888ControlRecord& r : fake->controls()) {
+            CHECK(!r.timedOut);
+            if (r.request == 0xAB) {
+                sawPatientStop = true;
+                CHECK(r.waitedMs == 700);
+                CHECK(r.timeoutMs == 3000);
+            }
+        }
+        CHECK(sawPatientStop);
+        CHECK(!src.deviceDead());
+        src.stop();
+        CHECK(noViolations("a rate change after a slow tune", *fake));
+
+        // CLOSING FROM VHF stops the tuner this session started, then shuts
+        // the front end down; both on the short teardown bound.
+        fake->clearControls();
+        src.closeDevice();
+        const std::vector<Rx888ControlRecord> end = fake->controls();
+        CHECK(end.size() == 2);
+        CHECK(isControl("TUNERSTDBY at close", at(end, 0), false, 0xB8, 0, 0));
+        CHECK(at(end, 0).timeoutMs == 500);
+        CHECK(isControl("SHDWN at close", at(end, 1), false, 0xAD, 0, 0));
+        CHECK(sameBytes("SHDWN at close", at(end, 1).data, le32(1u << 5)));
+        CHECK(at(end, 1).timeoutMs == 500);
+        CHECK(fake->standbyBeforeInitCount() == 0);
+    }
+    {
+        // VHF and back to HF: the tuner was stopped at the switch, so closing
+        // does not stop it a second time.
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0025B");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(src.open(""));
+        CHECK(src.setCenterFrequencyHz(145.5e6));
+        CHECK(src.setCenterFrequencyHz(10.0e6));
+        fake->clearControls();
+        src.closeDevice();
+        const std::vector<Rx888ControlRecord> end = fake->controls();
+        CHECK(end.size() == 1);
+        CHECK(!sentRequest(end, 0xB8));
+        CHECK(noViolations("VHF, HF, close", *fake));
+    }
+
+    // =====================================================================
+    // 26. THE FIRST REQUEST IS ASKED TWICE. A radio whose USB link had gone
+    //     idle and lost the request that woke it (one candidate for the field
+    //     radio's silence: it had been answering minutes before, and nothing
+    //     had been sent to it since) answers the second one, and opens.
+    // =====================================================================
+    {
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0026");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->deafToFirstRequests.store(1);
+        Rx888Source src;
+        attach(src, bus);
+        const bool opened = src.open("");
+        if (!opened) { std::printf("     the open failed: %s\n", src.lastError()); }
+        CHECK(opened);
+        CHECK(!src.deviceDead());
+        CHECK(!src.faulted());
+        CHECK(src.model() == rx888::Model::Rx888mk2);
+        const std::vector<Rx888ControlRecord> c = fake->controls();
+        CHECK(c.size() == 7);
+        CHECK(isControl("TESTFX3, lost", at(c, 0), true, 0xAC, 0, 0));
+        CHECK(at(c, 0).timedOut);
+        CHECK(isControl("TESTFX3, answered", at(c, 1), true, 0xAC, 0, 0));
+        CHECK(!at(c, 1).timedOut);
+        CHECK(sameBytes("TESTFX3, answered", at(c, 1).data, {0x04, 0x02, 0x02, 0x00}));
+        CHECK(noViolations("an open that had to ask twice", *fake));
+        src.closeDevice();
+    }
+    {
+        // Two lost requests are a silent radio: the instruction, not a third ask.
+        FakeRx888Bus bus;
+        bus.addStreamer("SDDC0026B");
+        std::shared_ptr<FakeRx888Usb> fake = bus.deviceFor(0x00F1);
+        fake->deafToFirstRequests.store(2);
+        Rx888Source src;
+        attach(src, bus);
+        CHECK(!src.open(""));
+        CHECK(std::string(src.lastError())
+                  .find("Unplug the RX888, wait ten seconds, plug it in again, then choose it") !=
+              std::string::npos);
+        CHECK(fake->controlCount() == 2);
         src.closeDevice();
     }
 

@@ -33,6 +33,38 @@
 // bounded join's whole reason for existing), a bootloader that refuses the
 // image, and a control request that fails. Each of those is one flag here.
 //
+// IT KEEPS THE FIRMWARE'S TIME AND ORDER TOO (added 2026-11-24, after the first
+// RX888 mk2 in the field could not be opened). The first version of this file
+// answered every request at once, and the driver passed every test against it
+// while no real radio could be opened at all. What the real firmware does, read
+// from the vendor's published SDDC_FX3/USBhandler.c (MIT) and from Cypress's
+// FX3 SDK 1.3.1 cyu3usb.c (CyU3PUsbGetEP0Data):
+//
+//   - ONE thread serves every vendor request. A request that carries data is
+//     ANSWERED AS SOON AS ITS DATA HAS ARRIVED (the SDK acknowledges it inside
+//     CyU3PUsbGetEP0Data), and the handler's own work is done AFTERWARDS. So
+//     the cost of a slow handler is paid by the NEXT request, which waits.
+//   - STARTADC's handler programs the clock chip and then sleeps 1000 ms
+//     (USBhandler.c:264-273; the same instructions are in the image this
+//     driver uploads). The request after it waits about a second.
+//   - STOPFX3's sleeps 10 ms (:479-487). The tuner requests do I2C work whose
+//     length is not known here; a test sets it.
+//   - A request whose own timeout runs out first is NOT answered, and the
+//     firmware then waits (up to 5000 ms, looking every 100 ms for a new
+//     request) for data that will never come.
+//   - A firmware whose control thread has stopped (the vendor's CheckStatus()
+//     loops for ever after a failed system call, Support.c:127-144; an I2C
+//     transfer has no bus timeout, i2cmodule.c:30) stays on the bus and answers
+//     nothing: `controlThreadDead`.
+//   - The tuner requests have an order: TUNERINIT fills the structure that
+//     TUNERTUNE and the two R82XX arguments use. A request sent out of order,
+//     with the wrong length, or one the mk2's firmware has no case for is
+//     recorded in violations().
+//
+// TIME HERE IS VIRTUAL: a clock that moves only when a request waits or times
+// out. Nothing sleeps, so the suite is no slower and no test can pass or fail
+// by how busy the machine is.
+//
 // Everything is guarded, like the HackRF's fake and unlike the shared
 // src/usb/usb_fake.hpp: Rx888Source's reader thread calls readBulk()
 // concurrently with control transfers on the GUI thread, deliberately, so a
@@ -69,7 +101,19 @@ struct Rx888ControlRecord {
     // answered with - so a test can check what the driver was told as well as
     // what it asked.
     std::vector<std::uint8_t> data;
+    // How long the firmware kept this request waiting before it took it, on
+    // the fake's virtual clock, and whether the request's own timeout ran out
+    // first (then it was never answered).
+    unsigned waitedMs = 0;
+    bool timedOut = false;
 };
+
+// The sentence both real transports report for a control transfer that ran out
+// of time (winusb_device.cpp and usbfs_device.cpp; tests/test_winusb_abandon.cpp
+// holds the WinUSB one).
+inline const char* rx888FakeTimeoutText() {
+    return "a control transfer did not answer within its timeout";
+}
 
 class FakeRx888Usb : public cascade::usb::UsbDevice {
 public:
@@ -95,6 +139,45 @@ public:
     // The bootloader refuses any write whose destination address is at or
     // past this. Zero means it refuses nothing.
     std::atomic<std::uint32_t> refuseWritesAtOrAbove{0};
+
+    // --- the firmware's time and order (see the file header) ----------------
+    // Virtual milliseconds the control thread is busy AFTER it has answered
+    // each of these requests.
+    std::atomic<unsigned> adcStartSleepMs{1000};  // USBhandler.c:264-273
+    std::atomic<unsigned> stopSleepMs{10};        // USBhandler.c:479-487
+    std::atomic<unsigned> tunerInitWorkMs{0};     // I2C work; not known for a real R828D
+    std::atomic<unsigned> tunerTuneWorkMs{0};
+    // The control thread has stopped: on the bus, answering nothing.
+    std::atomic<bool> controlThreadDead{false};
+    // The thread stops after it has answered this request (0 = never).
+    std::atomic<std::uint8_t> dieAfterRequest{0};
+    // The theory of the first field report: a TUNERSTDBY before any TUNERINIT
+    // stops the control thread. NOT what the vendor's source or its own host
+    // show (the host sends exactly that at every start in HF); kept so a test
+    // can prove the driver's HF path does not depend on which is true.
+    std::atomic<bool> standbyBeforeInitHangs{false};
+    // The next N requests never reach the firmware at all - a USB link that
+    // had gone idle and lost them - and are answered from then on.
+    std::atomic<int> deafToFirstRequests{0};
+    // How many bytes TESTFX3 answers with (the firmware sends four).
+    std::atomic<unsigned> testFx3ReplyBytes{4};
+
+    // Requests the real firmware has no good answer to: sent out of order,
+    // with the wrong length, or unknown to the mk2. Empty on every healthy run.
+    std::vector<std::string> violations() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return violations_;
+    }
+    // The virtual clock, in milliseconds since the fake was made.
+    std::uint64_t nowMs() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return nowMs_;
+    }
+    // TUNERSTDBY requests that arrived before any TUNERINIT.
+    int standbyBeforeInitCount() const { return standbyBeforeInit_.load(); }
+    bool tunerInitialised() const { return tunerInit_.load(); }
+    bool adcStarted() const { return adcStarted_.load(); }
+    std::uint32_t gpioWord() const { return gpioWord_.load(); }
 
     // What readBulk does once the scripted queue is empty.
     enum class Exhausted {
@@ -167,6 +250,23 @@ public:
         rec.index = index;
         rec.timeoutMs = timeoutMs;
         if (data != nullptr && len > 0) { rec.data.assign(data, data + len); }
+        if (identity_ == Identity::Streamer && !fails(request)) {
+            // The running firmware: its one control thread takes the request
+            // when it is free, or the request's own timeout runs out first.
+            std::lock_guard<std::mutex> lk(mutex_);
+            const bool taken = admitLocked(rec);
+            controls_.push_back(rec);
+            if (!taken) {
+                lastError_ = rx888FakeTimeoutText();
+                return -1;
+            }
+            if (!serveOutLocked(rec)) {
+                lastError_ = "fake: the firmware stalled an unknown vendor request";
+                return -1;
+            }
+            requestCount.fetch_add(1);
+            return static_cast<int>(len);
+        }
         {
             std::lock_guard<std::mutex> lk(mutex_);
             controls_.push_back(rec);
@@ -231,22 +331,32 @@ public:
             return -1;
         }
 
-        int answered = 0;
-        if (request == 0xAC) {  // TESTFX3
-            // SDDC_FX3/USBhandler.c:496-503, in that order.
-            const std::uint8_t reply[4] = {model, static_cast<std::uint8_t>(firmware >> 8),
-                                           static_cast<std::uint8_t>(firmware & 0xFF),
-                                           requestCount.load()};
-            const std::size_t n = std::min<std::size_t>(len, sizeof(reply));
-            if (data != nullptr && n > 0) { std::memcpy(data, reply, n); }
-            answered = static_cast<int>(n);
-            requestCount.fetch_add(1);
-        }
-        if (data != nullptr && answered > 0) { rec.data.assign(data, data + answered); }
-        {
-            std::lock_guard<std::mutex> lk(mutex_);
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (!admitLocked(rec)) {
             controls_.push_back(rec);
+            lastError_ = rx888FakeTimeoutText();
+            return -1;
         }
+        if (request != 0xAC) {
+            // The driver sends one read, TESTFX3. The firmware's other two
+            // (raw I2C, its debug console) are requests it must never send.
+            violations_.push_back("an IN request other than TESTFX3: 0x" + hex2(request));
+            controls_.push_back(rec);
+            lastError_ = "fake: the firmware stalled an unknown vendor request";
+            return -1;
+        }
+        // SDDC_FX3/USBhandler.c:496-503, in that order.
+        const std::uint8_t reply[4] = {model, static_cast<std::uint8_t>(firmware >> 8),
+                                       static_cast<std::uint8_t>(firmware & 0xFF),
+                                       requestCount.load()};
+        const std::size_t n = std::min<std::size_t>(std::min<std::size_t>(len, sizeof(reply)),
+                                                    testFx3ReplyBytes.load());
+        if (data != nullptr && n > 0) { std::memcpy(data, reply, n); }
+        const int answered = static_cast<int>(n);
+        requestCount.fetch_add(1);
+        if (data != nullptr && answered > 0) { rec.data.assign(data, data + answered); }
+        controls_.push_back(rec);
+        afterAnswerLocked(request, 0);
         return answered;
     }
 
@@ -323,8 +433,156 @@ private:
         return false;
     }
 
+    static std::string hex2(unsigned v) {
+        static const char* const kDigits = "0123456789abcdef";
+        std::string out;
+        out += kDigits[(v >> 4) & 0xF];
+        out += kDigits[v & 0xF];
+        return out;
+    }
+
+    // THE CONTROL THREAD'S QUEUE. True when the firmware takes the request
+    // (its data stage completes, the host's transfer succeeds); false when
+    // the request's own timeout runs out first. mutex_ held.
+    bool admitLocked(Rx888ControlRecord& rec) {
+        if (deafToFirstRequests.load() > 0) {
+            deafToFirstRequests.fetch_sub(1);
+            nowMs_ += rec.timeoutMs;
+            rec.waitedMs = rec.timeoutMs;
+            rec.timedOut = true;
+            return false;  // the firmware never saw it, so nothing is left unfinished
+        }
+        if (controlThreadDead.load() || dead_) {
+            nowMs_ += rec.timeoutMs;
+            rec.waitedMs = rec.timeoutMs;
+            rec.timedOut = true;
+            return false;
+        }
+        std::uint64_t ready = busyUntilMs_;
+        if (abandoned_) {
+            // The thread, once free, took the abandoned request and is
+            // waiting for its data; it looks for a new request every 100 ms
+            // and gives up after 5000 (cyu3usb.c, CY_U3P_EP0_XFER_TIMEOUT and
+            // CY_U3P_EP0_CHECK_INCR).
+            const std::uint64_t arrive = std::max(nowMs_, busyUntilMs_);
+            ready = std::min<std::uint64_t>(arrive + 100, busyUntilMs_ + 5000);
+        }
+        if (ready > nowMs_) {
+            const std::uint64_t wait = ready - nowMs_;
+            if (rec.timeoutMs < wait) {
+                nowMs_ += rec.timeoutMs;
+                rec.waitedMs = rec.timeoutMs;
+                rec.timedOut = true;
+                abandoned_ = true;
+                return false;
+            }
+            nowMs_ = ready;
+            rec.waitedMs = static_cast<unsigned>(wait);
+        }
+        abandoned_ = false;
+        busyUntilMs_ = nowMs_;
+        return true;
+    }
+
+    // What the firmware does with an OUT request it has taken. False for a
+    // request it has no case for (it stalls the endpoint, USBhandler.c:544-549).
+    // mutex_ held.
+    bool serveOutLocked(const Rx888ControlRecord& rec) {
+        const std::size_t len = rec.data.size();
+        auto wantLen = [&](std::size_t n, const char* name) {
+            if (len != n) {
+                violations_.push_back(std::string(name) + " with " + std::to_string(len) +
+                                      " bytes of data instead of " + std::to_string(n));
+            }
+        };
+        unsigned workMs = 0;
+        switch (rec.request) {
+            case 0xAD:  // GPIOFX3
+                wantLen(4, "GPIOFX3");
+                if (len >= 4) {
+                    gpioWord_.store(static_cast<std::uint32_t>(rec.data[0]) |
+                                    (static_cast<std::uint32_t>(rec.data[1]) << 8) |
+                                    (static_cast<std::uint32_t>(rec.data[2]) << 16) |
+                                    (static_cast<std::uint32_t>(rec.data[3]) << 24));
+                }
+                break;
+            case 0xB2:  // STARTADC
+                wantLen(4, "STARTADC");
+                adcStarted_.store(true);
+                workMs = adcStartSleepMs.load();
+                break;
+            case 0xB4:  // TUNERINIT
+                wantLen(4, "TUNERINIT");
+                tunerInit_.store(true);
+                tunerStandby_ = false;
+                workMs = tunerInitWorkMs.load();
+                break;
+            case 0xB5:  // TUNERTUNE
+                wantLen(8, "TUNERTUNE");
+                if (!tunerInit_.load() || tunerStandby_) {
+                    violations_.push_back("TUNERTUNE before TUNERINIT");
+                }
+                workMs = tunerTuneWorkMs.load();
+                break;
+            case 0xB8:  // TUNERSTDBY
+                wantLen(1, "TUNERSTDBY");
+                if (!tunerInit_.load()) {
+                    standbyBeforeInit_.fetch_add(1);
+                    if (standbyBeforeInitHangs.load()) { dead_ = true; }
+                }
+                tunerStandby_ = true;
+                break;
+            case 0xB6:  // SETARGFX3: the argument number is wIndex
+                wantLen(1, "SETARGFX3");
+                if (rec.index >= 1 && rec.index <= 3) {
+                    if (!tunerInit_.load() || tunerStandby_) {
+                        violations_.push_back("a tuner argument (" + std::to_string(rec.index) +
+                                              ") before TUNERINIT");
+                    }
+                } else if (rec.index != 10 && rec.index != 11) {
+                    // The mk2 has cases for DAT31_ATT and AD8340_VGA only
+                    // (USBhandler.c:395-436); anything else is left unhandled.
+                    violations_.push_back("SETARGFX3 argument " + std::to_string(rec.index) +
+                                          " that the mk2's firmware does not handle");
+                }
+                break;
+            case 0xAA:  // STARTFX3
+                wantLen(1, "STARTFX3");
+                if (!adcStarted_.load()) { violations_.push_back("STARTFX3 before STARTADC"); }
+                break;
+            case 0xAB:  // STOPFX3
+                wantLen(1, "STOPFX3");
+                workMs = stopSleepMs.load();
+                break;
+            default:
+                violations_.push_back("a vendor request the driver should never send: 0x" +
+                                      hex2(rec.request));
+                return false;
+        }
+        afterAnswerLocked(rec.request, workMs);
+        return true;
+    }
+
+    // The handler's own work, done after the request was answered. mutex_ held.
+    void afterAnswerLocked(std::uint8_t request, unsigned workMs) {
+        busyUntilMs_ = nowMs_ + workMs;
+        const std::uint8_t die = dieAfterRequest.load();
+        if (die != 0 && die == request) { dead_ = true; }
+    }
+
     Identity identity_;
     mutable std::mutex mutex_;
+    // The firmware model's state, under mutex_ except the atomics.
+    std::uint64_t nowMs_ = 0;
+    std::uint64_t busyUntilMs_ = 0;
+    bool dead_ = false;
+    bool abandoned_ = false;
+    bool tunerStandby_ = false;
+    std::atomic<bool> tunerInit_{false};
+    std::atomic<bool> adcStarted_{false};
+    std::atomic<std::uint32_t> gpioWord_{0};
+    std::atomic<int> standbyBeforeInit_{0};
+    std::vector<std::string> violations_;
     std::vector<Rx888ControlRecord> controls_;
     std::vector<BootWrite> bootWrites_;
     std::deque<std::vector<std::uint8_t>> bulk_;

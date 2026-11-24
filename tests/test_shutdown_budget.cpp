@@ -838,10 +838,12 @@ const KnownWait kKnownWaits[] = {
      "STOPFX3 in stopStreamingLocked() and, in closeDevice(), the tuner standby and the GPIO "
      "word that unpowers the bias tees - and together they are 1500 ms of the 2750 ms RX888 "
      "column, which is covered by the 3000 ms Soapy column already charged"},
-    {"src/source/rx888_protocol.hpp", "kAdcStartTimeout", 0,
-     "STARTADC only, whose firmware handler programs the Si5351 and then sleeps a full second "
-     "before answering (SDDC_FX3/USBhandler.c:264-273). Spent at open and at a sample-rate "
-     "change, never at stop - nothing on the teardown path sets the ADC clock"},
+    {"src/source/rx888_protocol.hpp", "kSetupTimeout", 0,
+     "the RX888's bound for every request that is NOT on the way out: the open, a tune, a gain, "
+     "a mode change, the start of the stream. Long because the firmware answers a request only "
+     "after finishing the work of the one before, and sleeps a full second after STARTADC "
+     "(SDDC_FX3/USBhandler.c:264-273). Never at stop: the STOPFX3 and closeDevice()'s two "
+     "requests pass kControlTimeout by name (tests/test_rx888_source.cpp holds each at 500 ms)"},
     {"src/source/rx888_source.hpp", "kBulkReadWait", 0,
      "how long the RX888 reader thread blocks for one bulk transfer. Spent on the reader's OWN "
      "thread; it is what bounds how long that thread takes to notice it has been asked to stop, "
