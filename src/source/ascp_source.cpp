@@ -231,6 +231,20 @@ struct AscpSource::Conn {
         if (r > 0 && FD_ISSET(udp, &rf)) {
             // drain what is queued, bounded so the TCP side is looked at again
             for (int i = 0; i < 64; ++i) {
+                // The socket is blocking: before every read after the first, ask whether another datagram is
+                // queued. A bad or foreign datagram used to `continue` past the check that used to sit at the
+                // bottom of the loop and park here in recvfrom for good (R3-01).
+                if (i > 0) {
+                    fd_set one;
+                    FD_ZERO(&one);
+                    FD_SET(udp, &one);
+                    timeval z{};
+#if defined(_WIN32)
+                    if (::select(0, &one, nullptr, nullptr, &z) <= 0) { break; }
+#else
+                    if (::select(udp + 1, &one, nullptr, nullptr, &z) <= 0) { break; }
+#endif
+                }
                 sockaddr_in from{};
                 SockLen fl = sizeof(from);
                 const int n = ::recvfrom(udp, reinterpret_cast<char*>(buf.data()), static_cast<int>(buf.size()), 0,
@@ -249,15 +263,6 @@ struct AscpSource::Conn {
                     seq.note(info.sequence);
                 }
                 if (streaming && !out.empty()) { link.pushSamples(out.data(), out.size()); }
-                fd_set one;
-                FD_ZERO(&one);
-                FD_SET(udp, &one);
-                timeval z{};
-#if defined(_WIN32)
-                if (::select(0, &one, nullptr, nullptr, &z) <= 0) { break; }
-#else
-                if (::select(udp + 1, &one, nullptr, nullptr, &z) <= 0) { break; }
-#endif
             }
         }
         if (!streaming) {
@@ -508,7 +513,8 @@ bool AscpSource::open(const std::string& args) {
     setError("");
     rateHz_ = 0.0;
     if (transact(as::MsgType::Request, as::ci::RxOutSampleRate, {as::kChannel1}, rep, nak) && !nak && rep.size() >= 5) {
-        rateHz_ = static_cast<double>(as::getLe(rep.data() + 1, 4));
+        const double reported = static_cast<double>(as::getLe(rep.data() + 1, 4));
+        if (cascade::source::plausibleSampleRateHz(reported)) { rateHz_ = reported; }   // review of the R3 fixes, D3: the peer's number is kept only if a receiver could run it
     }
     setError("");
     const std::vector<double> rates = ascpRatesFor(model_, mainClockHz_);
@@ -564,7 +570,7 @@ bool AscpSource::start() {
     if (!transactMandatory(as::MsgType::Set, as::ci::RxOutSampleRate, rp, rep, "setting the sample rate")) { return false; }
     if (rep.size() < 5) { setError("the radio's answer to the sample-rate request was too short"); return false; }
     const double real = static_cast<double>(as::getLe(rep.data() + 1, 4));
-    if (!(real >= 1000.0)) { setError("the radio reported a sample rate it cannot be using"); return false; }
+    if (!plausibleSampleRateHz(real)) { setError("the radio reported a sample rate it cannot be using"); return false; }
     rateHz_ = real;
     transact(as::MsgType::Set, as::ci::RxOutputParams, {rateHz_ > 100000.0 ? as::kOutputLargeMtu : as::kOutputSmallMtu}, rep, nak);
     setError("");

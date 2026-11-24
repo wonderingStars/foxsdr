@@ -68,6 +68,7 @@ struct RadioSpec {
     double noise = 0.02;           // noise standard deviation as a fraction of full scale
     double amp = 0.4;
     int initialRate = 250000;
+    int forceReplyRate = 0;        // R3-04: the rate the radio reports back, whatever was asked (0: honest)
 };
 
 // One bounded poll (srctest::waitRead blocks until readable or the flag drops).
@@ -98,7 +99,7 @@ Bytes ctl(as::MsgType t, std::uint16_t item, const Bytes& params) {
 
 class Radio {
 public:
-    explicit Radio(RadioSpec s) : spec_(std::move(s)) {}
+    explicit Radio(RadioSpec s) : spec_(std::move(s)) { rate.store(spec_.initialRate); }
     ~Radio() { stop(); }
 
     bool start() {
@@ -245,6 +246,7 @@ private:
             }
             case as::ci::RxOutSampleRate: {
                 if (isSet && m.body.size() >= 5) { rate.store(snap(static_cast<int>(as::getLe(m.body.data() + 1, 4)))); }
+                if (isSet && spec_.forceReplyRate > 0) { rate.store(spec_.forceReplyRate); }
                 Bytes b{0};
                 as::putLe(b, static_cast<std::uint32_t>(rate.load()), 4);
                 reply(c, as::MsgType::Set, m.item, b);
@@ -960,6 +962,89 @@ void testRestartChangesRate() {
     s.closeDevice();
 }
 
+// R3-01: a datagram that is not a good stream packet must not park the reader. Both kinds are sent while
+// the radio is open and idle (nothing is streaming, so no good packet comes along to unpark it): a
+// malformed one from the radio's own address, and one from another host address (127.0.0.2). The control
+// round trips that follow (the receiver-on of start) must still be answered, and close must be clean.
+void sendStrays(std::uint32_t fromHostOrder, std::uint16_t toPort, int count) {
+    Sock other = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    CHECK(other != kBadSock);
+    if (other == kBadSock) { return; }
+    sockaddr_in me{};
+    me.sin_family = AF_INET;
+    me.sin_addr.s_addr = ::htonl(fromHostOrder);
+    me.sin_port = 0;
+    const bool bound = ::bind(other, reinterpret_cast<sockaddr*>(&me), sizeof(me)) == 0;
+    CHECK(bound);
+    if (bound) {
+        sockaddr_in to{};
+        to.sin_family = AF_INET;
+        to.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
+        to.sin_port = ::htons(toPort);
+        const char junk[3] = {0x03, 0x00, 0x01};
+        for (int i = 0; i < count; ++i) {
+            ::sendto(other, junk, sizeof(junk), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+        }
+    }
+    closeSock(other);
+}
+
+void testStrayDatagramDoesNotParkReader() {
+    for (const std::uint32_t from : {0x7F000001u /* the radio's own address: fails the parse */,
+                                     0x7F000002u /* another address: fails the sender test */}) {
+        RadioSpec sp;
+        Radio r(sp);
+        CHECK(r.start());
+        AscpSource s;
+        const auto abandoned = NetSampleSource::readersAbandoned();
+        CHECK(s.open(r.args("rate=250000,timeout=1500")));
+        const std::uint16_t port = s.localUdpPort();
+        CHECK(port != 0);
+        sendStrays(from, port, 3);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const bool started = s.start();
+        CHECK(started);
+        CHECK(!started || (r.receiverOn() && s.running()));
+        CHECK(!started || readN(s, 2000).size() >= 2000);
+        CHECK(s.badPackets() >= 1);  // the strays were counted, not obeyed
+        s.stop();
+        const auto t0 = std::chrono::steady_clock::now();
+        s.closeDevice();
+        CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(1500));
+        CHECK(NetSampleSource::readersAbandoned() == abandoned);
+    }
+}
+
+// R3-04: a radio that reports a sample rate above anything a receiver could run (2 GS/s) is refused at start.
+void testImplausibleReportedRateIsRefused() {
+    RadioSpec sp;
+    sp.forceReplyRate = 2000000000;
+    Radio r(sp);
+    CHECK(r.start());
+    AscpSource s;
+    CHECK(s.open(r.args("rate=250000,timeout=1500")));
+    CHECK(!s.start());
+    CHECK(std::string(s.lastError()).find("cannot be using") != std::string::npos);
+    s.closeDevice();
+}
+
+// Review of the R3 fixes, D3: the rate the radio reports at OPEN went into rateHz_ unchecked, and sampleRateHz() returns it until start(): a peer that answers 4294967295 or 1
+// told the receiver that rate. A reported rate no receiver could run is not kept; the wanted rate stands in until the stream starts.
+void testImplausibleRateReportedAtOpenIsNotKept() {
+    for (const int bad : {2000000000, 1, 999}) {
+        RadioSpec sp;
+        sp.initialRate = bad;
+        Radio r(sp);
+        CHECK(r.start());
+        AscpSource s;
+        CHECK(s.open(r.args("rate=250000,timeout=1500")));
+        const double got = s.sampleRateHz();
+        if (!cascade::source::plausibleSampleRateHz(got)) { std::printf("      a radio reporting %d at open: sampleRateHz() is %g\n", bad, got); }
+        CHECK(cascade::source::plausibleSampleRateHz(got));
+        s.closeDevice();
+    }
+}
+
 void testReadWhenIdle() {
     RadioSpec sp;
     Radio r(sp);
@@ -1044,6 +1129,9 @@ int main() {
     testCycles();
     testRestartChangesRate();
     testReadWhenIdle();
+    testStrayDatagramDoesNotParkReader();
+    testImplausibleReportedRateIsRefused();
+    testImplausibleRateReportedAtOpenIsNotKept();
     testFuzz();
     return testSummary("test_ascp_source");
 }

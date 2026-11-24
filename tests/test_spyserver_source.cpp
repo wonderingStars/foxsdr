@@ -535,6 +535,18 @@ void testOpenAndStream(int which) {
     CHECK(sets.back().setting == sp::kSetStreamingEnabled && sets.back().value == 0);
 }
 
+// R3-04: a server whose radio claims a sample rate no receiver could run (here 4 GS/s) is refused at open.
+void testImplausibleRateIsRefused() {
+    Spec spec;
+    spec.maxRate = 4000000000u;
+    Server srv(spec);
+    CHECK(srv.start());
+    SpyServerSource s;
+    CHECK(!s.open(srv.args("timeout=4000")));
+    CHECK(!s.isOpen());
+    CHECK(std::string(s.lastError()).find("cannot be using") != std::string::npos);
+}
+
 void testOpenRefusals() {
     {   // no address: nothing to connect to, no default host
         SpyServerSource s;
@@ -687,6 +699,7 @@ int main() {
     testFuzz();
     for (int v = 0; v < 4; ++v) { testOpenAndStream(v); }
     testOpenRefusals();
+    testImplausibleRateIsRefused();
     testStreamFaults();
     testCycles();
     return testSummary("test_spyserver_source");

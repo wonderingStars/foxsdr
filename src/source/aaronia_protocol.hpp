@@ -337,7 +337,9 @@ private:
             cur_.samples.reserve(s.size() / 2);
             for (std::size_t i = 0; i + 1 < s.size(); i += 2) {
                 if (!s[i].is_number() || !s[i + 1].is_number()) { err_ = "an I/Q sample is not a number"; return false; }
-                cur_.samples.emplace_back(s[i].get<float>(), s[i + 1].get<float>());
+                float re = s[i].get<float>(), im = s[i + 1].get<float>();  // a number beyond float range becomes infinity here
+                if (!std::isfinite(re) || !std::isfinite(im)) { re = 0; im = 0; ++nonFinite_; }
+                cur_.samples.emplace_back(re, im);
             }
         } else {
             if (!s.is_number_integer() || s.get<long long>() < 0 || static_cast<unsigned long long>(s.get<long long>()) > kMaxPairs) {

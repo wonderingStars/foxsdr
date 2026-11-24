@@ -396,6 +396,20 @@ void testRecords() {
         for (char c : two) { const std::uint8_t b = static_cast<std::uint8_t>(c); q.feed(&b, 1, out2); }
         CHECK(q.error().empty() && out2.size() == 2);
     }
+    // R3-05: JSON numbers beyond float range (1e300) become infinity in a float; the parser zeroes the pair and counts it
+    {
+        aa::RecordParser p(aa::SampleFormat::Json);
+        std::vector<aa::IqRecord> out;
+        const std::string w = std::string("{\"payload\":\"iq\",\"startTime\":1,\"endTime\":2,\"samples\":[1e300,-1e300,0.5,0.25,3,1e308]}") + "\n\x1e";
+        p.feed(reinterpret_cast<const std::uint8_t*>(w.data()), w.size(), out);
+        CHECK(p.error().empty() && out.size() == 1 && out[0].samples.size() == 3);
+        if (out.size() == 1 && out[0].samples.size() == 3) {
+            CHECK(out[0].samples[0] == std::complex<float>(0.0f, 0.0f));
+            CHECK(out[0].samples[1] == std::complex<float>(0.5f, 0.25f));
+            CHECK(out[0].samples[2] == std::complex<float>(0.0f, 0.0f));
+        }
+        CHECK(p.nonFiniteSamples() == 2);
+    }
     // strings containing braces and escaped quotes do not end an object early
     {
         aa::RecordParser p(aa::SampleFormat::Json);
@@ -803,6 +817,24 @@ void testCycles() {
     srv.stop();
 }
 
+// R3-04: a server whose records imply a rate no receiver could run (the clock error here makes it 2 GS/s)
+// does not move the reported rate: it stays at the one the user asked for.
+void testImplausibleMeasuredRateIsIgnored() {
+    Spec sp;
+    sp.raw = true;
+    sp.ppm = 1.0e10;           // 200 kS/s asked, 2 GS/s implied by the records
+    sp.pairsPerRecord = 50000;  // long enough for the 1.7e9-second timestamps to resolve it
+    Server srv(sp);
+    CHECK(srv.start());
+    AaroniaSource s;
+    CHECK(s.open(srv.args("timeout=4000,rate=200000,format=float32")));
+    CHECK(s.start());
+    CHECK(readN(s, 5000).size() >= 5000);
+    CHECK(s.sampleRateHz() == 200000.0);
+    s.closeDevice();
+    srv.stop();
+}
+
 void testReadWhenIdle() {
     Server srv{Spec{}};
     CHECK(srv.start());
@@ -830,6 +862,7 @@ int main() {
     testOpenRefusals();
     testStreamFaults();
     testCycles();
+    testImplausibleMeasuredRateIsIgnored();
     testReadWhenIdle();
     return testSummary("test_aaronia_source");
 }

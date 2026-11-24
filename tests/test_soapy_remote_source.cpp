@@ -15,6 +15,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <limits>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -53,6 +54,7 @@ struct Out {
     }
     Out& f64(double v) {
         type(4);
+        if (std::isinf(v)) { i32(2000); i64(1LL << 52); return *this; }  // ldexp(2^52, 2000 - 53): infinity, as a hostile peer would send it
         int e = 0;
         const double x = std::frexp(v, &e);
         const long long m = static_cast<long long>(std::ldexp(x, 53));
@@ -135,9 +137,14 @@ struct In {
 
 enum class Mode {
     Normal, Junk, Silent, CloseNow, BadTrailer, HugeLength, TinyLength, ExceptionOnMake,
-    TruncatedReply, CS12Format, OddCallThenNormal
+    TruncatedReply, CS12Format, OddCallThenNormal,
+    DripMake,  // R3-02: answers MAKE with a header that announces 2000 bytes, then one byte every 400 ms for 12 s
+    SlowHonest,  // review (R3-02): answers MAKE in three pieces 300 ms apart - slow, but a whole reply inside the deadline
+    MuteCalls  // review D2: reads every call and answers none (set AFTER a good open: a server that goes quiet behind the source's mutex)
 };
-enum class StreamFault { None, SplitHeader, DieAfter, LyingBytes, ElemsBeyond, StatusFatal, StatusOverflow, Stall };
+enum class StreamFault { None, SplitHeader, DieAfter, LyingBytes, ElemsBeyond, StatusFatal, StatusOverflow, Stall,
+                         NonFinite,  /* R3-05: CF32 elements that are NaN and infinity (needs nativeFormat CF32) */
+                         HugeFinite  /* review D1: CF32 elements of 3e38, finite until the source multiplies them by 1/full-scale */ };
 
 class FakeSoapy {
 public:
@@ -161,8 +168,10 @@ public:
     std::atomic<Mode> mode{Mode::Normal};
     std::atomic<StreamFault> fault{StreamFault::None};
     std::atomic<int> faultAfter{20};
+    std::vector<double> rateList{250000.0, 1024000.0, 2048000.0};  // what LIST_SAMPLE_RATES answers
     std::string nativeFormat = "CS16";
     double fullScale = 32768.0;
+    std::vector<std::string> gainNames{"LNA"};   // what LIST_GAINS answers (review D2: a server with thousands)
 
     std::vector<int> calls() { std::lock_guard<std::mutex> l(m_); return calls_; }
     int countCall(int c) { int n = 0; for (int x : calls()) { n += (x == c); } return n; }
@@ -219,6 +228,7 @@ private:
             In in(p);
             const int call = in.call();
             rec(call);
+            if (mode.load() == Mode::MuteCalls) { continue; }
             Out o;
             switch (call) {
                 case 1: {  // MAKE
@@ -243,6 +253,28 @@ private:
                         send(s, f);
                         return;
                     }
+                    if (mode.load() == Mode::DripMake) {
+                        Bytes f = Out::voidReply();
+                        f.resize(2000);  // the body the header below announces
+                        f[8] = 0; f[9] = 0; f[10] = 0x07; f[11] = 0xD0;  // length 2000
+                        send(s, Bytes(f.begin(), f.begin() + 12));
+                        for (int i = 0; i < 30 && run.load(); ++i) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                            const std::uint8_t one = 0;
+                            if (!sendExact(s, &one, 1)) { break; }
+                        }
+                        return;
+                    }
+                    if (mode.load() == Mode::SlowHonest) {
+                        const Bytes f = Out::voidReply();
+                        const std::size_t a = f.size() / 3, b = 2 * f.size() / 3;
+                        send(s, Bytes(f.begin(), f.begin() + a));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                        send(s, Bytes(f.begin() + a, f.begin() + b));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                        send(s, Bytes(f.begin() + b, f.end()));
+                        continue;
+                    }
                     if (mode.load() == Mode::TruncatedReply) {
                         Bytes f = Out::voidReply();
                         f.resize(f.size() - 3);
@@ -259,10 +291,10 @@ private:
                     send(s, o.frame());
                     break;
                 }
-                case 902: o.f64List({250000.0, 1024000.0, 2048000.0}); send(s, o.frame()); break;
+                case 902: o.f64List(rateList); send(s, o.frame()); break;
                 case 805: o.rangeList({{24.0e6, 1766.0e6, 0.0}}); send(s, o.frame()); break;
                 case 500: o.strList({"RX", "Aux"}); send(s, o.frame()); break;
-                case 700: o.strList({"LNA"}); send(s, o.frame()); break;
+                case 700: o.strList(gainNames); send(s, o.frame()); break;
                 case 708: o.range(0.0, 40.0, 1.0); send(s, o.frame()); break;
                 case 709: o.boolean(true); send(s, o.frame()); break;
                 case 503: o.boolean(true); send(s, o.frame()); break;
@@ -405,7 +437,8 @@ private:
             }
             const int elems = 200;
             Bytes d;
-            std::uint32_t bytes = 24 + elems * 4;
+            const std::uint32_t elemBytes = (f == StreamFault::NonFinite || f == StreamFault::HugeFinite) ? 8 : 4;
+            std::uint32_t bytes = 24 + elems * elemBytes;
             std::int32_t elemsField = elems;
             if (f == StreamFault::LyingBytes && sent == faultAfter.load()) { bytes = 24 + elems * 4 + 5000; }
             if (f == StreamFault::ElemsBeyond && sent == faultAfter.load()) { elemsField = elems + 50; }
@@ -417,7 +450,24 @@ private:
             put32(d, 0);
             put32(d, 0);
             put32(d, 0);
-            if (bytes > 24) {
+            if (bytes > 24 && f == StreamFault::HugeFinite) {
+                for (int i = 0; i < elems; ++i, ++n) {
+                    const float big = 3.0e38f;
+                    std::uint8_t raw[8];
+                    std::memcpy(raw, &big, 4);
+                    std::memcpy(raw + 4, &big, 4);
+                    d.insert(d.end(), raw, raw + 8);
+                }
+            } else if (bytes > 24 && f == StreamFault::NonFinite) {
+                for (int i = 0; i < elems; ++i, ++n) {
+                    const float re = n % 3 == 0 ? std::numeric_limits<float>::quiet_NaN() : (n % 5 == 0 ? std::numeric_limits<float>::infinity() : 0.5f);
+                    const float im = n % 7 == 0 ? -std::numeric_limits<float>::infinity() : 0.25f;
+                    std::uint8_t raw[8];
+                    std::memcpy(raw, &re, 4);
+                    std::memcpy(raw + 4, &im, 4);
+                    d.insert(d.end(), raw, raw + 8);
+                }
+            } else if (bytes > 24) {
                 const int actual = std::min(elems, static_cast<int>((bytes - 24) / 4));
                 for (int i = 0; i < elems; ++i, ++n) {
                     const std::int16_t v = static_cast<std::int16_t>(n % 20000);
@@ -732,6 +782,178 @@ void testStartStopAndShutdown() {
     c.stop();
 }
 
+// R3-02: a server that keeps every receive inside the call's timeout (one byte every 400 ms against
+// timeout=1000) but never finishes the reply must not hold the call for ever. The call's bound is one
+// deadline for the whole reply: the timeout plus a second per 32 KiB announced (two seconds here), then
+// the open fails and close returns at once.
+void testDripReplyHasOneDeadline() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.mode.store(Mode::DripMake);
+    SoapyRemoteSource s;
+    const auto t0 = std::chrono::steady_clock::now();
+    CHECK(!s.open(fake.args("timeout=1000")));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::fprintf(stderr, "open against a dripping server: %lld ms\n", static_cast<long long>(ms));
+    CHECK(ms < 5000);
+    CHECK(!s.isOpen());
+    CHECK(std::string(s.lastError()).find("too long") != std::string::npos);
+    const auto t1 = std::chrono::steady_clock::now();
+    s.closeDevice();
+    CHECK(std::chrono::steady_clock::now() - t1 < std::chrono::milliseconds(2500));
+}
+
+// R3-04: rates a server lists that no receiver could use (zero, negative, infinite, absurdly large) are
+// dropped when they arrive; only the sane one is offered and becomes the rate.
+void testImplausibleRatesAreDropped() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.rateList = {0.0, -250000.0, INFINITY, 1.0e15, 2048000.0};
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args()));
+    CHECK(s.supportedSampleRatesHz() == std::vector<double>{2048000.0});
+    CHECK(s.sampleRateHz() == 2048000.0);
+    s.closeDevice();
+}
+
+// R3-05: CF32 samples that are NaN or infinite (a server's bytes) must not reach the ring: the converter
+// zeroes them, as the SpyServer, Aaronia raw and ExtIO converters already do.
+void testNonFiniteSamplesAreZeroed() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.nativeFormat = "CF32";
+    fake.fullScale = 1.0;
+    fake.fault.store(StreamFault::NonFinite);
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args()));
+    CHECK(s.start());
+    const auto got = readN(s, 2000);
+    CHECK(got.size() >= 2000);
+    std::size_t bad = 0;
+    for (const auto& v : got) { bad += !(std::isfinite(v.real()) && std::isfinite(v.imag())); }
+    CHECK(bad == 0);
+    s.closeDevice();
+}
+
+// Review of the R3 fixes (R3-02): a slow but honest server - the MAKE reply arrives in three pieces 300 ms apart against timeout=1000 - still opens, and quickly enough.
+void testSlowHonestReplyStillPasses() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.mode.store(Mode::SlowHonest);
+    SoapyRemoteSource s;
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool opened = s.open(fake.args("timeout=1000"));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    if (!opened) { std::printf("      a slow honest server was refused: %s (%lld ms)\n", s.lastError(), static_cast<long long>(ms)); }
+    CHECK(opened);
+    CHECK(ms < 4000);
+    s.closeDevice();
+}
+
+// Review of the R3 fixes (R3-04): only hostile rates were tested. The edges of "plausible", and a low honest rate that must be kept.
+void testRateEdges() {
+    using cascade::source::plausibleSampleRateHz;
+    CHECK(!plausibleSampleRateHz(999.0));
+    CHECK(plausibleSampleRateHz(1000.0));
+    CHECK(plausibleSampleRateHz(8000.0));
+    CHECK(plausibleSampleRateHz(1.0e9));
+    CHECK(!plausibleSampleRateHz(std::nextafter(1.0e9, 2.0e9)));
+    CHECK(!plausibleSampleRateHz(std::nan("")));
+    CHECK(!plausibleSampleRateHz(0.0));
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.rateList = {999.0, 1000.0, 8000.0, 1.0e9, 1.0e9 + 1000.0};
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args()));
+    CHECK(s.supportedSampleRatesHz() == (std::vector<double>{1000.0, 8000.0, 1.0e9}));
+    s.closeDevice();
+}
+
+// Review D1 (non-finite samples through the scale): the first check tested the raw floats, but the ring gets raw * (1 / full-scale), and the full-scale is the server's number.
+// A full-scale of 1e-40 makes the reciprocal infinite (every CS16/CS8/CU8 sample becomes NaN or infinity); CF32 samples of 3e38 over a full-scale of 0.5 overflow to infinity.
+// A full-scale no receiver could scale by is refused at open; whatever does open never puts a non-finite sample in the ring.
+std::size_t countNonFinite(SoapyRemoteSource& s, std::size_t want) {
+    const auto got = readN(s, want);
+    std::size_t bad = 0;
+    for (const auto& v : got) { bad += !(std::isfinite(v.real()) && std::isfinite(v.imag())); }
+    return got.size() >= want ? bad : bad + 1000000;   // too few samples is a failure of its own
+}
+
+void testNonFiniteThroughTheScale() {
+    for (const double fs : {1.0e-40, 1.0e-30, 1.0e-7, 1.0e13, 1.0e300, 0.0, -1.0}) {   // CS16 against a full-scale that makes the reciprocal huge, tiny or not a number
+        FakeSoapy fake;
+        CHECK(fake.start());
+        fake.fullScale = fs;
+        SoapyRemoteSource s;
+        const bool opened = s.open(fake.args());
+        if (opened) {
+            CHECK(s.start());
+            const std::size_t bad = countNonFinite(s, 2000);
+            if (bad != 0) { std::printf("      CS16 with full-scale %g: %zu bad samples reached the ring\n", fs, bad); }
+            CHECK(bad == 0);
+        }
+        CHECK(!opened);   // none of these is a full-scale a server could mean
+        s.closeDevice();
+    }
+    {   // CF32, full-scale 0.5, samples of 3e38: finite bytes whose product is not
+        FakeSoapy fake;
+        CHECK(fake.start());
+        fake.nativeFormat = "CF32";
+        fake.fullScale = 0.5;
+        fake.fault.store(StreamFault::HugeFinite);
+        SoapyRemoteSource s;
+        CHECK(s.open(fake.args()));
+        CHECK(s.start());
+        const std::size_t bad = countNonFinite(s, 2000);
+        if (bad != 0) { std::printf("      CF32 with 3e38 samples: %zu bad samples reached the ring\n", bad); }
+        CHECK(bad == 0);
+        s.closeDevice();
+    }
+    for (const double fs : {1.0, 127.0, 128.0, 32768.0, 2147483648.0}) {   // the full-scales real servers send still open and stream finite samples
+        FakeSoapy fake;
+        CHECK(fake.start());
+        fake.fullScale = fs;
+        SoapyRemoteSource s;
+        CHECK(s.open(fake.args()));
+        CHECK(s.start());
+        CHECK(countNonFinite(s, 500) == 0);
+        s.closeDevice();
+    }
+}
+
+// Review D2 (the mutex held for minutes): teardownLocked made up to four goodbye calls under the mutex; a server that went quiet made each wait out its own timeout. After the
+// first goodbye that fails the control connection is out of step anyway, so the rest are skipped. A good open, a started stream, then the server mutes: close takes ONE call's
+// timeout, not four. (timeout=600: before the change about 2.4 s, after about 0.6 s.)
+void testCloseAfterTheServerGoesQuietMakesOneCall() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args("timeout=600")));
+    CHECK(s.start());
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    fake.mode.store(Mode::MuteCalls);
+    const auto t0 = std::chrono::steady_clock::now();
+    s.closeDevice();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    std::fprintf(stderr, "close after the server went quiet: %lld ms\n", static_cast<long long>(ms));
+    CHECK(ms < 1500);
+    CHECK(!s.isOpen());
+}
+
+// Review D2, the open-time gain loop: a server that lists thousands of gain names gets at most 64 range queries.
+void testGainNamesAreCapped() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.gainNames.clear();
+    for (int i = 0; i < 3000; ++i) { fake.gainNames.push_back("G" + std::to_string(i)); }
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args()));
+    const int asked = fake.countCall(708);
+    if (asked > 64) { std::printf("      %d gain-range queries for 3000 listed names\n", asked); }
+    CHECK(asked >= 1 && asked <= 64);
+    s.closeDevice();
+}
+
 void testShutdownWhileServerSilent() {
     // The server stops sending while the source is streaming; close must still return inside
     // the reader-join bound.
@@ -906,6 +1128,14 @@ int main() {
     STEP(testSplitHeader());
     STEP(testStartStopAndShutdown());
     STEP(testShutdownWhileServerSilent());
+    STEP(testDripReplyHasOneDeadline());
+    STEP(testImplausibleRatesAreDropped());
+    STEP(testNonFiniteSamplesAreZeroed());
+    STEP(testNonFiniteThroughTheScale());
+    STEP(testRateEdges());
+    STEP(testSlowHonestReplyStillPasses());
+    STEP(testCloseAfterTheServerGoesQuietMakesOneCall());
+    STEP(testGainNamesAreCapped());
     STEP(testScripted());
     STEP(testFuzz());
     return testSummary("test_soapy_remote_source");

@@ -56,8 +56,19 @@ struct SdrConnectSource::Conn {
     void notePush(const sc::Envelope& e) {
         if (e.eventType != "property_changed" && e.eventType != "get_property_response") { return; }
         if (!e.device.empty() && e.device != "primary") { return; }  // the Secondary tuner is not used
+        // Only the names this client reads are kept, and each value is bounded: the server may push any
+        // number of names of any size, and a map that took them all grew without limit (R3-03). Anything
+        // else is ignored; an over-long value is stored empty (the sequence still moves, so a waiting
+        // getProperty is answered).
+        static constexpr const char* kKept[] = {
+            "api_version",   "device_sample_rate", "device_center_frequency", "valid_antennas", "valid_devices",
+            "active_device", "active_antenna",     "lna_state_min",           "lna_state_max",  "lna_state"};
+        constexpr std::size_t kMaxValueBytes = 65536;
+        bool kept = false;
+        for (const char* k : kKept) { kept = kept || e.property == k; }
+        if (!kept) { return; }
         std::lock_guard<std::mutex> lk(propMutex);
-        props[e.property] = e.value;
+        props[e.property] = e.value.size() > kMaxValueBytes ? std::string() : e.value;
         ++propSeq[e.property];
         propCv.notify_all();
     }
@@ -395,7 +406,8 @@ void SdrConnectSource::stop() {
 double SdrConnectSource::sampleRateHz() const {
     if (iqRateHz_ > 0.0) { return iqRateHz_; }
     const std::string v = prop("device_sample_rate");
-    return v.empty() ? 0.0 : std::strtod(v.c_str(), nullptr);
+    const double hz = v.empty() ? 0.0 : std::strtod(v.c_str(), nullptr);
+    return plausibleSampleRateHz(hz) ? hz : 0.0;  // the server's word, so a nonsense value is "unknown"
 }
 
 bool SdrConnectSource::setSampleRateHz(double hz) {
@@ -479,6 +491,17 @@ std::vector<double> SdrConnectSource::supportedSampleRatesHz() const {
 
 std::string SdrConnectSource::apiVersion() const { return prop("api_version"); }
 std::string SdrConnectSource::activeDevice() const { return prop("active_device"); }
+
+std::size_t SdrConnectSource::storedPropertyCountForTest() const {
+    std::shared_ptr<Conn> c;
+    {
+        std::lock_guard<std::mutex> cl(connMutex_);
+        c = conn_;
+    }
+    if (c == nullptr) { return 0; }
+    std::lock_guard<std::mutex> lk(c->propMutex);
+    return std::max(c->props.size(), c->propSeq.size());
+}
 
 std::vector<std::string> SdrConnectSource::validDevices() const {
     std::lock_guard<std::mutex> lk(ctlMutex_);

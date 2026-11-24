@@ -52,6 +52,14 @@ namespace {
 
 constexpr int kSchema = 1;
 
+// HOW MUCH OF A CHILD'S OUTPUT IS KEPT (R3-10). An enumeration answer is one JSON line of a few hundred
+// bytes a device; a child that floods its stdout or stderr (a hostile module in it, or a bug) used to be
+// kept in full, for as long as the 20 s budget ran. Past the cap the drain still READS (so the child is
+// never blocked in a write), but drops what it reads: a cut-off answer then fails to parse, which is the
+// "malformed" outcome it deserves. The stderr tee to the parent's own stderr is not capped.
+constexpr std::size_t kMaxChildStdoutBytes = 4u << 20;
+constexpr std::size_t kMaxChildStderrBytes = 1u << 20;
+
 // A SCAN CHILD THAT DIED AND WAS CONTAINED (the parent survived and went on) is
 // a recovery the usage record counts: `recovered.enumchild`, once a session.
 // Counted by the scan's own worker thread - the window's or a test's - where the
@@ -442,7 +450,7 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
         for (;;) {
             DWORD got = 0;
             if (::ReadFile(rd, buf, sizeof(buf), &got, nullptr) == 0 || got == 0) { break; }
-            text.append(buf, got);
+            if (text.size() < kMaxChildStdoutBytes) { text.append(buf, std::min<std::size_t>(got, kMaxChildStdoutBytes - text.size())); }
         }
     });
 
@@ -462,7 +470,7 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
                 if (::ReadFile(errRd, buf, sizeof(buf), &got, nullptr) == 0 || got == 0) {
                     break;
                 }
-                errText.append(buf, got);
+                if (errText.size() < kMaxChildStderrBytes) { errText.append(buf, std::min<std::size_t>(got, kMaxChildStderrBytes - errText.size())); }
                 if (errDup != nullptr) {
                     DWORD wrote = 0;
                     ::WriteFile(errDup, buf, got, &wrote, nullptr);
@@ -479,6 +487,11 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
         ::WaitForSingleObject(pi.hProcess, 5000);
         out.outcome = EnumOutcome::ChildTimedOut;
     }
+    // THE WHOLE JOB GOES, not only the child (R3-10): a grandchild that inherited the pipe's write end keeps
+    // the drain threads below waiting for an end-of-file that never comes, however the child itself ended.
+    // The job holds nothing but this child and what it started, and the child is already over (or was just
+    // terminated), so nothing the answer needs is lost: what it wrote is still in the pipe.
+    if (job != nullptr) { ::TerminateJobObject(job, 0xE0454E55ul); }
 
     drain.join();
     ::CloseHandle(rd);
@@ -635,7 +648,7 @@ void runOneChild(const std::string& helper, unsigned long timeoutMs,
         for (;;) {
             const ssize_t got = ::read(rd, buf, sizeof(buf));
             if (got <= 0) { break; }
-            text.append(buf, static_cast<std::size_t>(got));
+            if (text.size() < kMaxChildStdoutBytes) { text.append(buf, std::min<std::size_t>(static_cast<std::size_t>(got), kMaxChildStdoutBytes - text.size())); }
         }
     });
 

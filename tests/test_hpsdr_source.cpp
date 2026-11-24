@@ -24,6 +24,7 @@
 
 #include "source/hpsdr_protocol.hpp"
 #include "source/hpsdr_source.hpp"
+#include "hpsdr_discovery_decoy.hpp"
 #include "src_test_net.hpp"
 #include "test_check.hpp"
 
@@ -289,6 +290,21 @@ void testDiscovery() {
     CHECK(!cascade::source::discoverHpsdr("no-such-host.invalid", 1024, std::chrono::milliseconds(100), found, err) && !err.empty());
 }
 
+// R3-11: with a unicast address typed, a reply from any OTHER address is not the radio. A decoy listens at the
+// typed address and answers from 127.0.0.2 with a perfectly good discovery reply.
+void testDiscoveryIgnoresAnotherSender() {
+    Bytes r(60, 0);
+    r[0] = 0xEF; r[1] = 0xFE; r[2] = 2;
+    r[9] = 32; r[10] = 1;
+    srctest::DiscoveryDecoy decoy(r);
+    CHECK(decoy.start());
+    std::vector<HpsdrDevice> found;
+    std::string err;
+    CHECK(cascade::source::discoverHpsdr("127.0.0.1", decoy.port(), std::chrono::milliseconds(500), found, err));
+    CHECK(decoy.requests() >= 1);  // the question did reach the decoy
+    CHECK(found.empty());          // and its answer, from the wrong address, was not believed
+}
+
 void testOpenAndStream() {
     FakeDevice dev;
     CHECK(dev.start());
@@ -487,6 +503,7 @@ void testFuzz() {
 int main() {
     STEP(testCodecBytes());
     STEP(testDiscovery());
+    STEP(testDiscoveryIgnoresAnotherSender());
     STEP(testOpenAndStream());
     STEP(testOpenRefusals());
     STEP(testFlows());

@@ -106,6 +106,10 @@ bool discoverHpsdr(const std::string& host, std::uint16_t port, std::chrono::mil
         error = "could not send the discovery request";
         return false;
     }
+    // A UNICAST ADDRESS TYPED means one radio was asked, so only that address can be it (R3-11); a broadcast
+    // search (255.255.255.255 or a subnet's directed broadcast) takes any answer, as it has to.
+    const std::uint32_t asked = ntohl(to.sin_addr.s_addr);
+    const bool unicast = asked != 0xFFFFFFFFu && (asked & 0xFFu) != 0xFFu;
     std::set<std::string> seen;
     const auto end = std::chrono::steady_clock::now() + window;
     for (;;) {
@@ -128,6 +132,7 @@ bool discoverHpsdr(const std::string& host, std::uint16_t port, std::chrono::mil
         SockLen fl = sizeof(from);
         const int n = ::recvfrom(s, reinterpret_cast<char*>(buf), sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fl);
         if (n <= 0) { continue; }
+        if (unicast && from.sin_addr.s_addr != to.sin_addr.s_addr) { continue; }  // not the radio that was asked
         hp::DiscoveryReply rep;
         if (!hp::parseDiscoveryReply(buf, static_cast<std::size_t>(n), rep)) { continue; }
         if (!seen.insert(rep.macText()).second) { continue; }

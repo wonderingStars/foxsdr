@@ -226,6 +226,7 @@ bool SpyServerSource::open(const std::string& args) {
     double rate = 0.0;
     const double ask = wantRate > 0.0 ? wantRate : static_cast<double>(info_.maxSampleRate);
     if (!sp::stageForRate(info_, ask, stage, rate)) { return failOpen("the SpyServer's radio reports no sample rates"); }
+    if (!plausibleSampleRateHz(rate)) { return failOpen("the SpyServer reported a sample rate it cannot be using"); }
     stage_ = stage;
     rateHz_ = rate;
     host_ = host;
@@ -296,6 +297,7 @@ bool SpyServerSource::setSampleRateHz(double hz) {
     std::uint32_t stage = 0;
     double rate = 0.0;
     if (!sp::stageForRate(info_, hz, stage, rate)) { setError("the SpyServer's radio reports no sample rates"); return false; }
+    if (!plausibleSampleRateHz(rate)) { setError("the SpyServer reported a sample rate it cannot be using"); return false; }
     if (!sendSet(sp::kSetIqDecimation, stage, "setting the sample rate")) { return false; }
     stage_ = stage;
     rateHz_ = rate;

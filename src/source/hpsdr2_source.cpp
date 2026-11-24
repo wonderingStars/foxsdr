@@ -151,8 +151,9 @@ std::string Hpsdr2Device::name() const {
 namespace {
 
 // Collects replies on `net` for `window`. `single`: stop at the first valid reply.
+// `onlyFrom` (network order, 0: anyone) is the one address a reply is believed from: the radio the user typed (R3-11).
 void collectReplies(const std::function<int(std::uint8_t*, std::size_t, std::size_t&, sockaddr_in&, int)>& recv,
-                    std::chrono::milliseconds window, bool single, std::vector<Hpsdr2Device>& found) {
+                    std::chrono::milliseconds window, bool single, std::uint32_t onlyFrom, std::vector<Hpsdr2Device>& found) {
     std::set<std::string> seen;
     const auto end = std::chrono::steady_clock::now() + window;
     for (;;) {
@@ -163,6 +164,7 @@ void collectReplies(const std::function<int(std::uint8_t*, std::size_t, std::siz
         sockaddr_in from{};
         const int r = recv(buf, sizeof(buf), got, from, static_cast<int>(left.count()));
         if (r <= 0) { break; }
+        if (onlyFrom != 0 && from.sin_addr.s_addr != onlyFrom) { continue; }
         h2::DiscoveryReply rep;
         if (!h2::parseDiscoveryReply(buf, got, rep)) { continue; }
         if (!seen.insert(rep.macText()).second) { continue; }
@@ -187,8 +189,11 @@ bool discoverHpsdr2(const std::string& host, std::uint16_t port, std::chrono::mi
     Hpsdr2Source::Net net;
     if (!net.bind(isLoopbackText(host), error)) { return false; }
     if (!net.sendTo(to, h2::buildDiscovery())) { error = "could not send the discovery request"; return false; }
+    // a unicast address typed: only that address can be the radio; a broadcast search takes any answer
+    const std::uint32_t asked = ntohl(to.sin_addr.s_addr);
+    const std::uint32_t unicastOnly = (asked != 0xFFFFFFFFu && (asked & 0xFFu) != 0xFFu) ? to.sin_addr.s_addr : 0u;
     collectReplies([&net](std::uint8_t* b, std::size_t m, std::size_t& g, sockaddr_in& f, int w) { return net.recvFrom(b, m, g, f, w); },
-                   window, host != "255.255.255.255", found);
+                   window, host != "255.255.255.255", unicastOnly, found);
     return true;
 }
 
@@ -340,8 +345,10 @@ bool Hpsdr2Source::open(const std::string& args) {
     if (!net->bind(isLoopbackText(host), err)) { setError(err); return false; }
     if (!net->sendTo(target, h2::buildDiscovery())) { setError("could not send the discovery request"); return false; }
     std::vector<Hpsdr2Device> found;
+    const std::uint32_t askedAddr = ntohl(target.sin_addr.s_addr);  // a unicast address typed: only it can be the radio (R3-11)
+    const std::uint32_t unicastOnly = (askedAddr != 0xFFFFFFFFu && (askedAddr & 0xFFu) != 0xFFu) ? target.sin_addr.s_addr : 0u;
     collectReplies([&net](std::uint8_t* b, std::size_t m, std::size_t& g, sockaddr_in& f, int w) { return net->recvFrom(b, m, g, f, w); },
-                   std::chrono::milliseconds(timeoutMs_), host != "255.255.255.255" && wantMac.empty(), found);
+                   std::chrono::milliseconds(timeoutMs_), host != "255.255.255.255" && wantMac.empty(), unicastOnly, found);
     const Hpsdr2Device* chosen = nullptr;
     for (const Hpsdr2Device& d : found) {
         if (wantMac.empty() || d.reply.macText() == wantMac) { chosen = &d; break; }
