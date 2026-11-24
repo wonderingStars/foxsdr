@@ -204,6 +204,21 @@ std::string catDumpState(const CatRadio& status) {
     return o.str();
 }
 
+CatHttpStart catClassifyConnectionStart(const std::string& head) {
+    // The request methods of RFC 9110 (upper case, as a client must write them) and each followed by the one space that ends the word.
+    static const char* const kMethods[] = {"GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "PATCH ", "OPTIONS ", "CONNECT ", "TRACE "};
+    bool maybe = false;
+    for (const char* m : kMethods) {
+        const std::string method(m);
+        if (head.size() >= method.size()) {
+            if (head.compare(0, method.size(), method) == 0) return CatHttpStart::Yes;
+        } else if (method.compare(0, head.size(), head) == 0) {
+            maybe = true;
+        }
+    }
+    return maybe ? CatHttpStart::Maybe : CatHttpStart::No;
+}
+
 CatResult executeCatLine(const std::string& line, const CatRadio& status) {
     const std::string text = trimmed(line);
     if (text.empty()) {

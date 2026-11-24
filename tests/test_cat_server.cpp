@@ -1018,6 +1018,71 @@ void testGarbageIsAnsweredOrIgnoredAndNeverApplied() {
     server.stop();
 }
 
+// R4-02 (network review of 2026-11-24): a web page can make a browser send a request to a loopback port. The header lines are answered RPRT and
+// ignored, and the BODY, whose text the page chooses, is one more line: "F 7100000" retunes the receiver. A connection that opens with an HTTP
+// request line is not a CAT client: it is closed with nothing executed and nothing answered.
+void testAWebPageRequestIsNotACatClient() {
+    resetStatus();
+    CatServer server;
+    server.setSessionOpener(opener());
+    std::string error;
+    const int port = startOnFreePort(server, error);
+    if (port < 0) { std::printf("SKIP: no free port\n"); return; }
+    // what a browser sends for fetch("http://127.0.0.1:4532/", {method: "POST", mode: "no-cors", body: "\nF 145500000\n"})
+    const std::string body = "\nF 145500000\n";
+    const std::string request = "POST / HTTP/1.1\r\nHost: 127.0.0.1:4532\r\nConnection: keep-alive\r\nContent-Length: " + std::to_string(body.size()) +
+                                "\r\nContent-Type: text/plain;charset=UTF-8\r\nOrigin: https://example.invalid\r\n\r\n" + body;
+    const char* const methods[] = {"POST", "GET", "PUT", "HEAD", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE"};
+    for (const char* method : methods) {
+        std::string req = request;
+        req.replace(0, 4, method);   // "POST" -> the method under test (the rest of the request is the same)
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s == INVALID_SOCKET) { break; }
+        CHECK(sendRaw(s, req));
+        // Everything the server says until it closes (or 600 ms pass): a CAT server answers each line RPRT and keeps the connection; the
+        // guard says nothing and hangs up.
+        const std::string got = readLines(s, 1000, 600);
+        CHECK(got.empty());
+        char b[8];
+        CHECK(::recv(s, b, sizeof b, 0) == 0);   // closed by the server (a timeout would be -1, an answer a positive count)
+        closeClient(s);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));   // (the connection's thread may still be working through what it was sent)
+        CHECK(takeSubmitted().empty());   // and the body was never run as a command
+    }
+    // the request line arrives split across segments: still refused, still nothing run
+    {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s != INVALID_SOCKET) {
+            CHECK(sendRaw(s, "PO"));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            CHECK(sendRaw(s, request.substr(2)));
+            CHECK(readLines(s, 1000, 600).empty());
+            closeClient(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            CHECK(takeSubmitted().empty());
+        }
+    }
+    // a real client is not affected, and the guard looks at the connection's first bytes only
+    {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s != INVALID_SOCKET) {
+            CHECK(sendRaw(s, "f\n"));
+            CHECK(readLines(s, 1) == "145000000\n");
+            CHECK(sendRaw(s, "GET / HTTP/1.1\n"));
+            CHECK(readLines(s, 1) == "RPRT -4\n");   // inside a session it is only an unknown command, as before
+            CHECK(sendRaw(s, "\\get_freq\n"));
+            CHECK(readLines(s, 1) == "145000000\n");
+            closeClient(s);
+        }
+    }
+    CHECK(takeSubmitted().empty());
+    CHECK(server.httpRefused() == 10u);   // the nine methods and the split request, and no real client
+    server.stop();
+}
+
 void testAClientThatNeverReadsIsDropped() {
     resetStatus();
     CatServer server;
@@ -1078,6 +1143,7 @@ void testReconnectingForEverIsBounded() {
 int main() {
     testBeyondThisComputerNeedsAList();
     testGarbageIsAnsweredOrIgnoredAndNeverApplied();
+    testAWebPageRequestIsNotACatClient();
     testAClientThatNeverReadsIsDropped();
     testReconnectingForEverIsBounded();
     testRefusesToStartWithoutAProvider();

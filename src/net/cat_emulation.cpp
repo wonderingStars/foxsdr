@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "core/serial_port.hpp"
+#include "net/cat_protocol.hpp"   // catClassifyConnectionStart (R4-02)
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -93,7 +94,15 @@ char CatEmulator::yaesuModeChar() {
 std::string CatEmulator::feed(const char* data, std::size_t n) {
     std::string out;
     for (std::size_t i = 0; i < n; ++i) {
+        if (closeRequested_) { break; }
         const unsigned char c = static_cast<unsigned char>(data[i]);
+        if (refuseHttp_ && !startDecided_) {
+            // R4-02: judged byte by byte, so no command can complete before the verdict (a ';' is never part of a method word).
+            head_ += static_cast<char>(c);
+            const CatHttpStart verdict = catClassifyConnectionStart(head_);
+            if (verdict == CatHttpStart::Yes) { closeRequested_ = true; partial_.clear(); out.clear(); break; }
+            if (verdict == CatHttpStart::No) { startDecided_ = true; head_.clear(); }
+        }
         if (dropping_) {
             if (c == ';') { dropping_ = false; }
             continue;
@@ -366,6 +375,7 @@ std::uint64_t serveCatStream(CatStream& stream, CatEmulator& emu, const std::ato
         if (n < 0) { break; }
         if (n == 0) { continue; }
         const std::string reply = emu.feed(buf, static_cast<std::size_t>(n));
+        if (emu.closeRequested()) { break; }   // R4-02: a web page's request, not a CAT client
         std::size_t at = 0;
         while (at < reply.size()) {
             const int w = stream.write(reply.data() + at, reply.size() - at);
@@ -526,6 +536,7 @@ void CatTcpService::acceptLoop() {
         }
         r->t = std::thread([this, r, c] {
             CatEmulator emu(dialect_, backend_, vfos_);
+            emu.setRefuseHttp(true);   // R4-02
             SocketStream stream(c);
             const std::uint64_t n = serveCatStream(stream, emu, stop_);
             commands_ += n;
@@ -642,6 +653,7 @@ void CatTcpService::acceptLoop() {
         }
         r->t = std::thread([this, r, c] {
             CatEmulator emu(dialect_, backend_, vfos_);
+            emu.setRefuseHttp(true);   // R4-02
             SocketStream stream(c);
             const std::uint64_t n = serveCatStream(stream, emu, stop_);
             commands_ += n;

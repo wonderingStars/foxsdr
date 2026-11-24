@@ -96,6 +96,10 @@ public:
     std::string handle(const std::string& command);
     CatEmuStats stats() const { return stats_; }
     CatDialect dialect() const { return dialect_; }
+    // R4-02: for a network connection. When on, a stream whose first bytes are an HTTP request line ("POST / HTTP/1.1": a web page's
+    // request to this port, not a CAT client) executes nothing, answers nothing, and sets closeRequested(); the transport hangs up.
+    void setRefuseHttp(bool on) { refuseHttp_ = on; }
+    bool closeRequested() const { return closeRequested_; }
 
     static constexpr std::size_t kMaxCommandBytes = 64;
 
@@ -111,6 +115,10 @@ private:
     std::shared_ptr<RigVfos> vfos_;
     std::string partial_;
     bool dropping_ = false;   // an over-long command: everything up to its ';' is skipped
+    bool refuseHttp_ = false;
+    bool startDecided_ = false;   // the first bytes of the stream have been seen not to be an HTTP request line
+    bool closeRequested_ = false;
+    std::string head_;            // the stream's first bytes (at most eight), while startDecided_ is false
     CatEmuStats stats_;
 };
 

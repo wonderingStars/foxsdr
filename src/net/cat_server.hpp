@@ -120,6 +120,8 @@ public:
     // TESTS ONLY (never a setting): with bindAll, bind this address (host order) instead of every interface, so the list can be proved on 127.0.0.1 without a firewall prompt.
     void setBindAddressForTest(std::uint32_t hostOrder) { testBind_ = hostOrder; }
     std::uint64_t refusedPeer() const { return refusedPeer_.load(std::memory_order_relaxed); }
+    // Connections closed because they opened with an HTTP request line: a web page, not a CAT client (R4-02).
+    std::uint64_t httpRefused() const { return httpRefused_.load(std::memory_order_relaxed); }
 
     // stop() is a HARD stop: when it returns, no thread belonging to this
     // server is still running and every client connection has been closed.
@@ -147,6 +149,7 @@ private:
     CatSessionOpener opener_;
     std::function<void()> usageCallback_;
     std::atomic<std::uint64_t> refusedPeer_{0};
+    std::atomic<std::uint64_t> httpRefused_{0};
     PeerAllow allow_;
     std::uint32_t testBind_ = 0;
     bool listed_ = false;

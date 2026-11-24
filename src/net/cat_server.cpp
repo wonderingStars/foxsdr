@@ -469,6 +469,7 @@ void CatServer::serveClient(std::intptr_t sock, CatSession& session, int& outsta
     // (the 120 s freeze that started this feature was a CAT client being shut down) is named by the phase it was in.
     cascade::core::beats::Registration beat(cascade::core::beats::kThreadCatClient);
     std::string pending;
+    bool startChecked = false;  // the connection's first bytes have been seen not to be an HTTP request (R4-02)
     char buf[512];
     for (;;) {
         if (stopping_.load(std::memory_order_relaxed)) break;
@@ -490,6 +491,18 @@ void CatServer::serveClient(std::intptr_t sock, CatSession& session, int& outsta
             break;  // the socket failed
         }
         pending.append(buf, static_cast<std::size_t>(n));
+
+        // R4-02: the first bytes of a connection decide whether it is a CAT client at all. A web page's request to this port opens with
+        // an HTTP request line, and its body - one line of its own choosing - would otherwise be run as a command (F, M). Closed with
+        // nothing executed and nothing answered.
+        if (!startChecked) {
+            const CatHttpStart verdict = catClassifyConnectionStart(pending.substr(0, 8));
+            if (verdict == CatHttpStart::Yes) {
+                httpRefused_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            if (verdict == CatHttpStart::No) startChecked = true;
+        }
 
         // A client that never sends a newline must not be able to grow this
         // buffer without limit.

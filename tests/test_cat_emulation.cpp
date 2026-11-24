@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <random>
 #include <string>
 #include <thread>
@@ -282,6 +283,45 @@ public:
     }
 };
 
+// R4-02, at the protocol level: with the guard on, a stream that opens with an HTTP request line runs nothing, answers nothing and asks to be
+// closed (headers carry ';', so without the guard the body's commands would run); with it off (a serial port) nothing changes.
+void testRefuseHttp() {
+    for (const CatDialect dialect : {CatDialect::KenwoodTS480, CatDialect::YaesuFT891}) {
+        const std::string fa = dialect == CatDialect::KenwoodTS480 ? ";FA00007100000;MD2;" : ";FA007100000;MD02;";
+        const std::string req = "POST / HTTP/1.1\r\nContent-Type: text/plain;charset=UTF-8\r\n\r\n" + fa;
+        {
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            CHECK(e.feed(req).empty() && e.closeRequested());
+            CHECK(r.freqSets == 0 && r.modeSets == 0);
+            CHECK(e.feed("ID;").empty());   // once refused, nothing more is taken from the stream
+        }
+        {   // byte by byte
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            std::string out;
+            for (char c : req) { out += e.feed(std::string(1, c)); }
+            CHECK(out.empty() && e.closeRequested() && r.freqSets == 0 && r.modeSets == 0);
+        }
+        {   // a real client, whatever its first bytes, is served; "PS1;" and "POST" are not alike
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            CHECK(e.feed("; ; ;ID;") == (dialect == CatDialect::KenwoodTS480 ? "ID020;" : "ID0650;"));
+            CHECK(!e.closeRequested());
+            CHECK(e.feed("PS;") == "PS1;" && !e.closeRequested());
+        }
+        {   // the guard off: a serial port is not a web page's business and is served as before
+            FakeRig r;
+            CatEmulator e(dialect, r.backend());
+            e.feed(req);
+            CHECK(!e.closeRequested() && r.freqSets == 1);
+        }
+    }
+}
+
 void testStream() {
     {
         FakeRig r;
@@ -521,6 +561,68 @@ void testTcp() {
     }
 }
 
+// ---- [H] the two findings of the network review of 2026-11-24 (R4-02, R4-03) -----------------------------------------------------------------
+bool waitUntil(int ms, const std::function<bool()>& pred) {
+    const auto end = Clock::now() + std::chrono::milliseconds(ms);
+    while (!pred()) {
+        if (Clock::now() > end) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+// R4-02: a web page can make a browser send a request to a loopback port. Its headers carry ';' (text/plain;charset=UTF-8), which ends whatever
+// had accumulated, so the next command in its BODY is clean and runs: ";FA00007100000;" retunes the receiver. A connection that opens with an
+// HTTP request line is not a CAT client: closed, nothing answered, nothing run.
+void testWebPageRequest() {
+    WSADATA d;
+    ::WSAStartup(MAKEWORD(2, 2), &d);
+    for (const CatDialect dialect : {CatDialect::KenwoodTS480, CatDialect::YaesuFT891}) {
+        FakeRig r;
+        CatTcpService svc(dialect, r.backend());
+        CatEmuFact f;
+        CHECK(svc.start(0, false, f));
+        const std::string body = dialect == CatDialect::KenwoodTS480 ? ";FA00007100000;MD2;" : ";FA007100000;MD02;";
+        const std::string request = "POST / HTTP/1.1\r\nHost: 127.0.0.1:4532\r\nConnection: keep-alive\r\nContent-Length: " + std::to_string(body.size()) +
+                                    "\r\nContent-Type: text/plain;charset=UTF-8\r\nOrigin: https://example.invalid\r\n\r\n" + body;
+        const char* const methods[] = {"POST", "GET", "PUT", "HEAD", "DELETE", "PATCH", "OPTIONS", "CONNECT", "TRACE"};
+        for (const char* method : methods) {
+            std::string req = request;
+            req.replace(0, 4, method);
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s == INVALID_SOCKET) { break; }
+            ::send(s, req.data(), static_cast<int>(req.size()), 0);
+            char buf[64];
+            const int n = ::recv(s, buf, sizeof buf, 0);
+            CHECK(n == 0);   // closed by the server: no answer (a positive count), and not merely silent (-1 after the 3 s timeout)
+            ::closesocket(s);
+            CHECK(r.freqSets == 0 && r.modeSets == 0 && r.freq == 7050000.0 && r.mode == "USB");   // the body ran as nothing
+        }
+        {   // the request line split across segments
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s != INVALID_SOCKET) {
+                ::send(s, request.data(), 2, 0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                ::send(s, request.data() + 2, static_cast<int>(request.size() - 2), 0);
+                char buf[64];
+                CHECK(::recv(s, buf, sizeof buf, 0) == 0);
+                ::closesocket(s);
+                CHECK(r.freqSets == 0 && r.modeSets == 0);
+            }
+        }
+        {   // a real client is unaffected
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s != INVALID_SOCKET) {
+                CHECK(tcpAsk(s, "ID;", dialect == CatDialect::KenwoodTS480 ? 6 : 7) == (dialect == CatDialect::KenwoodTS480 ? "ID020;" : "ID0650;"));
+                ::closesocket(s);
+            }
+        }
+    }
+}
+
 #endif  // _WIN32
 
 }  // namespace
@@ -530,10 +632,12 @@ int main() {
     testYaesu();
     testReceiveOnly();
     testFuzz();
+    testRefuseHttp();
     testStream();
 #if defined(_WIN32)
     testSerial();
     testTcp();
+    testWebPageRequest();
 #endif
     return testSummary("test_cat_emulation");
 }

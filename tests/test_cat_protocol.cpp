@@ -416,9 +416,26 @@ void testSetsNeverApplyDirectly() {
     }
 }
 
+// R4-02: a connection that opens with an HTTP request line is a web page, not a CAT client.
+void testConnectionStartHttpGuard() {
+    using cascade::net::CatHttpStart;
+    using cascade::net::catClassifyConnectionStart;
+    for (const char* m : {"GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "PATCH ", "OPTIONS ", "CONNECT ", "TRACE "}) {
+        CHECK(catClassifyConnectionStart(std::string(m) + "/ HTTP/1.1\r\n") == CatHttpStart::Yes);
+        CHECK(catClassifyConnectionStart(std::string(m)) == CatHttpStart::Yes);
+        CHECK(catClassifyConnectionStart(std::string(m).substr(0, 2)) == CatHttpStart::Maybe);   // "GE", "PO", "PU", ...: could still be one
+    }
+    CHECK(catClassifyConnectionStart("") == CatHttpStart::Maybe);
+    // what real clients open with: rigctl commands, Kenwood and Yaesu commands, blank lines, a wake-up string
+    for (const char* ok : {"f\n", "F 7100000\n", "\\get_freq\n", "\\dump_state\n", "q\n", "FA;", "ID;", "MD2;", "; ; ;", "\r\n", "get_freq", "GETX", "POSTS ", "post / HTTP/1.1", " GET /"}) {
+        CHECK(catClassifyConnectionStart(ok) == CatHttpStart::No);
+    }
+}
+
 }  // namespace
 
 int main() {
+    testConnectionStartHttpGuard();
     testGetFrequency();
     testSetFrequencyInsideBandMovesOnlyTheVfo();
     testSetFrequencyOutsideBandRetunes();
