@@ -231,6 +231,20 @@ struct AscpSource::Conn {
         if (r > 0 && FD_ISSET(udp, &rf)) {
             // drain what is queued, bounded so the TCP side is looked at again
             for (int i = 0; i < 64; ++i) {
+                // The socket is blocking: before every read after the first, ask whether another datagram is
+                // queued. A bad or foreign datagram used to `continue` past the check that used to sit at the
+                // bottom of the loop and park here in recvfrom for good (R3-01).
+                if (i > 0) {
+                    fd_set one;
+                    FD_ZERO(&one);
+                    FD_SET(udp, &one);
+                    timeval z{};
+#if defined(_WIN32)
+                    if (::select(0, &one, nullptr, nullptr, &z) <= 0) { break; }
+#else
+                    if (::select(udp + 1, &one, nullptr, nullptr, &z) <= 0) { break; }
+#endif
+                }
                 sockaddr_in from{};
                 SockLen fl = sizeof(from);
                 const int n = ::recvfrom(udp, reinterpret_cast<char*>(buf.data()), static_cast<int>(buf.size()), 0,
@@ -249,15 +263,6 @@ struct AscpSource::Conn {
                     seq.note(info.sequence);
                 }
                 if (streaming && !out.empty()) { link.pushSamples(out.data(), out.size()); }
-                fd_set one;
-                FD_ZERO(&one);
-                FD_SET(udp, &one);
-                timeval z{};
-#if defined(_WIN32)
-                if (::select(0, &one, nullptr, nullptr, &z) <= 0) { break; }
-#else
-                if (::select(udp + 1, &one, nullptr, nullptr, &z) <= 0) { break; }
-#endif
             }
         }
         if (!streaming) {
