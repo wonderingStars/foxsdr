@@ -24,6 +24,7 @@
 
 #include "source/hpsdr2_protocol.hpp"
 #include "source/hpsdr2_source.hpp"
+#include "hpsdr_discovery_decoy.hpp"
 #include "src_test_net.hpp"
 #include "test_check.hpp"
 
@@ -596,6 +597,20 @@ void testStatusFlags() {
     s.closeDevice();
 }
 
+// R3-11: with a unicast address typed, a reply from any OTHER address is not the radio (see hpsdr_discovery_decoy.hpp).
+void testDiscoveryIgnoresAnotherSender() {
+    Bytes r(60, 0);
+    r[4] = 0x02;
+    r[11] = 1; r[12] = 39; r[13] = 32; r[20] = 4;
+    srctest::DiscoveryDecoy decoy(r);
+    CHECK(decoy.start());
+    std::vector<Hpsdr2Device> found;
+    std::string err;
+    CHECK(cascade::source::discoverHpsdr2("127.0.0.1", decoy.port(), std::chrono::milliseconds(500), found, err));
+    CHECK(decoy.requests() >= 1);
+    CHECK(found.empty());
+}
+
 void testBoardsAndOpenRefusals() {
     for (const int b : {0, 5, 6, 10, 7}) {
         P2Radio radio(static_cast<std::uint8_t>(b));
@@ -824,6 +839,7 @@ int main() {
     std::fprintf(stderr, "testStatusBytes\n");            testStatusBytes();
     std::fprintf(stderr, "testReceive\n");                testReceive();
     std::fprintf(stderr, "testStatusFlags\n");            testStatusFlags();
+    std::fprintf(stderr, "testDiscoveryIgnoresAnotherSender\n");  testDiscoveryIgnoresAnotherSender();
     std::fprintf(stderr, "testBoardsAndOpenRefusals\n");  testBoardsAndOpenRefusals();
     std::fprintf(stderr, "testRefusedSettings\n");        testRefusedSettings();
     std::fprintf(stderr, "testStreamFaults\n");           testStreamFaults();
