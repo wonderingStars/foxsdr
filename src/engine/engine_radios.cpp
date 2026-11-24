@@ -19,6 +19,7 @@
 #include <cstdio>
 
 #include "core/diag_log.hpp"
+#include "engine/radio_refusal_data.hpp"
 #include "core/patch_devices.hpp"
 #include "core/receiver_tables.hpp"
 #include "source/kiwisdr_source.hpp"
@@ -144,6 +145,12 @@ FoxCommandResult Engine::radioAddOp(const FoxCommand& c, const std::string& text
     }
     const DeviceLedger::Claim claim = deviceLedger_.claim(key, DeviceHolder::receiver(slot), true);
     if (!claim.granted()) {
+        // A refusal for a held device carries who holds it as data (core/radio_refusal.hpp: applied[0] kind, applied[1] number); the words stay as the ledger wrote them.
+        if (claim.verdict == DeviceLedger::Verdict::Held) {
+            const RefusalHolder who = refusalHolderOf(claim.holder);
+            res.applied[0] = static_cast<double>(who.kind);
+            res.applied[1] = static_cast<double>(who.number);
+        }
         return refuse(claim.verdict == DeviceLedger::Verdict::LimitReached ? FOXAPI_LIMIT : FOXAPI_BUSY, claim.refusal);
     }
 

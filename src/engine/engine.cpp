@@ -49,6 +49,8 @@
 #include "core/frame_timing.hpp"
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
+#include "core/radio_handoff.hpp"
+#include "engine/radio_refusal_data.hpp"
 #include "core/event_trail.hpp"
 #include "core/freq_import.hpp"
 #include "core/diag_report.hpp"
@@ -8931,6 +8933,20 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                     rebuildDeviceLedger();
                     const DeviceHolder holder = deviceLedger_.holderOf(key);
                     if (!holder.none() && holder != DeviceHolder::receiver(scopedSlot())) {
+                        // A REFUSED CHOICE SAYS WHY (0.99.113, core/radio_refusal.hpp). The API answer and its text are unchanged (remote clients and tests read them); the person is told on the
+                        // Source section's error line, in both windows and for remote clients, in the neighbouring branches' own way (a sentence through tr() written to sourceError_, which the
+                        // next accepted choice clears like any other); one log line per refusal; and the answer carries WHO holds the radio as data (applied[0] kind, applied[1] number), so a
+                        // window can offer more without reading a sentence. NOTHING here counts a failed open, files a report or raises the hand-off question: the radio never failed to open.
+                        const RefusalHolder who = refusalHolderOf(holder);
+                        const std::string args = text.substr(colon + 1);
+                        rx().sourceError_ = cascade::core::refusal::sourceSentence(who.kind, who.number);
+                        std::string label = (kind == "soapy") ? cascade::core::sanitiseDevice(args) : modelFromNativeLabel(nativeLabelFor(kind, args));
+                        if (label.empty() || label == args) { label = kind; }
+                        const std::string last4 = cascade::core::handoff::lastFour(cascade::core::handoff::serialOfKey(cascade::core::handoff::radioKey(kind, args)));
+                        cascade::core::diagLogf("source: choosing %s%s%s%s was refused: the radio is held by %s", label.c_str(), last4.empty() ? "" : " (serial ending ", last4.c_str(),
+                                                last4.empty() ? "" : ")", holder.describe().c_str());
+                        res.applied[0] = static_cast<double>(who.kind);
+                        res.applied[1] = static_cast<double>(who.number);
                         return refuse(FOXAPI_BUSY, ("in use by " + holder.describe()).c_str());
                     }
                 }
