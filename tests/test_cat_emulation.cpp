@@ -305,6 +305,22 @@ void testRefuseHttp() {
             for (char c : req) { out += e.feed(std::string(1, c)); }
             CHECK(out.empty() && e.closeRequested() && r.freqSets == 0 && r.modeSets == 0);
         }
+        {   // REVIEW FIX (Fable review of 2026-11-24): a TLS hello to this port (a page pointing https:// at a name that resolves to this computer) opens with a control
+            // byte and carries the host name in the clear, and ';' may be legal in a host name: "a;FA00007100000;b.example" would put a clean command on the wire
+            const std::string host = dialect == CatDialect::KenwoodTS480 ? "a;FA00007100000;MD2;b.example" : "a;FA007100000;MD02;b.example";
+            const std::string hello = std::string("\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03", 11) + std::string(32, 'r') + std::string(1, '\0') + host;
+            for (const std::string& opening : {hello, std::string("\x80") + host, std::string(1, '\0') + host, std::string("\x7f") + host, std::string("\x01") + host}) {
+                FakeRig r;
+                CatEmulator e(dialect, r.backend());
+                e.setRefuseHttp(true);
+                CHECK(e.feed(opening).empty() && e.closeRequested());
+                CHECK(r.freqSets == 0 && r.modeSets == 0);
+            }
+            FakeRig r;   // a CR or LF is how a client may open, and still a CAT client
+            CatEmulator e(dialect, r.backend());
+            e.setRefuseHttp(true);
+            CHECK(e.feed("\r\n;ID;") == (dialect == CatDialect::KenwoodTS480 ? "ID020;" : "ID0650;") && !e.closeRequested());
+        }
         {   // a real client, whatever its first bytes, is served; "PS1;" and "POST" are not alike
             FakeRig r;
             CatEmulator e(dialect, r.backend());
@@ -441,6 +457,11 @@ SOCKET connectTo(const char* host, std::uint16_t port, int ms = 1500) {
     DWORD to = 3000;
     ::setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&to), sizeof to);
     return s;
+}
+// After a recv that returned -1: the server closed the connection with request bytes it never read still queued, which Windows reports as a reset (a silent peer is WSAETIMEDOUT).
+bool resetByPeer() {
+    const int e = ::WSAGetLastError();
+    return e == WSAECONNRESET || e == WSAECONNABORTED;
 }
 std::string tcpAsk(SOCKET s, const std::string& send, std::size_t want) {
     ::send(s, send.data(), static_cast<int>(send.size()), 0);
@@ -595,7 +616,7 @@ void testWebPageRequest() {
             ::send(s, req.data(), static_cast<int>(req.size()), 0);
             char buf[64];
             const int n = ::recv(s, buf, sizeof buf, 0);
-            CHECK(n == 0);   // closed by the server: no answer (a positive count), and not merely silent (-1 after the 3 s timeout)
+            CHECK(n == 0 || (n < 0 && resetByPeer()));   // closed by the server (an orderly close, or a reset when request bytes were still queued): no answer, and not merely silent (a 3 s timeout)
             ::closesocket(s);
             CHECK(r.freqSets == 0 && r.modeSets == 0 && r.freq == 7050000.0 && r.mode == "USB");   // the body ran as nothing
         }
@@ -607,7 +628,21 @@ void testWebPageRequest() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 ::send(s, request.data() + 2, static_cast<int>(request.size() - 2), 0);
                 char buf[64];
-                CHECK(::recv(s, buf, sizeof buf, 0) == 0);
+                const int n2 = ::recv(s, buf, sizeof buf, 0);
+                CHECK(n2 == 0 || (n2 < 0 && resetByPeer()));
+                ::closesocket(s);
+                CHECK(r.freqSets == 0 && r.modeSets == 0);
+            }
+        }
+        {   // a TLS hello whose host name carries a clean command (review fix of 2026-11-24)
+            SOCKET s = connectTo("127.0.0.1", svc.boundPort());
+            CHECK(s != INVALID_SOCKET);
+            if (s != INVALID_SOCKET) {
+                const std::string hello = std::string("\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03", 11) + std::string(32, 'r') + std::string(1, '\0') + "a" + body + "b.example";
+                ::send(s, hello.data(), static_cast<int>(hello.size()), 0);
+                char buf[64];
+                const int n = ::recv(s, buf, sizeof buf, 0);
+                CHECK(n == 0 || (n < 0 && resetByPeer()));
                 ::closesocket(s);
                 CHECK(r.freqSets == 0 && r.modeSets == 0);
             }
@@ -645,6 +680,9 @@ void testStopWithAClientThatNeverReads() {
     ::WSAStartup(MAKEWORD(2, 2), &d);
     FakeRig r;
     CatTcpService svc(CatDialect::KenwoodTS480, r.backend());
+    // REVIEW FIX (Fable review of 2026-11-24): with the send timeout set far past the bound below, only stop()'s own shutdown of the client's socket can end the stuck
+    // send in time; the timing of a default 2 s timeout against a 1 s bound did not tell the two apart (the shutdown half was never shown red) and was tight on a loaded PC
+    svc.setSendTimeoutMsForTest(20000);
     CatEmuFact f;
     CHECK(svc.start(0, false, f));
     SOCKET a = floodWithoutReading(svc.boundPort());
@@ -657,7 +695,7 @@ void testStopWithAClientThatNeverReads() {
     const double secs = std::chrono::duration<double>(Clock::now() - t0).count();
     std::printf("stop() with a client that never reads: %s after %.2f s\n", prompt ? "returned" : "STILL BLOCKED", secs);
     CHECK(prompt);
-    CHECK(secs < 1.0);   // the shutdown from stop() wakes the stuck send (measured 0.03 s); without it the 2 s send timeout would end it (measured 1.28 s)
+    CHECK(secs < 5.0);   // the shutdown from stop() wakes the stuck send (measured 0.03 s); without it nothing ends it for 20 s
     if (a != INVALID_SOCKET) { ::closesocket(a); }   // (on a failure, this lets the stuck send end so the test can finish)
     th.join();
     CHECK(!svc.running() && svc.clients() == 0);

@@ -426,6 +426,16 @@ void testConnectionStartHttpGuard() {
         CHECK(catClassifyConnectionStart(std::string(m).substr(0, 2)) == CatHttpStart::Maybe);   // "GE", "PO", "PU", ...: could still be one
     }
     CHECK(catClassifyConnectionStart("") == CatHttpStart::Maybe);
+    // REVIEW FIX (Fable review of 2026-11-24): a connection whose FIRST byte is a control byte other than CR or LF, or is 0x80 or above (a TLS hello opens 0x16 and
+    // carries the host name in the clear), is not a CAT client either; judged on the first byte alone, whatever follows
+    for (const char* bad : {"\x16\x03\x01", "\x16", "\x80", "\xff", "\x7f", "\x01", "\x1b", "\t"}) {
+        CHECK(catClassifyConnectionStart(bad) == CatHttpStart::Yes);
+    }
+    CHECK(catClassifyConnectionStart(std::string(1, '\0')) == CatHttpStart::Yes);
+    CHECK(catClassifyConnectionStart(std::string("\0;FA00007100000;", 16)) == CatHttpStart::Yes);
+    for (const char* ok : {"\r", "\n", "\r\n;ID;", "\nF 1\n"}) {
+        CHECK(catClassifyConnectionStart(ok) == CatHttpStart::No);
+    }
     // what real clients open with: rigctl commands, Kenwood and Yaesu commands, blank lines, a wake-up string
     for (const char* ok : {"f\n", "F 7100000\n", "\\get_freq\n", "\\dump_state\n", "q\n", "FA;", "ID;", "MD2;", "; ; ;", "\r\n", "get_freq", "GETX", "POSTS ", "post / HTTP/1.1", " GET /"}) {
         CHECK(catClassifyConnectionStart(ok) == CatHttpStart::No);

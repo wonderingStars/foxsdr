@@ -223,6 +223,21 @@ bool sendRaw(SockT s, const std::string& text) {
     return true;
 }
 
+// True when the server has closed this connection: an orderly close (recv returns 0) or, when the server closed while request bytes it never read
+// were still queued, a reset (Windows resets the connection then; recv returns -1 with ECONNRESET). A silent peer (a recv timeout) is neither.
+bool peerClosed(SockT s) {
+    char b[8];
+    const int n = static_cast<int>(::recv(s, b, sizeof b, 0));
+    if (n == 0) return true;
+    if (n > 0) return false;
+#if defined(_WIN32)
+    const int e = ::WSAGetLastError();
+    return e == WSAECONNRESET || e == WSAECONNABORTED;
+#else
+    return errno == ECONNRESET;
+#endif
+}
+
 // Reads until `lines` newlines have arrived or the deadline passes. Counting
 // lines rather than bytes is what makes this robust to segmentation: the point
 // of several tests here is that the reply may not arrive in one piece.
@@ -886,7 +901,9 @@ void testRoguePeerDoesNotDisturbAnotherSession() {
     SockT rogue = connectTo(port);
     CHECK(rogue != INVALID_SOCKET);
     if (rogue != INVALID_SOCKET) {
-        std::string garbage(std::string("\x01\x02\xfe\xff", 4) + "\r\n");
+        // (it opens with a printable byte: since the review fix of 2026-11-24 a connection whose FIRST byte is a control or high byte is closed unanswered, which
+        // testAWebPageRequestIsNotACatClient holds; the binary rubbish here is the rest of a line)
+        std::string garbage("x" + std::string("\x01\x02\xfe\xff", 4) + "\r\n");
         garbage += "F 999999999999999\n";       // far outside any tuning range
         garbage += std::string("\x03\x04", 2) + " unterminated";
         CHECK(sendRaw(rogue, garbage));
@@ -1044,8 +1061,7 @@ void testAWebPageRequestIsNotACatClient() {
         // guard says nothing and hangs up.
         const std::string got = readLines(s, 1000, 600);
         CHECK(got.empty());
-        char b[8];
-        CHECK(::recv(s, b, sizeof b, 0) == 0);   // closed by the server (a timeout would be -1, an answer a positive count)
+        CHECK(peerClosed(s));   // closed by the server (a silent timeout or an answer is not)
         closeClient(s);
         std::this_thread::sleep_for(std::chrono::milliseconds(200));   // (the connection's thread may still be working through what it was sent)
         CHECK(takeSubmitted().empty());   // and the body was never run as a command
@@ -1078,8 +1094,35 @@ void testAWebPageRequestIsNotACatClient() {
             closeClient(s);
         }
     }
+    // REVIEW FIX (Fable review of 2026-11-24): a TLS hello (a page pointing https:// at a name that resolves to this computer) opens with a control byte and
+    // carries the host name in the clear; no CAT client opens with a control byte other than CR or LF, or with a byte of 0x80 or above, so none of these runs
+    {
+        const std::string hellos[] = {std::string("\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03", 11) + "\nF 7100000\n", std::string(1, '\0') + "\nF 7100000\n", std::string("\x80\nF 7100000\n"),
+                                      std::string("\x7f\nF 7100000\n"), std::string("\x01\nF 7100000\n")};
+        for (const std::string& hello : hellos) {
+            SockT s = connectTo(port);
+            CHECK(s != INVALID_SOCKET);
+            if (s == INVALID_SOCKET) { break; }
+            CHECK(sendRaw(s, hello));
+            CHECK(readLines(s, 1000, 600).empty());
+            CHECK(peerClosed(s));
+            closeClient(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            CHECK(takeSubmitted().empty());
+        }
+    }
+    // and a CR or LF opening is still a CAT client (a blank line is how some clients wake the port)
+    {
+        SockT s = connectTo(port);
+        CHECK(s != INVALID_SOCKET);
+        if (s != INVALID_SOCKET) {
+            CHECK(sendRaw(s, "\r\nf\n"));
+            CHECK(readLines(s, 1) == "145000000\n");
+            closeClient(s);
+        }
+    }
     CHECK(takeSubmitted().empty());
-    CHECK(server.httpRefused() == 10u);   // the nine methods and the split request, and no real client
+    CHECK(server.httpRefused() == 15u);   // the nine methods, the split request and the five non-text openings, and no real client
     server.stop();
 }
 

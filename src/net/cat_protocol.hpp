@@ -103,7 +103,8 @@ CatResult executeCatLine(const std::string& line, const CatRadio& status);
 // word; a Kenwood or Yaesu command is two letters), so a connection that opens with "<METHOD> " is not a CAT client and is closed before
 // any of its bytes are taken as commands: its headers and its body are the page's text, not the user's. `head` is the first bytes the
 // connection ever sent. Yes: it begins with an HTTP method word and a space. Maybe: it could still become one (each byte so far
-// matches, and no method is complete). No: it cannot.
+// matches, and no method is complete). No: it cannot. Yes also when the first byte is a control byte other than CR or LF, or is 0x80 or above (a TLS
+// hello to this port: its host name is in the clear and may carry ';' or a newline): the connection is no CAT client and is closed all the same.
 enum class CatHttpStart { No, Maybe, Yes };
 CatHttpStart catClassifyConnectionStart(const std::string& head);
 

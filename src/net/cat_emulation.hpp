@@ -167,6 +167,8 @@ public:
     static constexpr int kMaxClients = 4;
     // A client that does not read what it was answered is let go after this long in send() (R4-03); stop() therefore returns within it.
     static constexpr int kSendTimeoutMs = 2000;
+    // For a test that must tell stop()'s own wake-up from the send timeout: set before start(); clients accepted afterwards use it.
+    void setSendTimeoutMsForTest(int ms) { sendTimeoutMs_ = ms; }
     CatTcpService(CatDialect dialect, RigBackend backend);
     ~CatTcpService();
     // `bindAll` false: 127.0.0.1 only. Port 0 asks the OS for a free one (boundPort() says which).
@@ -188,6 +190,7 @@ private:
     std::atomic<std::uint16_t> port_{0};
     std::atomic<int> clients_{0};
     std::atomic<std::uint64_t> commands_{0};
+    int sendTimeoutMs_ = kSendTimeoutMs;
     std::intptr_t listener_ = -1;
     std::mutex mu_;
     struct ClientRec;

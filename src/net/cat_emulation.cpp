@@ -527,7 +527,7 @@ void CatTcpService::acceptLoop() {
         DWORD to = 100;
         ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&to), sizeof to);
         // R4-03: a client that stops reading must not park this thread in send() for ever (stop() joins it): the send gives up after kSendTimeoutMs
-        DWORD sendTo = kSendTimeoutMs;
+        DWORD sendTo = static_cast<DWORD>(sendTimeoutMs_);
         ::setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTo), sizeof sendTo);
         BOOL nodelay = TRUE;
         ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof nodelay);
@@ -657,7 +657,7 @@ void CatTcpService::acceptLoop() {
         timeval to{0, 100000};
         ::setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
         // R4-03: a client that stops reading must not park this thread in send() for ever (stop() joins it): the send gives up after kSendTimeoutMs
-        timeval sendTo{kSendTimeoutMs / 1000, (kSendTimeoutMs % 1000) * 1000};
+        timeval sendTo{sendTimeoutMs_ / 1000, (sendTimeoutMs_ % 1000) * 1000};
         ::setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &sendTo, sizeof sendTo);
         int nodelay = 1;
         ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof nodelay);

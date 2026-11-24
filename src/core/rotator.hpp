@@ -205,9 +205,10 @@ public:
         Position p;
         if (!detail::parseNumber(l1, &p.az) || !detail::parseNumber(l2, &p.el)) { return fail("malformed position"); }
         // R4-08: finite is not enough. The engine turns a position into an int for its change signature (undefined for 1e300), and no rotator
-        // reports such an angle. The upper bounds are the GS-232 path's own (az 450, el 180); a negative minimum is legal in hamlib (its dummy
-        // rotator reports -180), so the lower bounds are -360 and -90.
-        if (p.az < -360.0 || p.az > 450.0 || p.el < -90.0 || p.el > 180.0) { return fail("malformed position"); }
+        // reports such an angle. The bound only has to keep that conversion defined, and a working rotctld must not be dropped for it: a refusal here
+        // tears the link down with a 2 s back-off on every poll (a rotator with overwind reports an azimuth past 450, hamlib's dummy one -180), so both
+        // angles are accepted within +-720 degrees (at most 7200 after the engine's times-ten).
+        if (p.az < -720.0 || p.az > 720.0 || p.el < -720.0 || p.el > 720.0) { return fail("malformed position"); }
         *out = p;
         return true;
     }
