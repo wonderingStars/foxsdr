@@ -68,6 +68,7 @@ struct RadioSpec {
     double noise = 0.02;           // noise standard deviation as a fraction of full scale
     double amp = 0.4;
     int initialRate = 250000;
+    int forceReplyRate = 0;        // R3-04: the rate the radio reports back, whatever was asked (0: honest)
 };
 
 // One bounded poll (srctest::waitRead blocks until readable or the flag drops).
@@ -245,6 +246,7 @@ private:
             }
             case as::ci::RxOutSampleRate: {
                 if (isSet && m.body.size() >= 5) { rate.store(snap(static_cast<int>(as::getLe(m.body.data() + 1, 4)))); }
+                if (isSet && spec_.forceReplyRate > 0) { rate.store(spec_.forceReplyRate); }
                 Bytes b{0};
                 as::putLe(b, static_cast<std::uint32_t>(rate.load()), 4);
                 reply(c, as::MsgType::Set, m.item, b);
@@ -1013,6 +1015,19 @@ void testStrayDatagramDoesNotParkReader() {
     }
 }
 
+// R3-04: a radio that reports a sample rate above anything a receiver could run (2 GS/s) is refused at start.
+void testImplausibleReportedRateIsRefused() {
+    RadioSpec sp;
+    sp.forceReplyRate = 2000000000;
+    Radio r(sp);
+    CHECK(r.start());
+    AscpSource s;
+    CHECK(s.open(r.args("rate=250000,timeout=1500")));
+    CHECK(!s.start());
+    CHECK(std::string(s.lastError()).find("cannot be using") != std::string::npos);
+    s.closeDevice();
+}
+
 void testReadWhenIdle() {
     RadioSpec sp;
     Radio r(sp);
@@ -1098,6 +1113,7 @@ int main() {
     testRestartChangesRate();
     testReadWhenIdle();
     testStrayDatagramDoesNotParkReader();
+    testImplausibleReportedRateIsRefused();
     testFuzz();
     return testSummary("test_ascp_source");
 }

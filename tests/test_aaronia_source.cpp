@@ -803,6 +803,24 @@ void testCycles() {
     srv.stop();
 }
 
+// R3-04: a server whose records imply a rate no receiver could run (the clock error here makes it 2 GS/s)
+// does not move the reported rate: it stays at the one the user asked for.
+void testImplausibleMeasuredRateIsIgnored() {
+    Spec sp;
+    sp.raw = true;
+    sp.ppm = 1.0e10;           // 200 kS/s asked, 2 GS/s implied by the records
+    sp.pairsPerRecord = 50000;  // long enough for the 1.7e9-second timestamps to resolve it
+    Server srv(sp);
+    CHECK(srv.start());
+    AaroniaSource s;
+    CHECK(s.open(srv.args("timeout=4000,rate=200000,format=float32")));
+    CHECK(s.start());
+    CHECK(readN(s, 5000).size() >= 5000);
+    CHECK(s.sampleRateHz() == 200000.0);
+    s.closeDevice();
+    srv.stop();
+}
+
 void testReadWhenIdle() {
     Server srv{Spec{}};
     CHECK(srv.start());
@@ -830,6 +848,7 @@ int main() {
     testOpenRefusals();
     testStreamFaults();
     testCycles();
+    testImplausibleMeasuredRateIsIgnored();
     testReadWhenIdle();
     return testSummary("test_aaronia_source");
 }

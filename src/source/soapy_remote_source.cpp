@@ -309,6 +309,8 @@ void SoapyRemoteSource::queryDeviceLocked() {
         sr::Packer p;
         p.call(sr::C_LIST_SAMPLE_RATES).chr(static_cast<char>(kDirRx)).i32(0);
         rates_ = callLocked(p).f64List();
+        // a rate no receiver could run (zero, negative, infinite, enormous) is the peer's mistake or attack
+        rates_.erase(std::remove_if(rates_.begin(), rates_.end(), [](double r) { return !plausibleSampleRateHz(r); }), rates_.end());
     });
     soft([&] {
         sr::Packer p;

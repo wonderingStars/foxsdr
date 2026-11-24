@@ -282,7 +282,7 @@ struct AaroniaSource::Stream {
         for (const aa::IqRecord& r : recs) {
             if (r.samples.empty()) { continue; }
             const double rt = r.rateHz();
-            if (rt > 0.0) {
+            if (plausibleSampleRateHz(rt)) {  // a rate the receiver could not run is the server's clock, not the stream
                 const double old = rate.load();
                 rate.store(old > 0.0 ? old * 0.9 + rt * 0.1 : rt);
             }

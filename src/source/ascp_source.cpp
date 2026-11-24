@@ -569,7 +569,7 @@ bool AscpSource::start() {
     if (!transactMandatory(as::MsgType::Set, as::ci::RxOutSampleRate, rp, rep, "setting the sample rate")) { return false; }
     if (rep.size() < 5) { setError("the radio's answer to the sample-rate request was too short"); return false; }
     const double real = static_cast<double>(as::getLe(rep.data() + 1, 4));
-    if (!(real >= 1000.0)) { setError("the radio reported a sample rate it cannot be using"); return false; }
+    if (!plausibleSampleRateHz(real)) { setError("the radio reported a sample rate it cannot be using"); return false; }
     rateHz_ = real;
     transact(as::MsgType::Set, as::ci::RxOutputParams, {rateHz_ > 100000.0 ? as::kOutputLargeMtu : as::kOutputSmallMtu}, rep, nak);
     setError("");

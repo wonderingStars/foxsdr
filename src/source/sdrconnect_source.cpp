@@ -406,7 +406,8 @@ void SdrConnectSource::stop() {
 double SdrConnectSource::sampleRateHz() const {
     if (iqRateHz_ > 0.0) { return iqRateHz_; }
     const std::string v = prop("device_sample_rate");
-    return v.empty() ? 0.0 : std::strtod(v.c_str(), nullptr);
+    const double hz = v.empty() ? 0.0 : std::strtod(v.c_str(), nullptr);
+    return plausibleSampleRateHz(hz) ? hz : 0.0;  // the server's word, so a nonsense value is "unknown"
 }
 
 bool SdrConnectSource::setSampleRateHz(double hz) {

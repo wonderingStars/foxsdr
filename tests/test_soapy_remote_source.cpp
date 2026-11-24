@@ -53,6 +53,7 @@ struct Out {
     }
     Out& f64(double v) {
         type(4);
+        if (std::isinf(v)) { i32(2000); i64(1LL << 52); return *this; }  // ldexp(2^52, 2000 - 53): infinity, as a hostile peer would send it
         int e = 0;
         const double x = std::frexp(v, &e);
         const long long m = static_cast<long long>(std::ldexp(x, 53));
@@ -162,6 +163,7 @@ public:
     std::atomic<Mode> mode{Mode::Normal};
     std::atomic<StreamFault> fault{StreamFault::None};
     std::atomic<int> faultAfter{20};
+    std::vector<double> rateList{250000.0, 1024000.0, 2048000.0};  // what LIST_SAMPLE_RATES answers
     std::string nativeFormat = "CS16";
     double fullScale = 32768.0;
 
@@ -272,7 +274,7 @@ private:
                     send(s, o.frame());
                     break;
                 }
-                case 902: o.f64List({250000.0, 1024000.0, 2048000.0}); send(s, o.frame()); break;
+                case 902: o.f64List(rateList); send(s, o.frame()); break;
                 case 805: o.rangeList({{24.0e6, 1766.0e6, 0.0}}); send(s, o.frame()); break;
                 case 500: o.strList({"RX", "Aux"}); send(s, o.frame()); break;
                 case 700: o.strList({"LNA"}); send(s, o.frame()); break;
@@ -766,6 +768,19 @@ void testDripReplyHasOneDeadline() {
     CHECK(std::chrono::steady_clock::now() - t1 < std::chrono::milliseconds(2500));
 }
 
+// R3-04: rates a server lists that no receiver could use (zero, negative, infinite, absurdly large) are
+// dropped when they arrive; only the sane one is offered and becomes the rate.
+void testImplausibleRatesAreDropped() {
+    FakeSoapy fake;
+    CHECK(fake.start());
+    fake.rateList = {0.0, -250000.0, INFINITY, 1.0e15, 2048000.0};
+    SoapyRemoteSource s;
+    CHECK(s.open(fake.args()));
+    CHECK(s.supportedSampleRatesHz() == std::vector<double>{2048000.0});
+    CHECK(s.sampleRateHz() == 2048000.0);
+    s.closeDevice();
+}
+
 void testShutdownWhileServerSilent() {
     // The server stops sending while the source is streaming; close must still return inside
     // the reader-join bound.
@@ -941,6 +956,7 @@ int main() {
     STEP(testStartStopAndShutdown());
     STEP(testShutdownWhileServerSilent());
     STEP(testDripReplyHasOneDeadline());
+    STEP(testImplausibleRatesAreDropped());
     STEP(testScripted());
     STEP(testFuzz());
     return testSummary("test_soapy_remote_source");

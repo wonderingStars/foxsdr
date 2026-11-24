@@ -107,6 +107,7 @@ public:
         return n;
     }
     std::string prop(const std::string& k) { std::lock_guard<std::mutex> l(m_); return props_[k]; }
+    void setProp(const std::string& k, const std::string& v) { std::lock_guard<std::mutex> l(m_); props_[k] = v; }
     int pongs() const { return pongs_.load(); }
     int closes() const { return closes_.load(); }
     int unmaskedClientFrames() const { return unmasked_.load(); }
@@ -727,6 +728,20 @@ void testFuzz() {
 // R3-03: a server that pushes property names the client never asked for must not grow the client's
 // memory, and one value must not be stored without a bound. 2000 pushes of "flood_<n>" names arrive
 // during the open; the real answers still have to work, and only the names the client reads are kept.
+// R3-04: a sample rate the server reports that is not a usable number is reported as 0 (unknown), not
+// passed on as infinity, a negative number or a rate no receiver can run.
+void testImplausibleRateIsNotReported() {
+    for (const char* bad : {"1e999", "-2000000", "0", "nan", "1e15"}) {
+        FakeSdrConnect fake;
+        CHECK(fake.start());
+        fake.setProp("device_sample_rate", bad);
+        SdrConnectSource src;
+        CHECK(src.open(fake.args("serial=1234")));
+        CHECK(src.sampleRateHz() == 0.0);
+        src.closeDevice();
+    }
+}
+
 void testPropertyFloodIsBounded() {
     FakeSdrConnect fake;
     CHECK(fake.start());
@@ -751,6 +766,7 @@ int main() {
     STEP(testStartStopAndShutdown());
     STEP(testCloseWithSilentServer());
     STEP(testPropertyFloodIsBounded());
+    STEP(testImplausibleRateIsNotReported());
     STEP(testFuzz());
     return testSummary("test_sdrconnect_source");
 }

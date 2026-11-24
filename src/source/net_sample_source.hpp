@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <complex>
 #include <condition_variable>
 #include <cstddef>
@@ -35,6 +36,13 @@
 #include "source/iiod_client.hpp"
 
 namespace cascade::source {
+
+// A sample rate a peer reported that a receiver could run: finite, from 1 kS/s to 1 GS/s. Every network
+// source that takes a rate from the peer's bytes tests it with this before storing it (R3-04); zero,
+// negative, infinite, not-a-number and absurdly large values from a hostile or broken server are refused.
+inline bool plausibleSampleRateHz(double hz) {
+    return std::isfinite(hz) && hz >= 1.0e3 && hz <= 1.0e9;
+}
 
 // "host", "host:port", "[v6]:port" or a bare IPv6 literal; `defaultPort` when none is given. False
 // with a sentence in `error` for an empty host, an unclosed bracket or a port outside 1..65535.
