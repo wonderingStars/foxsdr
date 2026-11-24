@@ -633,7 +633,7 @@ bool Rx888Source::open(const std::string& args) {
     // then. The log says when that happens, which is also how the next
     // report tells that case from a firmware that has stopped for good. This
     // request reads and changes nothing, and the firmware drops an unfinished
-    // request when a new one arrives (cyu3usbpp.c, the SUDAV interrupt), so
+    // request when a new one arrives (cyu3usbpp.c, top of its setup handler), so
     // asking again is safe. The two bounds add up to rx888::kSetupTimeout: a
     // radio that is not coming back costs the person no longer than one ask.
     std::uint8_t info4[4] = {0, 0, 0, 0};
