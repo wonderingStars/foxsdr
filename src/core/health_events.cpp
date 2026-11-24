@@ -21,6 +21,7 @@
 #include "core/event_trail.hpp"
 #include "core/frame_timing.hpp"
 #include "core/i18n.hpp"
+#include "core/rtl_open_case.hpp"
 #include "core/issue_report.hpp"
 #include "core/telemetry.hpp"
 
@@ -421,6 +422,11 @@ const TranslatedSentence kTranslated[] = {
     {"No AOR I/Q interface (USB 08D0:A001) was found. Check that the receiver's I/Q USB cable "
      "is connected and the receiver is switched on.",
      RadioReason::Absent},
+    // THE RTL-SDR OPEN'S THREE "NO RADIO" SENTENCES (core/rtl_open_case.hpp): on the wrong Windows driver (bind), not plugged in (absent), could not tell (other).
+    // Matched by sentence, in English and in the language in force, so no keyword in a translation can move a class.
+    {cascade::core::rtlopen::kWrongDriverEnglish, RadioReason::Bind},
+    {cascade::core::rtlopen::kNotPluggedEnglish, RadioReason::Absent},
+    {cascade::core::rtlopen::kCannotTellEnglish, RadioReason::Other},
 };
 
 }  // namespace

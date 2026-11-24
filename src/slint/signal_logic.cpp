@@ -662,6 +662,16 @@ SourceModel readSource(TableReader& t, const FoxReceiverState& st, const ReadOpt
         m.sdrplay_key_label = tr("RESTART SDRPLAY SERVICE");
         m.sdrplay_line = o.sdrplay_restarting ? std::string(tr("Restarting the SDRplay API Service - answer the Windows prompt.")) : o.sdrplay_note;
     }
+    // INSTALL DRIVER, beside a failed open that says the RTL-SDR is on the wrong Windows driver, and ONLY then: the engine's fact says which sentence the error line is, the window's bus check
+    // supplies the interface (and only the reviewed policy's RTL-SDR interface 0 ever is one), and the install itself is the Radio setup page's.
+    if (factOf(t, "fact.source.fix") == "rtl-driver") {
+        m.rtl_line = o.setup_install_status;   // the install's own words stay under the sentence after it ends ("Driver installed ..."), when the key has gone
+        if (!o.rtl_fix_target.empty()) {
+            m.rtl_key_shown = true;
+            m.rtl_key_enabled = !o.setup_installing;
+            m.rtl_key_label = tr("INSTALL DRIVER");
+        }
+    }
 
     // ---- the row's chip and lamp ----
     m.chip = sourceChip(st.deviceName, o.patch_held);
@@ -1725,6 +1735,38 @@ Command opImportPath(const std::string& path, int kind) {
     if (kind == 0) { return make(cmd::makeText(FOXAPP_OP_BOOKMARK_IMPORT_FILE, path)); }
     if (kind == 1) { return make(cmd::makeText(FOXAPI_OP_SELECT_SOURCE, "file:" + path)); }
     return {};
+}
+
+RtlFixStep rtlFixPoll(RtlFixState& st, bool wanted, unsigned probe_finished, bool installing) {
+    RtlFixStep step;
+    if (wanted && !st.on) {
+        st.on = true;
+        st.pending = true;
+        st.base = probe_finished;
+        step.start_probe = true;
+        step.clear_install_status = !installing;   // a status sentence left by an earlier install belongs to an earlier failure (review D2); one still running is live
+    } else if (!wanted && st.on) {
+        st.on = false;   // the sentence is gone (another pick, or a fix): re-armed for the next failure
+        st.pending = false;
+        step.clear_target = true;
+    }
+    return step;
+}
+
+bool rtlFixAnswered(RtlFixState& st, unsigned probe_finished) {
+    if (!st.pending || probe_finished <= st.base) { return false; }
+    st.pending = false;
+    return true;
+}
+
+bool rtlFixRetarget(std::string& target, const std::vector<std::string>& found) {
+    std::string next;
+    for (const std::string& id : found) {
+        if (!id.empty()) { next = id; break; }
+    }
+    if (next == target) { return false; }
+    target = std::move(next);
+    return true;
 }
 
 }  // namespace foxsdr::slintsignal

@@ -64,6 +64,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/rtl_open_case.hpp"
 #include "dsp/spsc_ring.hpp"
 #include "source/device_source.hpp"
 #include "source/rtl2832u.hpp"
@@ -84,6 +85,20 @@ const std::vector<usb::UsbId>& rtlSdrUsbIds();
 // knows - the bus-reported description and the serial - so a dongle that is
 // already streaming in this process appears in the list unharmed.
 std::vector<NativeDeviceInfo> enumerateRtlSdr();
+
+// THE BUS AS THE OPEN SEES IT, three questions a test answers with fakes (the shipped ones are the SetupAPI walks; nothing is opened by any of them): the RTL-SDRs bound
+// to WinUSB, the RTL-SDRs present on the bus with no WinUSB interface, and every USB id present (false when the listing could not be taken).
+using RtlBoundFn = std::function<std::vector<usb::UsbDeviceInfo>()>;
+using RtlUnboundFn = std::function<std::vector<usb::UsbDeviceInfo>()>;
+using RtlPresentFn = std::function<bool(std::vector<usb::UsbId>&)>;
+struct RtlBusView {
+    RtlBoundFn bound;
+    RtlUnboundFn unbound;
+    RtlPresentFn present;
+};
+RtlBusView shippedRtlBusView();
+// WHY THE OPEN FOUND NO RADIO IT COULD USE (core/rtl_open_case.hpp): wrong Windows driver / not plugged in / cannot tell. Called only when the bound list is empty.
+cascade::core::rtlopen::Case noRtlRadioCase(const RtlBusView& bus);
 
 // THE SENTENCES OF A RE-OPEN THAT ENDS IN A FAULT, one place so the driver, the tests and the reports agree on the words.
 //   kReopenStoppedSentence  - a stop() landed while the radio was being reconnected: the radio is closed and latched faulted (never "unplugged").
@@ -134,6 +149,10 @@ public:
     // args is "serial=00000001" or "index=0", the .args of an
     // enumerateRtlSdr() entry. An empty string opens the first device found.
     bool open(const std::string& args) override;
+
+    // TEST SEAM: open() over a bus view the caller supplies, so the three "no radio" cases can be driven with fakes (tests/test_rtlsdr_no_radio.cpp). open() is
+    // exactly openOver(args, shippedRtlBusView()).
+    bool openOver(const std::string& args, const RtlBusView& bus);
 
     // TEST SEAM, and the only way the register-sequence tests can exist: open
     // against a transport the caller supplies (usb::FakeUsbDevice) instead of
