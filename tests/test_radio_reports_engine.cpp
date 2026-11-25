@@ -318,6 +318,11 @@ struct AppWindowTestAccess {
     static void setLaunches(AppWindow& a, std::uint64_t n) { passseam::on(th::engine(a), [&] { th::engine(a).telemetryLaunches_ = n; }); }
     static void restoreExtra(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).restoreExtraRadioDevice("rtlsdr", kArgs, 2.4e6, std::string(), 100.0e6); }); }
     static void quit(AppWindow& a) { passseam::on(th::engine(a), [&] { th::engine(a).radioReportsQuit(); }); }
+    // The REAL consent command, as the checkbox's click sends it (mints or deletes the install id, then the reporter follows: radioReportsRefreshIdentity).
+    static void consent(AppWindow& a, int on) { passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, on)); }); }
+    static std::uint64_t openFailures(AppWindow& a) { return passseam::read<std::uint64_t>(th::engine(a), [&] { return th::engine(a).radioOpenFailures_; }); }
+    static void setOpenFailures(AppWindow& a, std::uint64_t n) { passseam::on(th::engine(a), [&] { th::engine(a).radioOpenFailures_ = n; }); }
+    static void radioStart(AppWindow& a, const std::string& dir) { passseam::on(th::engine(a), [&] { th::engine(a).radioReportsStart(cascade::core::AppConfig{}, dir); }); }
     static std::string usageRecord(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).telemetrySnapshot().toJson(); }); }
     static void noteWindow(AppWindow& a, const std::string& w) { passseam::on(th::engine(a), [&] { th::engine(a).noteWindowKind(w); }); }
     // The opened radio's journal state, aged: as if it had been open this many seconds (the 20 s look is the engine's clock).
@@ -1523,6 +1528,55 @@ int main(int argc, char** argv) {
         CHECK(q.empty());
         std::lock_guard<std::mutex> lk(rig.mu);
         CHECK(rig.bodies.empty());   // and nothing was posted
+    }
+
+    // --- review 73 of lane 62: the REAL consent command with a failure in the queue, and the engine's own counter -------------------------------------------------------
+    {
+        std::printf("  Usage reporting off then on through the consent command: a failure from before is never reported, the count starts again\n");
+        resetFake();
+        g_failures = 2;
+        g_failText = "the radio is already in use by another program";
+        th::TestWindow app;
+        Rig rig("consent");
+        {
+            rr::Reporter::Options o;
+            o.dir = (rig.dir / "radio-reports").string();
+            o.endpoint = "http://127.0.0.1:9/";
+            o.liveSend = false;   // inspect the queue, do not send it
+            o.identity.version = "0.99.115";
+            o.identity.os = "Windows 10.0.22631";
+            o.identity.arch = "x64";
+            o.identity.launches = 4;
+            rr::global().configure(o);   // Usage reporting OFF
+        }
+        Access::restore(app, savedRadio());           // the saved radio fails (busy) with Usage reporting off
+        CHECK(Access::openFailures(app) == 0);        // the engine's early return: nothing is counted for it (a removed return raises this)
+        Access::consent(app, 1);                      // switched ON (an id is minted, the reporter follows)
+        CHECK(queued(rig.qdir()).empty());            // nothing from the OFF period arrived
+
+        Access::restore(app, savedRadio());           // fails again, now with Usage reporting ON: reported
+        const std::vector<json> fails = ofKind(queued(rig.qdir()), "radio_fail");
+        CHECK(fails.size() == 1);
+        if (!fails.empty()) { CHECK(fails[0]["body"]["attempt"] == 1); }   // the first failure after the ON is attempt 1
+        CHECK(Access::openFailures(app) == 1);
+        Access::consent(app, 0);                      // switched OFF with a failure report queued: gone, and the engine's count with it
+        CHECK(ofKind(queued(rig.qdir()), "radio_fail").empty());
+        CHECK(Access::openFailures(app) == 0);
+        Access::consent(app, 1);
+        Access::quit(app);
+        for (const json& m : queued(rig.qdir())) {
+            CHECK(m.value("kind", std::string()) != "radio_fail");
+            if (m.value("kind", std::string()) == "session_end") { CHECK(m["body"]["openFailures"] == 0); }
+        }
+    }
+    {
+        std::printf("  a failure counted before the queue was opened is forgotten when it opens with Usage reporting off\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("prestart");
+        Access::setOpenFailures(app, 3);              // what a start-up restore failure raised before radioReportsStart (the switch was not yet known)
+        Access::radioStart(app, rig.dir.string());    // the engine's own start: the identity says Usage reporting is off
+        CHECK(Access::openFailures(app) == 0);
     }
 
     // --- THE OPEN THE USER MOVED ON FROM is still a failed open ------------------------------------------------------------------------------------

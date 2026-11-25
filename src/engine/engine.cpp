@@ -10023,8 +10023,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // new id - exactly as the window's click handler always did.
             telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
                                           cascade::versionString());
-            // THE RADIO REPORTS FOLLOW THE SWITCH: off deletes what carries the install id (a queued failure is kept, anonymously), on starts the
-            // journal under the new id.
+            // THE RADIO REPORTS FOLLOW THE SWITCH: off deletes EVERYTHING queued and everything held about radios - the journal, the first-session record, every queued failure report - and
+            // sends nothing about a radio that fails to open (from 0.99.115); on starts the journal under the new id.
             radioReportsRefreshIdentity();
             return res;
         case FOXAPI_OP_SERVER_CONFIG: {

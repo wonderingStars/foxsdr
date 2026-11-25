@@ -331,6 +331,16 @@ struct TesterUsageOutcomeEffect {
 TesterUsageOutcomeEffect applyTesterUsageOutcome(TesterUsageOutcome outcome,
                                                   TesterUsageQueue& queue);
 
+// MAY THE TESTER SENDER POST ON ITS OWN, this frame? (review 73 of lane 62, "the tester-code sender".) The window asks once a frame and posts the front of the queue to the beta portal
+// without anyone pressing anything, so it obeys the rule of the three switches: with Usage reporting OFF nothing is posted (a report waits in the queue and in the config until the person
+// switches Usage reporting on). `usageReportingOn` is the engine's fact `fact.telemetry.enabled`; a fact not yet answered is "not on". The other terms are the ones the poll always had.
+// The portal-link EXCHANGE a launch starts for an old portal token (core/tester_link.hpp) is the same kind of request of its own and takes the same first term (testerMaySendOnItsOwn);
+// the confirm-by-name lookup the person starts by pressing Link is their own act and is not gated.
+inline bool testerMaySendOnItsOwn(bool usageReportingOn) { return usageReportingOn; }
+inline bool testerUsageMayPost(bool usageReportingOn, bool senderBusy, bool triedThisSession, const std::string& activeToken, bool tokenInvalid, bool queueEmpty) {
+    return testerMaySendOnItsOwn(usageReportingOn) && !senderBusy && !triedThisSession && !activeToken.empty() && !tokenInvalid && !queueEmpty;
+}
+
 // Records what a session actually used, from wherever the real event
 // happens - a mode change, a device finishing its open, a decoder that just
 // decoded something, a network server serving a client on ITS OWN thread.

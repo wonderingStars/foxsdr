@@ -23,14 +23,19 @@
 // B goes RED; fileIssueReport counting before the write succeeds is held by test_issue_report.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <process.h>
 #include <windows.h>
 #else
@@ -92,6 +97,52 @@ bool waitFor(Pred pred, int timeoutMs = 20000) {
     }
     return pred();
 }
+
+#if defined(_WIN32)
+// A server that accepts the connection and never answers: the transfer it holds is "in flight" until somebody cancels it (the uploader's own read timeout is five seconds).
+class StallServer {
+public:
+    bool start() {
+        WSADATA w;
+        ::WSAStartup(MAKEWORD(2, 2), &w);
+        s_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (s_ == INVALID_SOCKET) { return false; }
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = 0;
+        if (::bind(s_, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { return false; }
+        int len = static_cast<int>(sizeof(a));
+        if (::getsockname(s_, reinterpret_cast<sockaddr*>(&a), &len) != 0) { return false; }
+        port_ = ntohs(a.sin_port);
+        if (::listen(s_, 4) != 0) { return false; }
+        thread_ = std::thread([this] {
+            for (;;) {
+                SOCKET c = ::accept(s_, nullptr, nullptr);
+                if (c == INVALID_SOCKET) { break; }
+                std::lock_guard<std::mutex> lk(mu_);
+                held_.push_back(c);
+                accepted_.fetch_add(1);
+            }
+        });
+        return true;
+    }
+    ~StallServer() {
+        if (s_ != INVALID_SOCKET) { ::closesocket(s_); }
+        if (thread_.joinable()) { thread_.join(); }
+        for (SOCKET c : held_) { ::closesocket(c); }
+    }
+    std::string url() const { return "http://127.0.0.1:" + std::to_string(port_) + "/api/crash"; }
+    int accepted() const { return accepted_.load(); }
+private:
+    SOCKET s_ = INVALID_SOCKET;
+    int port_ = 0;
+    std::thread thread_;
+    std::mutex mu_;
+    std::vector<SOCKET> held_;
+    std::atomic<int> accepted_{0};
+};
+#endif
 
 // How many lines of the log contain `text`.
 int logLinesWith(const std::string& text) {
@@ -247,6 +298,29 @@ int main() {
     CHECK(waitFor([&] { return !A::uploader(app).running(); }));
     A::finish(app);
     CHECK(A::uploader(app).outcome().considered >= 1);
+
+#if defined(_WIN32)
+    // G. DIAGNOSTICS SWITCHED OFF WHILE A TRANSFER IS IN FLIGHT (review 73 of lane 62, answer 9): the transfer is cancelled and the thread joined at once, not after the five-second read timeout
+    {
+        StallServer stall;
+        CHECK(stall.start());
+        setEnv("FOXSDR_CRASH_URL", stall.url());
+        CHECK(!cascade::core::issue::fileIssueReport(Recovered::DspExc).empty());   // a word not filed yet in this session: a new report for the sweep to send
+        A::poll(app);
+        CHECK(A::uploader(app).busy());
+        CHECK(waitFor([&] { return stall.accepted() >= 1; }, 10000));              // the upload reached the server and is waiting for an answer
+        CHECK(A::uploader(app).running());                                         // in flight
+        const auto t0 = std::chrono::steady_clock::now();
+        A::applyDiagnostics(app, false);                                           // the person switches Diagnostics off mid-transfer
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("  switching Diagnostics off with a transfer in flight took %.0f ms\n", ms);
+        CHECK(!A::uploader(app).busy());                                           // cancelled and joined
+        CHECK(!A::uploader(app).running());
+        CHECK(ms < 2500.0);                                                        // (the read timeout is 5000 ms: a stop that waited for it fails here)
+        CHECK(!A::wanted(app));
+        setEnv("FOXSDR_CRASH_URL", "http://127.0.0.1:9/crash");
+    }
+#endif
 
     fs::remove_all(scratch, ec);
     return testSummary("test_crash_upload_poll_app");

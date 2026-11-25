@@ -986,7 +986,7 @@ UsageModel readUsage(TableReader& t, const ReadOptions& o) {
                          "stops both."));
     } else {
         // OWNER, 2026-11-24 (brief 62): off sends nothing, the radio failure report included. This replaces the 2026-11-16 wording (must-fix lane A), which said a radio that does not open is still reported.
-        m.state_line = std::string(tr("With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open."));
+        m.state_line = std::string(tr("With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open. Crash and freeze reports follow the Diagnostics switch instead."));
     }
     // D5.11: the install identifier (above, while Usage reporting is on) and each radio's serial number, so a person can quote them when asking for their records to be erased.
     {

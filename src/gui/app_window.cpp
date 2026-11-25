@@ -20857,7 +20857,7 @@ void AppWindow::drawUsageReportingSection() {
                "stops both."));
         ImGui::PopStyleColor();
     } else {
-        ImGui::TextDisabled("%s", tr("With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open."));   // owner, 2026-11-24: off sends nothing, the radio failure report included (it reversed the 2026-11-16 wording, which said a radio that does not open is still reported)
+        ImGui::TextDisabled("%s", tr("With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open. Crash and freeze reports follow the Diagnostics switch instead."));   // owner, 2026-11-24: off sends nothing, the radio failure report included (it reversed the 2026-11-16 wording, which said a radio that does not open is still reported)
     }
     if (ImGui::SmallButton(trId("What exactly is sent?"))) {
         privacyNoticeOpen_ = !privacyNoticeOpen_;

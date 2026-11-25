@@ -304,19 +304,15 @@ struct Reporter::Impl {
             }
         }
     }
-    // THE ANONYMOUS FORM of a stored radio_fail (contract 1.2): installId, sessionId and seq ABSENT, a random messageId present.
-    static void anonymize(json& env) {
-        env.erase("installId");
-        env.erase("sessionId");
-        env.erase("seq");
-        if (!env.contains("messageId")) { env["messageId"] = randomHex(16); }
-    }
-    static bool carriesInstallId(const json& env) { return env.is_object() && env.contains("installId"); }
+    // (There is no anonymous form of a failure report from 0.99.115: a failure whose file carries no install id, or another one, is consumed unsent by runBatch.)
 
     // USAGE REPORTING IS OFF (the id is empty): EVERYTHING queued goes - the journal, the first-session lines AND every queued radio failure report, whether it carries the install id or is
     // the anonymous form an earlier version (0.99.109 to 0.99.114) queued with Usage reporting off. The owner's decision of 2026-11-24 ("off sends nothing") reversed the rule of 2026-11-15
     // that every failed radio open reaches him whatever the switch says. A file that cannot be deleted now is held back from every listing, and is deleted again at the next start while Usage
     // reporting is still off: the re-scan rule, so no marker file is kept; the send-time rule in runBatch posts none of it meanwhile.
+    // IT FORGETS EVERYTHING ABOUT RADIO FAILURES, not only the files (review 73 of lane 62, should-fix 1): a failure the daily bound HELD (it sits in `held` and in state.json with its serial,
+    // reason and log lines), the counters that would later appear in a report (`dropped`, the per-radio attempt numbers, the day's bound counts) and an armed urgent send. After OFF then ON
+    // the first thing a report can describe is a failure that happened after the ON. The caller writes state.json afterwards (setIdentity does; configure writes it once it has loaded it).
     // Called with `mu` held, from setIdentity (the opt-out) and from configure (a start with Usage reporting already off).
     void purgeForOptOut() {
         for (const Seg& g : listSegments()) { removeOrDefer(g.path); removeOrDefer(posPathOf(g.path)); }
@@ -324,6 +320,19 @@ struct Reporter::Impl {
         for (const fs::path& f : listFailFiles()) { removeOrDefer(f); }
         envSent = false;
         firstSessionSent = 0;
+        forgetFailureMemory();
+    }
+    void forgetFailureMemory() {
+        held.clear();
+        dropped.clear();
+        failAttempt.clear();
+        openAttempt.clear();
+        recoveryAttempt.clear();
+        streamToday.clear();
+        firstSeen.clear();
+        failAdmitted = 0;
+        journalAdmitted = 0;
+        urgent = false;
     }
 
     void retryUnsaved() {
@@ -481,17 +490,13 @@ struct Reporter::Impl {
     }
 
     // ------------------------------------------------------------------ envelope
-    json envelopeFor(const Pending& p, bool anonymousFail) {
+    json envelopeFor(const Pending& p) {
         json e;
         e["schema"] = kSchema;
         e["kind"] = p.kind;
-        if (anonymousFail) {
-            e["messageId"] = randomHex(16);
-        } else {
-            e["installId"] = id.installId;
-            e["sessionId"] = sessionId;
-            e["seq"] = seq++;
-        }
+        e["installId"] = id.installId;
+        e["sessionId"] = sessionId;
+        e["seq"] = seq++;
         e["t"] = std::clamp<std::int64_t>(p.t, 0, kMaxT);
         e["radioKey"] = p.key;
         if (id.synthetic) { e["synthetic"] = 1; }   // contract 1.3: the Worker and the site drop it
@@ -695,8 +700,9 @@ struct Reporter::Impl {
 
     // Takes a prepared message into the queue (the daily bound has already said yes).
     void admit(Pending p, bool isFail) {
-        const bool anonymous = isFail && id.installId.empty();
-        if (!isFail && id.installId.empty()) { return; }   // no anonymous journal
+        // NO ANONYMOUS FORM from 0.99.115 (owner's decision of 2026-11-24; review 73 of lane 62): with Usage reporting off nothing is filed, whatever route led here (a held failure released at
+        // a day's end, at the quit or at a start included). The journal never had one.
+        if (id.installId.empty()) { return; }
         // what the bound kept off the wire is said on THIS event of the same radio
         // (the keyless kinds that may carry `dropped` - contract 3.12 - take the count kept under the empty key: lines lost to the folder's bounds)
         const bool keylessCarries = p.key.empty() && (p.kind == "session_env" || p.kind == "session_end" || p.kind == "session_fault");
@@ -707,7 +713,7 @@ struct Reporter::Impl {
                 it->second = 0;
             }
         }
-        json env = envelopeFor(p, anonymous);
+        json env = envelopeFor(p);
         const std::string text = dumpJson(env);
         bool ok = false;
         if (isFail) {
@@ -932,10 +938,15 @@ struct Reporter::Impl {
                 //    back and deleted later), and that holds again after a degraded resend or any other pass round this loop. When the id it carries is not the current one (an id change
                 //    with Usage reporting still on) it is posted as before, in the anonymous form (contract 1.2): an item this batch read before the change is not posted with the old id.
                 std::string curId;
+                unsigned long long gen = 0;
                 {
                     std::lock_guard<stall::TaggedMutex> lk(mu);
                     curId = id.installId;
+                    gen = optOutGen.load(std::memory_order_acquire);
                 }
+                // A SWITCH-OFF SINCE THIS BATCH STARTED drops the rest of it (review 73 of lane 62, should-fix 2): whatever the batch read before the switch-off is not posted after it, even when
+                // Usage reporting is ON again with a new id, and it is not put back in any queue. The purge has deleted its files (or hidden the ones it could not delete).
+                if (it.isFail && gen != optOutAtStart) { return accepted; }
                 if (it.isFail && curId.empty()) {
                     {
                         std::lock_guard<stall::TaggedMutex> lk(mu);
@@ -944,8 +955,10 @@ struct Reporter::Impl {
                     if (!advance(it)) { return accepted; }
                     break;
                 }
-                if (!it.isFail) {
-                    if (optOutGen.load(std::memory_order_acquire) != optOutAtStart) { break; }   // the segment is being deleted
+                if (!it.isFail && gen != optOutAtStart) { break; }   // the segment is being deleted
+                {
+                    // A line or a failure report posts only under the CURRENT install id. One made under another id (an OFF period in between, a reset configuration) or in the anonymous form
+                    // 0.99.109 to 0.99.114 queued with Usage reporting off can never be sent: it is consumed unsent (review 73, should-fix 2: no re-issue in the anonymous form).
                     const std::string itemId = (it.env.contains("installId") && it.env["installId"].is_string()) ? it.env["installId"].get<std::string>() : std::string();
                     if (curId.empty() || itemId != curId) {
                         {
@@ -957,7 +970,6 @@ struct Reporter::Impl {
                     }
                 }
                 json env = it.env;
-                if (it.isFail && carriesInstallId(env) && env.value("installId", std::string()) != curId) { anonymize(env); }
                 if (it.degraded) { env = degrade(env); }
                 env["age"] = std::clamp<std::int64_t>(sendNow - it.eventEpoch, 0, kMaxT);
                 const std::string text = fitSize(env);
@@ -1222,7 +1234,13 @@ void Reporter::configure(const Options& options) {
     const bool hadState = fs::exists(s.statePath(), ec);
     s.loadState();
     const std::string dayLoaded = s.day;
-    const bool heldLoaded = !s.held.empty();
+    bool heldLoaded = !s.held.empty();
+    // A START WITH USAGE REPORTING OFF forgets what the state file held back (a failure the daily bound kept, the counts said on the next event): it was written while Usage reporting was on
+    // (review 73, should-fix 1). The file is rewritten below without it.
+    if (s.id.installId.empty() && (heldLoaded || !s.dropped.empty() || !s.streamToday.empty() || !s.firstSeen.empty() || s.failAdmitted != 0 || s.journalAdmitted != 0)) {
+        s.forgetFailureMemory();
+        heldLoaded = true;
+    }
     // what an earlier day held is released at THIS start; the day's counts of today start from what the file says
     s.rollover();
     if (!s.held.empty() && s.day == dayOf(s.now())) {
@@ -1262,6 +1280,7 @@ void Reporter::setIdentity(const Identity& idn) {
         // none of them. The generation is raised AFTER the deletes have been requested and the rewrites made (review of fix/freezes part 3, F7): a batch that starts between the two
         // reads the old generation, lists nothing it can send (the id it reads under `mu` is already empty), and one that began earlier is stopped by the same id rule.
         s.purgeForOptOut();
+        s.saveState();   // what the daily bound held is gone from state.json too
         s.optOutGen.fetch_add(1, std::memory_order_acq_rel);
     }
     if (!hadId && !idn.installId.empty()) { s.envSent = false; }
@@ -1290,16 +1309,15 @@ bool Reporter::acceptsFailures() const {
     return !p_->configuredOnce || p_->failuresAccepted();
 }
 
-bool Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
+void Reporter::fileFailure(const FailureInput& in, const std::vector<std::string>& logRing) {
     std::lock_guard<stall::TaggedMutex> lk(p_->mu);
     Impl& s = *p_;
-    if (s.configuredOnce && !s.failuresAccepted()) { return false; }   // Usage reporting is off: no report, nothing buffered, nothing written
+    if (s.configuredOnce && !s.failuresAccepted()) { return; }   // Usage reporting is off: no report, nothing buffered, nothing written
     if (!s.configuredOnce) {   // before the queue is opened (the start-up restore runs first): kept in memory and filed at configure
         if (s.preFails.size() < 32) { s.preFails.push_back(Impl::PreFail{in, logRing, s.now(), s.preOrder++}); }
-        return true;
+        return;
     }
     s.fileFailureLocked(in, logRing, s.now());
-    return true;
 }
 
 void Reporter::countDropped(const std::string& radioKey, long long n) {

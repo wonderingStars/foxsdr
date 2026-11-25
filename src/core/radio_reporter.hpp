@@ -178,8 +178,8 @@ public:
 
     // ONE report for one radio that did not open, EVERY time (never folded, never skipped for a cap). Sent with the Diagnostics switch on or off, and ONLY with
     // Usage reporting on (owner's decision of 2026-11-24, which reversed decision 12 of the 2026-11-15 contract): with it off nothing is built, counted,
-    // buffered, queued, written or sent. Returns false when it was not accepted for that reason (true: filed, or kept in memory because the queue is not open yet).
-    bool fileFailure(const FailureInput& in, const std::vector<std::string>& logRing);
+    // buffered, queued, written or sent. (A caller that wants to skip the work of building one asks acceptsFailures().)
+    void fileFailure(const FailureInput& in, const std::vector<std::string>& logRing);
     // False when a failure filed now would be dropped because Usage reporting is off: lets a caller skip the work of building one. True before the queue is opened.
     bool acceptsFailures() const;
 

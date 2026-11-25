@@ -602,9 +602,11 @@ void AppWindow::testerUsagePoll() {
         // lets the loop below try the NEXT queued report immediately rather
         // than waiting for the next launch.
     }
-    if (testerUsageSender_.busy() || testerUsageQueueTriedThisSession_) { return; }
+    // THIS POSTS ON ITS OWN, once a frame, so Usage reporting governs it (review 73 of lane 62): switched OFF, the report waits in the queue (and in the config) and nothing is sent. The fact
+    // answers "" before the engine's first publish, which reads as "not on".
+    const bool usageOn = uiFact("fact.telemetry.enabled") == "1";
     const std::string token = activeTesterToken();
-    if (token.empty() || testerTokenInvalid_ || testerUsageQueue_.empty()) { return; }
+    if (!cascade::core::testerUsageMayPost(usageOn, testerUsageSender_.busy(), testerUsageQueueTriedThisSession_, token, testerTokenInvalid_, testerUsageQueue_.empty())) { return; }
     testerUsageSender_.send(cascade::core::testerUsageEndpoint(), testerUsageQueue_.front());
 }
 
@@ -657,7 +659,9 @@ void AppWindow::testerLinkPoll() {
         // must not become a per-frame retry loop), and the exchange is tried
         // again at the NEXT launch via testerUsageStartup resetting the flag.
     }
-    if (!testerMigrationTried_ && !testerMigrationSender_.busy() && testerAppToken_.empty() &&
+    // The exchange of an old portal token is a request of the program's own at launch: Usage reporting governs it like the sender above (review 73 of lane 62). It is tried again once
+    // the switch is on (the flag is set only when it is sent).
+    if (cascade::core::testerMaySendOnItsOwn(uiFact("fact.telemetry.enabled") == "1") && !testerMigrationTried_ && !testerMigrationSender_.busy() && testerAppToken_.empty() &&
         !testerToken_.empty() && cascade::core::validTesterToken(testerToken_)) {
         testerMigrationTried_ = true;
         testerMigrationSender_.send(cascade::core::betaApiBaseUrl(), testerToken_);

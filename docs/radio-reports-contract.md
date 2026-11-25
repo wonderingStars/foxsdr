@@ -73,7 +73,10 @@ stores nothing). The marker is never stored, so it never appears in the canonica
 report, in any form: none is built, counted, queued, written or sent, and switching Usage reporting off deletes every failure report
 already queued, as it deletes the journal. This section and sections 2, 2.3, 8 and 10 describe the ANONYMOUS FORM that versions 0.99.109 to
 0.99.114 sent. The server (Worker and site) keeps accepting that form, because those versions are still installed and send it, and its
-fixtures stay; no version from 0.99.115 on produces it. Usage reporting ON behaves as before: the failure report carries the install id.**
+fixtures stay; no version from 0.99.115 on produces it (the reporter refuses to build one, and a queued failure whose file carries no install id, or an install id that is
+not the current one, is consumed unsent: after Usage reporting is switched OFF and ON again the first failure that can be reported is one that happened after the ON). Switching
+Usage reporting off also forgets what the daily bound (2.3, point 3) was holding back, the per-radio attempt numbers and the dropped counts. Usage reporting ON behaves as before:
+the failure report carries the install id.**
 
 Decision 12 as it stood in 0.99.109 to 0.99.114: the Usage reporting switch turns the journal off, but radio failure reports are still sent, always. Such an install has
 no install id (the id exists only while Usage reporting is on and is deleted when it is turned off). So a `radio_fail` is valid
@@ -540,7 +543,8 @@ directory (and of `radio-text-rules.json` and `radio-journal-spec.json`) and its
 **From 0.99.115: NOTHING (owner's decision of 2026-11-24, reversing decision 12). With Usage reporting switched off the journal, the
 environment record, the first-session record, the running-now beat, the usage record AND the radio failure report are all NOT sent, and any
 failure report queued is deleted when the switch goes off. With the Updates switch and Diagnostics off as well, the program contacts no
-server of its own; what a person presses (the plugin store, the bug or feature page, an installer download) is their own act.** Versions
+server of its own; what a person presses (the plugin store, the bug or feature page, an installer download) is their own act. The beta-tester report and the portal-link exchange of a
+tester code that is already set (Classic window; no sender of that kind exists in the new window) post on their own, so they too wait for Usage reporting to be ON.** Versions
 0.99.109 to 0.99.114 still send the anonymous radio failure report described next, and the server keeps accepting it.
 
 The rest of this section is what those earlier versions sent. One list, because it was what the privacy page said. With Usage reporting switched off the journal, the environment record, the

@@ -63,6 +63,9 @@ void Engine::radioReportsStart(const cascade::core::AppConfig& cfg, const std::s
     o.endpoint = cascade::core::telemetryEndpoint();
     o.liveSend = false;   // armed by configureHeartbeat() for an interactive run, and only if rr::kRadioReportsLiveSend is true (it is, from 0.99.109)
     o.identity = radioReportIdentity();
+    // A failure that happened before this point (the start-up restore runs first) was counted while the switch was not yet known: with Usage reporting OFF it is forgotten, so that
+    // switching ON later and quitting without opening a radio does not say "openFailures: 1" in the session_end line (review 73 of lane 62, minor 3).
+    if (o.identity.installId.empty()) { radioOpenFailures_ = 0; }
     rr::global().configure(o);
 }
 
@@ -72,6 +75,8 @@ void Engine::radioReportsRefreshIdentity() {
     const rr::Identity now = radioReportIdentity();
     g.setIdentity(now);
     if (before.installId != now.installId) { radioEnvSent_ = false; }
+    // Usage reporting went OFF: what the engine counted of failed opens goes with the rest (the reporter forgets its own side in setIdentity), so a later ON starts from zero.
+    if (!before.installId.empty() && now.installId.empty()) { radioOpenFailures_ = 0; }
 }
 
 void Engine::noteWindowKind(const std::string& window) {

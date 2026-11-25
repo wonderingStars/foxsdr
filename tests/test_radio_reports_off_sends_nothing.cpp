@@ -11,6 +11,7 @@
 //   D2 failure files left by an earlier version (0.99.109 to 0.99.114 queued an ANONYMOUS failure with Usage reporting off): never sent, deleted at the start
 //   D3 the degraded resend: an opt-out that arrives while a failure is in flight and refused for its text does not make a second post
 //   D4 an opt-out that arrives while a batch has read several failures: none of the rest is posted
+//   E1 a failure held by the daily bound is forgotten by a switch-off (and by a start with Usage already off); E2 OFF then ON during a batch; E3 a failure of another install id is never sent (review 62)
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -343,7 +344,8 @@ void testFilesFromEarlierVersionsAreNeverSent() {
         rep.shutdown();
         CHECK(b.posts() == 0);
     }
-    // the SAME seed with Usage reporting ON is still sent, as today (the id-carrying file with its id, the file of the old anonymous form without one)
+    // the SAME seed with Usage reporting ON: the file that carries THIS install's id is sent as today; the file of the old anonymous form was queued during an OFF period and is never sent,
+    // even after Usage reporting is on (review 62, should-fix 2: after OFF then ON the first thing a report can describe is a failure that happened after the ON)
     Bench c("d2on");
     {
         rr::Reporter rep;
@@ -353,11 +355,23 @@ void testFilesFromEarlierVersionsAreNeverSent() {
         rep.shutdown();
     }
     {
+        std::vector<fs::path> cf = c.failFiles();
+        CHECK(cf.size() == 2);
+        if (cf.size() == 2) {
+            json w = readFailFile(cf[1]);
+            w["msg"].erase("installId");
+            w["msg"].erase("sessionId");
+            w["msg"].erase("seq");
+            w["msg"]["messageId"] = "0123456789abcdef";
+            std::ofstream o(cf[1], std::ios::binary | std::ios::trunc);
+            o << w.dump();
+        }
         rr::Reporter rep;
         rep.configure(c.options(true, true, 3));
         CHECK(c.failFiles().size() == 2);
-        CHECK(rep.runBatchNow() == 2);
-        CHECK(c.sentOfKind("radio_fail") == 2);
+        CHECK(rep.runBatchNow() == 1);
+        CHECK(c.sentOfKind("radio_fail") == 1);
+        CHECK(c.failFiles().empty());                      // the anonymous-form file is consumed unsent
         rep.shutdown();
     }
 }
@@ -404,6 +418,107 @@ void testOptOutDuringABatchOfFailures() {
     rep.shutdown();
 }
 
+// E1 review 62, should-fix 1: a failure the daily bound held back must not survive a switch-off
+void testHeldFailuresDoNotSurviveASwitchOff() {
+    std::printf("E1 a failure held by the daily bound is forgotten by a switch-off: never filed, never sent after switching on again\n");
+    for (int variant = 0; variant < 2; ++variant) {
+        Bench b(variant == 0 ? "e1a" : "e1b");
+        rr::Reporter rep;
+        rr::Reporter::Options o = b.options(true, /*liveSend=*/false, 3);
+        o.failuresPerDay = 1;
+        rep.configure(o);
+        rep.fileFailure(failureOf("00000007"), kRing);                 // admitted: the first of its radio and class
+        rr::FailureInput held = failureOf("00000007", rr::Trigger::UserPick);
+        held.reason = "HELDSECRET text of the held failure";
+        rep.fileFailure(held, kRing);                                  // the same radio and class again: over the bound of one, so it is held
+        CHECK(rep.heldCount() == 1);
+        CHECK(b.everything().find("HELDSECRET") != std::string::npos); // it is in state.json
+        if (variant == 1) { rep.shutdown(); }                          // b: the run ends; the next start loads state.json
+        rr::Reporter again;
+        rr::Reporter& r = variant == 0 ? rep : again;
+        if (variant == 1) {
+            rr::Reporter::Options o2 = b.options(false, true, 3);     // the next start finds Usage reporting OFF
+            o2.failuresPerDay = 1;
+            r.configure(o2);
+        } else {
+            identityOff(r);                                            // a: switched off while running
+        }
+        CHECK(r.heldCount() == 0);                                     // forgotten at once
+        CHECK(b.everything().find("HELDSECRET") == std::string::npos); // and gone from state.json
+        r.setLiveSend(true);
+        b.clock += 3 * 86400;                                          // a day rolls over while still OFF
+        r.poll();
+        r.flushAtQuit(300);                                            // the quit flush used to file the held failure as an anonymous file
+        CHECK(b.failFiles().empty());
+        CHECK(b.posts() == 0);
+        identityOn(r, kOtherId);                                       // switched on again
+        b.clock += 3 * 86400;                                          // the day rolls over: this is when releaseHeld ran
+        r.fileFailure(failureOf("00000007"), kRing);                   // a new failure, same radio: the first thing a report can describe
+        r.flushAtQuit(300);
+        r.shutdown();
+        const std::vector<fs::path> ff = b.failFiles();
+        std::size_t radioFails = 0;
+        {
+            std::lock_guard<std::mutex> lk(b.mu);
+            for (const json& m : b.sent) {
+                if (m.value("kind", std::string()) != "radio_fail") { continue; }
+                ++radioFails;
+                CHECK(m["body"]["reason"] != "HELDSECRET text of the held failure");
+                CHECK(m["body"]["attempt"] == 1);                      // the attempt counter started again
+                CHECK(!m["body"].contains("dropped"));
+            }
+        }
+        CHECK(radioFails + ff.size() == 1);                            // exactly one failure exists after the ON: the new one
+        CHECK(b.everything().find("HELDSECRET") == std::string::npos);
+    }
+}
+
+// E2 review 62, should-fix 2: OFF then ON while a batch is being posted
+void testOffOnDuringABatchSendsNothingFromBefore() {
+    std::printf("E2 switch off and on again while a batch is in flight: what the batch had read before the switch-off is not posted\n");
+    Bench b("e2");
+    rr::Reporter rep;
+    rep.configure(b.options(true, false, 3));
+    for (const char* s : {"00000001", "00000002", "00000003"}) { rep.fileFailure(failureOf(s), kRing); }
+    CHECK(b.failFiles().size() == 3);
+    std::atomic<int> calls{0};
+    b.answer = [&]() {
+        if (calls.fetch_add(1) == 0) { identityOff(rep); identityOn(rep, kOtherId); }   // OFF then ON (a new id is minted) while the first post is out
+        return rr::PostResult{true, 204, 0, ""};
+    };
+    rep.setLiveSend(true);
+    (void)rep.runBatchNow();
+    (void)rep.runBatchNow();
+    CHECK(b.posts() == 1);                                   // only the post that was already in flight
+    CHECK(b.failFiles().empty());
+    rep.fileFailure(failureOf("00000009"), kRing);           // the first thing after the ON
+    CHECK(rep.runBatchNow() == 1);
+    CHECK(b.posts() == 2);
+    rep.shutdown();
+}
+
+// E3 the same root, narrower: a queued failure that carries an install id that is not the current one
+void testFailureOfAnotherInstallIdIsNeverSent() {
+    std::printf("E3 a queued failure that carries an install id that is not the current one is consumed unsent (no anonymous re-issue)\n");
+    Bench b("e3");
+    {
+        rr::Reporter rep;
+        rep.configure(b.options(true, false, 3));
+        rep.fileFailure(failureOf("00000001"), kRing);
+        rep.fileFailure(failureOf("00000002"), kRing);
+        rep.shutdown();
+    }
+    CHECK(b.failFiles().size() == 2);
+    rr::Reporter rep;
+    rr::Reporter::Options o = b.options(true, true, 3);
+    o.identity.installId = kOtherId;                         // a start after an OFF period: the id is a new one
+    rep.configure(o);
+    CHECK(rep.runBatchNow() == 0);
+    CHECK(b.posts() == 0);
+    CHECK(b.failFiles().empty());
+    rep.shutdown();
+}
+
 }  // namespace
 
 int main() {
@@ -415,5 +530,8 @@ int main() {
     testFilesFromEarlierVersionsAreNeverSent();
     testDegradedResendAfterOptOut();
     testOptOutDuringABatchOfFailures();
+    testHeldFailuresDoNotSurviveASwitchOff();
+    testOffOnDuringABatchSendsNothingFromBefore();
+    testFailureOfAnotherInstallIdIsNeverSent();
     return testSummary("test_radio_reports_off_sends_nothing");
 }

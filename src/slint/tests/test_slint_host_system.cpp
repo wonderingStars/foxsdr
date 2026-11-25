@@ -778,7 +778,7 @@ void diagnosticsUsageTesterReads() {
     StubTable t;
     ReadOptions ou;
     UsageModel u = readUsage(t, ou);
-    CHECK(!u.send && u.install_id_line.empty() && u.state_line == "With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open.");   // owner, 2026-11-24: off sends nothing, the radio failure report included (reversed the 2026-11-16 wording)
+    CHECK(!u.send && u.install_id_line.empty() && u.state_line == "With Usage reporting switched off, FoxSDR sends nothing about your radios or your use: no usage report, no still-running beat, no journal, no machine description, no first-session record and no report about a radio that does not open. Crash and freeze reports follow the Diagnostics switch instead.");   // owner, 2026-11-24: off sends nothing, the radio failure report included (reversed the 2026-11-16 wording)
     CHECK(has(u.disclosure, "Anonymous counts only: version, operating system, how long sessions run,") && has(u.disclosure, "no IP address is recorded."));
     CHECK(u.send_label == "Send anonymous usage reports" && u.what_label == "What exactly is sent?" && u.privacy_label == "Privacy policy (foxsdr.com)" && u.privacy_url == core::kPrivacyPolicyUrl);
     t.facts["fact.telemetry.enabled"] = "1";

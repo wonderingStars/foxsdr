@@ -441,6 +441,19 @@ void testApplyOutcomeInvalidStopsAndMarksInvalidWithoutDropping() {
     CHECK(q.items() == std::vector<std::string>({"keep-me"}));
 }
 
+// The tester sender posts on its own once a frame, so it is Usage reporting's (review 73 of lane 62): OFF, it posts nothing, whatever else is true; ON, the old terms decide.
+void testTesterSenderObeysUsageReporting() {
+    const std::string token = "tok";
+    CHECK(testerUsageMayPost(true, false, false, token, false, false));    // ON, a code, a report waiting: posts (as before)
+    CHECK(!testerUsageMayPost(false, false, false, token, false, false));  // OFF: nothing, with a code set and a report waiting
+    CHECK(!testerMaySendOnItsOwn(false) && testerMaySendOnItsOwn(true));   // the portal-link exchange asks the same first question
+    CHECK(!testerUsageMayPost(true, true, false, token, false, false));    // busy
+    CHECK(!testerUsageMayPost(true, false, true, token, false, false));    // already tried this session
+    CHECK(!testerUsageMayPost(true, false, false, std::string(), false, false));  // no code
+    CHECK(!testerUsageMayPost(true, false, false, token, true, false));    // code no longer valid
+    CHECK(!testerUsageMayPost(true, false, false, token, false, true));    // nothing queued
+}
+
 void testApplyOutcomeRetryStopsWithoutMarkingInvalidOrDropping() {
     TesterUsageQueue q;
     q.push("keep-me");
@@ -1306,6 +1319,7 @@ int main(int argc, char** argv) {
     testApplyOutcomeSentDropsTheFront();
     testApplyOutcomeRejectedDropsTheFrontToo();
     testApplyOutcomeInvalidStopsAndMarksInvalidWithoutDropping();
+    testTesterSenderObeysUsageReporting();
     testApplyOutcomeRetryStopsWithoutMarkingInvalidOrDropping();
     testEndpointOverride();
     testNonLoopbackHttpUrlIsRefused();
