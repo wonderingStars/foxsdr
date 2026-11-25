@@ -2265,7 +2265,10 @@ folders in your profile: `%APPDATA%\foxsdr` and `%LOCALAPPDATA%\FoxSDR`.
 Recordings are not among them; they go to `Documents\SDR-recordings` and are
 never touched by setup. The installer offers **a clean install** ("Delete
 existing FoxSDR settings, plugins, caches and logs first", unchecked by
-default) for reinstalling over a profile that has gone wrong, and the
+default) for reinstalling over a profile that has gone wrong. The box starts
+unchecked on EVERY install, whatever you chose last time (setup remembers
+other choices, such as the desktop shortcut, but never this one), and a
+wipe happens only if you tick it on that page in that run. The
 uninstaller ASKS whether to remove those two folders, so leaving and
 upgrading are not the same thing. For a scripted install or removal:
 `/CLEANINSTALL=1` on setup, `/CLEANDATA=1` or `/KEEPDATA=1` on the
@@ -2371,9 +2374,9 @@ may meet SmartScreen. These switches are accepted on its command line:
 | `/NORESTART` | Never restart Windows. The setup needs no restart (run). |
 | `/CURRENTUSER` | Install for the current user only, with no administrator prompt (run). Without it, or with `/ALLUSERS`, the setup asks for administrator rights and installs under Program Files. |
 | `/DIR="<folder>"` | The install folder. Quote it if it contains a space: an unquoted `C:\Program Files\FoxSDR` was seen installing into `C:\Program\`. |
-| `/TASKS="desktopicon"` | Chooses exactly the listed tasks. The script has two: `desktopicon` (the Desktop shortcut, on by default) and `cleaninstall` (off by default). |
+| `/TASKS="desktopicon"` | Chooses exactly the listed tasks. The script has two: `desktopicon` (the Desktop shortcut, on by default) and `cleaninstall` (off by default). In a silent install `cleaninstall` listed here (or in `/MERGETASKS`) is ignored and nothing is deleted: only `/CLEANINSTALL=1` deletes data unattended. |
 | `/LOG="<file>"` | Writes the setup's log (run). |
-| `/CLEANINSTALL=1` | FoxSDR's own switch: deletes your existing FoxSDR settings, plugins, caches and logs (`%APPDATA%\foxsdr` and `%LOCALAPPDATA%\FoxSDR`) **before** the files go down. Recordings are never touched. Write it with `=1`. |
+| `/CLEANINSTALL=1` | FoxSDR's own switch: deletes your existing FoxSDR settings, plugins, caches and logs (`%APPDATA%\foxsdr` and `%LOCALAPPDATA%\FoxSDR`) **before** the files go down. Recordings are never touched. Write it with `=1`. It is the ONLY way a silent install deletes data: a `cleaninstall` task remembered from an earlier run, or given with `/TASKS` or `/MERGETASKS`, never does (up to 0.99.115 a remembered choice made every later update delete the data). |
 
 An upgrade over an existing install keeps your settings. A silent install never starts the program afterwards. Close FoxSDR
 first: a running FoxSDR can stop an install. Before installing, the setup silently uninstalls a FoxSDR found in the other

@@ -32,6 +32,18 @@
 #ifndef AppGuid
   #define AppGuid "B3D4A7E2-6C51-4F8B-9A0D-2E7F5C8B1A64"
 #endif
+; TEST BUILDS ONLY (tests/test_installer_cleaninstall.ps1 passes /DTestSuffix=<id>): a
+; test install writes the foxsdr: protocol key to HKCU and a Desktop shortcut, both
+; of which a real FoxSDR also owns; the suffix renames both so a test can neither
+; overwrite nor delete the real registration or the real shortcut. Without it (every
+; release build) the names are exactly "foxsdr" and "FoxSDR" as before.
+#ifdef TestSuffix
+  #define ProtoKey "foxsdr-" + TestSuffix
+  #define ShortcutName AppName + "-" + TestSuffix
+#else
+  #define ProtoKey "foxsdr"
+  #define ShortcutName AppName
+#endif
 ; Overridable so a nightly can be stamped with its own version:
 ;   ISCC.exe /DAppVersion="0.56.0-nightly.20260819.58fe5a3" installer\cascade.iss
 ; tools/build-nightly.ps1 does exactly that, and passes the SAME string to
@@ -259,7 +271,7 @@ Name: "{group}\Hardware setup notes"; Filename: "{app}\POSTINSTALL.txt"
 Name: "{group}\{#AppName} (Legacy)"; Filename: "{app}\cascade.exe"; WorkingDir: "{app}"; Comment: "Start the Legacy {#AppName} window (the store, bookmarks, scanner, airband and recorder pages)"
 #endif
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app}"; Comment: "Start {#AppName}"; Tasks: desktopicon
 
 [Registry]
 ; THE foxsdr: PROTOCOL - the beta-tester portal's "Link FoxSDR" button opens
@@ -282,9 +294,9 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; WorkingDir: "{app
 ; uninsdeletekey on the top key removes the whole "foxsdr" subtree on
 ; uninstall, the same way every other [Registry] entry in this codebase would
 ; clean up after itself, if this were not the first one.
-Root: HKA; Subkey: "Software\Classes\foxsdr"; ValueType: string; ValueName: ""; ValueData: "URL:FoxSDR Beta Link"; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\foxsdr"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
-Root: HKA; Subkey: "Software\Classes\foxsdr\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\{#ProtoKey}"; ValueType: string; ValueName: ""; ValueData: "URL:FoxSDR Beta Link"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{#ProtoKey}"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\{#ProtoKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
@@ -453,17 +465,89 @@ begin
   Result := RoamingDataDir() + #13#10 + LocalDataDir();
 end;
 
+// A REMEMBERED CLEAN INSTALL MUST NEVER WIPE (found 2026-11-25). Inno stores the
+// tasks a user chose in the uninstall key ("Inno Setup: Selected Tasks") and,
+// with UsePreviousTasks at its default of yes, pre-selects them on every later
+// install - a silent one included. A user who ticked "cleaninstall" ONCE
+// therefore had every later update wipe %APPDATA%\foxsdr and
+// %LOCALAPPDATA%\FoxSDR with nobody asking; that is how the 0.99.112 to
+// 0.99.115 auto-update took one PC's whole profile. UsePreviousTasks stays on
+// (the Desktop icon choice should still be remembered); only this task is
+// special-cased, because it is the only one that destroys data. The docs give
+// no per-task opt-out: "checkedonce" is the opposite direction (checked on a
+// first install), and /MERGETASKS is applied AFTER previous tasks are restored
+// so the script cannot tell a remembered choice from a typed one.
+//   - Interactive: the box is forced UNticked the first time the tasks page is
+//     shown, whatever the registry held; a wipe happens only if the user ticks
+//     it on that page in THIS run (and CleanTaskReset proves the page was shown).
+//   - Silent: /TASKS and /MERGETASKS cannot be told from a remembered choice, so
+//     they never wipe; /CLEANINSTALL=1 is the only unattended way to do it.
+var
+  CleanTaskReset: Boolean;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpSelectTasks) and not CleanTaskReset then begin
+    CleanTaskReset := True;
+    WizardSelectTasks('!cleaninstall');
+  end;
+end;
+
+function CleanInstallWanted(): Boolean;
+begin
+  Result := ExpandConstant('{param:cleaninstall|0}') = '1';
+  if (not Result) and (not WizardSilent()) and CleanTaskReset then
+    Result := WizardIsTaskSelected('cleaninstall');
+end;
+
+// NEVER LEAVE "cleaninstall" IN THE REMEMBERED TASKS. Setup writes the tasks of
+// this run into the uninstall key (value "Inno Setup: Selected Tasks", the same
+// value the next install pre-selects from). CleanInstallWanted already ignores a
+// remembered tick, but an older installer (0.99.115 and before, e.g. after a
+// rollback) would wipe on it, so the tick is removed from the stored list once
+// it has been written. The Inno documentation gives the installation order (the
+// Add/Remove Programs entry is created before the uninstaller is finalized) and
+// says ssPostInstall comes "just after the actual installation finishes" and
+// ssDone "just before Setup terminates after a successful install", but never
+// names this value or says which step first sees it, so the strip is tried at
+// both steps (it changes nothing the second time) and the setup log records what
+// each step found.
+procedure ForgetCleanTask(const StepName: String);
+var
+  Key, Tasks, Cleaned: String;
+begin
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{{#AppGuid}}_is1';
+  if not RegQueryStringValue(HKEY_AUTO, Key, 'Inno Setup: Selected Tasks', Tasks) then begin
+    Log(StepName + ': no stored task list to clean.');
+    exit;
+  end;
+  Cleaned := ',' + Tasks + ',';
+  StringChangeEx(Cleaned, ',cleaninstall,', ',', True);
+  if Length(Cleaned) > 0 then
+    Cleaned := Copy(Cleaned, 2, Length(Cleaned) - 2);
+  if Cleaned = Tasks then
+    Log(StepName + ': stored tasks "' + Tasks + '" hold no cleaninstall.')
+  else if RegWriteStringValue(HKEY_AUTO, Key, 'Inno Setup: Selected Tasks', Cleaned) then
+    Log(StepName + ': stored tasks "' + Tasks + '" cleaned to "' + Cleaned + '".')
+  else
+    Log(StepName + ': could not rewrite the stored tasks "' + Tasks + '".');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
 #ifdef ReportInstallOutcome
   ReportNoteStep(CurStep);
 #endif
+  if CurStep = ssPostInstall then
+    ForgetCleanTask('ssPostInstall');
+  if CurStep = ssDone then
+    ForgetCleanTask('ssDone');
   // BEFORE the files go down, so the program never runs once against a
   // half-cleared profile. /CLEANINSTALL does the same thing unattended, for a
   // scripted reinstall.
   if CurStep <> ssInstall then
     exit;
-  if WizardIsTaskSelected('cleaninstall') or (ExpandConstant('{param:cleaninstall|0}') = '1') then begin
+  if CleanInstallWanted() then begin
     Log('Clean install requested: removing the existing FoxSDR data.');
     if not RemoveUserData() then
       SuppressibleMsgBox('Some FoxSDR settings could not be removed, most likely because a file is ' +
