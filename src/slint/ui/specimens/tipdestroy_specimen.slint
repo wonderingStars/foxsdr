@@ -1,0 +1,21 @@
+// The TIP-DESTROY specimen: three rows of Keys, each with a tip, built by a `for` over a model the test erases from IN PLACE
+// (the way the host's 33 ms tick erases the rows of a page, src/slint/main.cpp), then the window's TipLayer.
+// test_slint_tipdestroy.cpp hovers the last row and erases it from a timer callback in the same pass of the timers in which that row's tip
+// timers are due: a tip owner destroyed by an EARLIER timer of the same pass must never open, vouch for or write a tip afterwards
+// (Slint 1.18.1 still calls a destroyed Timer's callback in that pass; the tips therefore keep no Timer of their own, see TipState).
+//
+//   x,  y,        w,   h   what
+//   10, 10 + 40i, 120, 30  Key "a", "b", "c" ..., tooltip "tip for <label>"   (row i is hovered at 60, 25 + 40i)
+import { Theme } from "../theme.slint";
+import { TipState, TipLayer } from "../tooltip.slint";
+import { Key } from "../keys.slint";
+export { Theme, TipState }
+
+export component TipdestroySpecimen inherits Window {
+    width: 400px;
+    height: 200px;
+    background: Theme.bg;
+    in property <[string]> rows;
+    for r[i] in root.rows : Key { x: 10px; y: 10px + i * 40px; width: 120px; label: r; tooltip: "tip for " + r; }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

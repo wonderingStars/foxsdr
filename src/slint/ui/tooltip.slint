@@ -52,6 +52,13 @@ export global TipState {
     in-out property <int> owner;          // the id of the TipTimer that opened the tip (0 = none)
     in-out property <int> next-id;        // the counter each TipTimer takes its id from when it is created
     in-out property <int> beat;           // the owner bumps it while it lives; the layer hides a tip whose owner went away
+    // THE ONE CLOCK. A tip owner carries no Timer of its own: a Slint timer that is already due when the page holding it is rebuilt by
+    // ANOTHER timer's callback (the host's 33 ms tick, a drive's input timer) is still called once afterwards, on a component that
+    // has been destroyed, and crashed (Slint 1.18.1; the Outputs page's TCI port row, drive s4-outputs). The TipLayer lives as long as
+    // the window and owns the only timer; it keeps `now` (milliseconds of the animation clock) up to date. An owner reads `now` in a binding and acts in a `changed` handler,
+    // which goes away with the owner.
+    in-out property <float> now;          // the animation clock in ms, refreshed every 20 ms while `watch-until` is ahead of it or a tip is on screen
+    in-out property <float> watch-until;  // an owner that waits for its 600 ms asks the clock to run until this time
 }
 
 // Opens the tip below its parent after 600 ms of hover and closes it when the pointer leaves. Writes TipState
@@ -71,10 +78,20 @@ export component TipTimer {
         TipState.next-id += 1;
         root.my-id = TipState.next-id;
     }
-    Timer {
-        interval: 600ms;
-        running: root.hovered && root.text != "" && !root.shown;
-        triggered => {
+    // WAITING for the 600 ms: the pointer rests on the parent, there is something to say and the tip is not already open.
+    private property <bool> wanting: root.hovered && root.text != "" && !root.shown;
+    private property <float> since: -1;         // the clock's time when the wait began (-1: not waiting)
+    // `ripe` reads the clock only while the owner waits, so a hundred idle owners are not re-evaluated every 20 ms
+    private property <bool> ripe: root.since >= 0 && root.wanting && TipState.now - root.since >= 600;
+    changed wanting => {
+        if (root.wanting) {
+            TipState.now = animation-tick() / 1ms;
+            root.since = TipState.now;
+            TipState.watch-until = Math.max(TipState.watch-until, TipState.now + 700);
+        } else { root.since = -1; }
+    }
+    changed ripe => {
+        if (root.ripe) {
             TipState.text = root.text;
             TipState.x = root.absolute-position.x + root.anchor-x;
             TipState.y = root.absolute-position.y + root.anchor-h + 6px; TipState.anchor-y = root.absolute-position.y;
@@ -83,15 +100,14 @@ export component TipTimer {
             TipState.shown = true;
         }
     }
-    // while this timer owns the tip it vouches for it; a parent that is removed while hovered (a sheet that closes
+    // while this owner has the tip it vouches for it on every beat of the clock; a parent that is removed while hovered (a sheet that closes
     // under the pointer) stops vouching and the layer takes the tip down
-    Timer {
-        interval: 150ms;
-        running: root.shown;
-        triggered => {
+    private property <float> vouch: root.shown ? TipState.now : -1;
+    changed vouch => {
+        if (root.shown) {
             // A TIP THAT HAS BEEN LEFT BEHIND: the item moved (a note appeared above it, a page jumped) and a pointer that has not moved keeps `hovered` true, so the tip would
             // stay where the item was, over whatever is there now ("Receiver latitude" over the Longitude field, drive fixes 3, item 7). The tip closes; if the pointer really is still
-            // on the item the 600 ms timer opens it again under the item's new place.
+            // on the item the wait for 600 ms starts again and the tip opens under the item's new place.
             if (Math.abs(TipState.x - (root.absolute-position.x + root.anchor-x)) > 1px || Math.abs(TipState.y - (root.absolute-position.y + root.anchor-h + 6px)) > 1px) { TipState.shown = false; }
             else { TipState.beat += 1; }
         }
@@ -152,6 +168,12 @@ export component TipLayer {
         text: TipState.text;
         x: max(0px, min(TipState.x, root.win-w - self.width));
         y: TipState.y + self.height > root.win-h ? max(0px, TipState.anchor-y - 6px - self.height) : max(0px, TipState.y);   // below the item when it fits, else above it (the status bar's chips sit on the window's bottom edge)
+    }
+    // THE ONE CLOCK of the tips (see TipState): ticks while an owner waits for its 600 ms or a tip is on screen, and sleeps otherwise.
+    Timer {
+        interval: 20ms;
+        running: TipState.now < TipState.watch-until || TipState.shown;
+        triggered => { TipState.now = animation-tick() / 1ms; }
     }
     Timer {
         interval: 400ms;
