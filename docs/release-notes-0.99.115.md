@@ -44,4 +44,4 @@ What did not change: with Usage reporting on, the failure report is sent as befo
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.115.exe`:**
-`TBD`
+`6de9ca32f76c191a95dd5b8d803c7c25b769e1cb6316ce8062fa963341672b53`
