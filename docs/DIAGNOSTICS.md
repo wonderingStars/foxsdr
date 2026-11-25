@@ -9,7 +9,7 @@ has trusted yet would only make the numbers harder to believe later.
 > crash, freeze and issue reports, the log file and the diagnostics bundle, as
 > described below, and **nothing else changed in that**. One report is not governed
 > by it: **a radio that does not open is reported every time it happens, with
-> Diagnostics on or off** (and with Usage reporting on or off), as its own message
+> Diagnostics on or off** (and only with Usage reporting on: with it off nothing is sent), as its own message
 > to the usage service, written to the `radio-reports` folder beside `config.json`
 > before it is sent (0.99.109 sends: a message that cannot be sent is kept and tried again for up to 14 days, then deleted). It carries the radio's driver, model and serial number, the
 > driver's reason with serial numbers, names, addresses, frequencies and paths
@@ -5777,6 +5777,10 @@ holds.
 `Settings → Diagnostics`. Off means off: no directory, no log file, no report —
 not an empty folder, not a zero-byte file. `tests/test_diagnostics.cpp` and
 `tests/test_crash_capture.cpp` both assert the directory does not even exist.
+
+Switching Diagnostics off stops the sending of crash and freeze reports at once,
+in the running program (a report being sent is stopped), not only from the next
+start.
 
 **And off from the first instruction of `main()`, not from the first frame.**
 The switch is read out of the config *before* the crash handlers are armed and

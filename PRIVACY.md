@@ -1,8 +1,12 @@
 # Privacy
 
-FoxSDR sends usage counts unless you switch them off, and sends one kind of
-report - a radio that did not open - whatever you have switched on or off. This
-document lists exactly what it sends.
+FoxSDR sends usage counts unless you switch them off. With Usage reporting off
+it sends nothing about your radios or your use, and with Usage reporting,
+Diagnostics and the update check all off it contacts no server unless you press
+something that needs one (the plugin store, a bug or feature report, an
+installer download). Versions 0.99.109 to 0.99.114 also sent a report about a
+radio that did not open whatever you had switched off; from 0.99.115 that report
+follows the Usage reporting switch. This document lists exactly what it sends.
 
 ## The update check
 
@@ -77,7 +81,9 @@ exactly as many.
 
 - **Usage reporting is ON by default, and you can turn it off.** It sends the
   anonymous counts listed below and nothing else. Switching it off stops all
-  reporting and deletes the identifier described below.
+  reporting, including the report about a radio that did not open, and deletes
+  the identifier described below. With Usage reporting, Diagnostics and the
+  update check all off, FoxSDR contacts no server of its own.
 - **While the application is open it also sends a small "still running" beat
   every five minutes** — the install identifier, the version, and nothing
   else — so we can count how many copies are running at a given moment.
@@ -242,13 +248,13 @@ listen to is collected by it either. What it does and does not send:
 > Written from `docs/radio-reports-contract.md`
 > (its section 10 lists what a switched-off install sends). Not legal advice.
 
-**When a radio does not open, FoxSDR sends ONE report about that failure, every
-time it happens - whether or not Diagnostics is on, and whether or not Usage
-reporting is on.** It is the one report that the Diagnostics switch does not
-govern: a radio that will not open is the commonest way FoxSDR does not work,
-and nobody can fix what they are not told about. It does not wait for the
-next start; it is written to your computer first, so a crash cannot lose it,
-and sent as soon as it can be.
+**When a radio does not open and Usage reporting is on, FoxSDR sends ONE report
+about that failure, every time it happens - whether or not Diagnostics is on.**
+The Diagnostics switch does not govern it; the Usage reporting switch does. With
+Usage reporting off nothing is built, written or sent. The report does not wait
+for the next start; it is written to your computer first, so a crash cannot lose
+it, and sent as soon as it can be. (FoxSDR 0.99.109 to 0.99.114 also sent it
+with Usage reporting off.)
 
 **What such a report contains:** the radio's driver and model; **its serial
 number** (see below); the radio's firmware and library version where FoxSDR
@@ -265,14 +271,12 @@ log, scrubbed the same way; the FoxSDR version, install channel and update
 channel; the operating system and build and the processor architecture; and the
 seconds since FoxSDR started.
 
-**With Usage reporting off** the report carries **no install identifier, no
-session identifier and no sequence number**, only a random number made for that
-one message, so two such reports cannot be tied to each other except by the
-radio's own model and serial number. (The combination of FoxSDR version,
-operating-system build, architecture and channel can identify a machine in
-practice; nothing uses it to link reports, and the server does not group by it.)
-As with every report, the network necessarily shows your address to the server;
-the server does not read, log or store it.
+**With Usage reporting off** no report about a radio is made or sent. (FoxSDR
+0.99.109 to 0.99.114 sent one that carried **no install identifier, no session
+identifier and no sequence number**, only a random number made for that one
+message; the server still accepts that form from those versions. From 0.99.115
+FoxSDR does not send it.) As with every report, the network necessarily shows
+your address to the server; the server does not read, log or store it.
 
 **With Usage reporting on** (the default) FoxSDR also keeps a **radio journal**:
 every event in the life of every radio - a radio FoxSDR saw (including one it
@@ -292,14 +296,30 @@ as the usage report, about a minute in and again when something fails) so that
 people who run FoxSDR once are counted.
 
 Turning **Usage reporting** off stops the journal, the machine description, the
-first-session record, the still-running beat and the usage report, deletes the
-install identifier, and deletes any queued journal that carried it. It does
-**not** stop the radio failure report.
+first-session record, the still-running beat, the usage report and the radio
+failure report, deletes the install identifier, and deletes everything that was
+queued to be sent, including any radio failure report waiting. It sends nothing
+about your radios or your use. (In 0.99.109 to 0.99.114 it did **not** stop the
+radio failure report.)
 
 **Never in any of it:** a tuned or centre frequency, a bookmark, the name of a
 file or recording, anything decoded, a position, an IP address or host name, a
-user or computer name, a file path. The server refuses a message that holds one,
-and tests search every queued message for each of them.
+user or computer name, a file path. FoxSDR removes these, or never writes them,
+before it sends anything. The server checks again, but it can only check what it
+can recognise. It refuses a message that has a field NAMED with any of: freq,
+hertz, centre, center, tuned, bookmark, position, latitude, longitude, gps,
+ipaddr, hostname, username, filename, folder, decoded, callsign, password,
+secret, a name ending in hz, or exactly lat, lon, lng, ip, user, path, file or
+token. It also refuses a message in whose reason, radio log lines, radio model,
+firmware name, library name or hardware names (antenna port, USB host
+controller, processor, graphics adapter) there is a Windows drive path (such as
+C:\...), a network share path, a path in a user folder (\Users\..., /Users/...,
+/home/...), an IPv4 address (except one starting 127), the radio's own serial
+number, or a number followed by Hz, kHz, MHz or GHz. It cannot recognise, inside
+a sentence, a person's or a computer's name, a host name, a file name without a
+folder, a bookmark's name, decoded text, a position, a path that does not start
+with a drive, a share or a user folder, or a frequency written without a unit:
+for these, what FoxSDR removes or never writes is the protection.
 
 **The serial number is collected.** A failure report carries the radio's serial
 number, as its own field. It lets two reports, from two computers or two days,
@@ -314,9 +334,10 @@ usage report, the crash and freeze reports, the diagnostics bundle).
 indefinitely** (crash reports are kept 90 days). **To have them deleted:** write
 to the contact address on the website quoting your install identifier (Settings
 shows it while Usage reporting is on) - every message from that install, and the
-radios only that install reported, are erased. A failure report made with Usage
-reporting off has no install identifier, so it cannot be found by one; it is
-erased by quoting the radio's serial number.
+radios only that install reported, are erased. A failure report sent by FoxSDR
+0.99.109 to 0.99.114 with Usage reporting off has no install identifier, so it
+cannot be found by one; it is erased by quoting the radio's serial number.
+FoxSDR 0.99.115 and later send no such report.
 
 **If a daily limit stops a report,** the server is told: at most 100 failure
 reports and 3,000 journal events are sent per install per day, the first of each
@@ -1523,8 +1544,9 @@ read.
 ## Data protection
 
 (radio failure reports and the radio
-journal are different - they carry a radio's serial number and, while Usage
-reporting is on, your install identifier, are kept indefinitely, and can be
+journal are different - they carry a radio's serial number and your install
+identifier (they exist only while Usage reporting is on), are kept indefinitely,
+and can be
 erased on request; see **Radio failure reports and the radio journal**.)
 
 The usage and crash reports contain no personal data, so there is nothing to
