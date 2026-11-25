@@ -265,6 +265,7 @@ void testRecoveriesAreCountedOnlyWhereTheSurveySaysAndNeverOnASignalThread() {
         {"PatchLoad", "src/gui/app_window.cpp", 1},
         {"PatchLoad", "src/slint/patch_publish.cpp", 1},   // error-path third reading: the new window's page counts the saved patch that lost connections too (PatchConfig::patchLostConnections)
         {"CfgSave", "src/engine/engine_service.cpp", 1},
+        {"CfgSave", "src/engine/engine_consent.cpp", 1},   // brief 83: a click's merge into the settings file could not be written (the same word as a failed save)
         {"CfgSave", "src/core/config.cpp", 1},   // engine lane E1: the protected store refused a secret, which then stays in the settings file (core/secret_vault.hpp)
         {"SdrEnum", "src/engine/engine.cpp", 1},     {"SdrLost", "src/engine/engine.cpp", 1},
         {"AudioLead", "src/engine/engine.cpp", 1},
