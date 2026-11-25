@@ -56,6 +56,12 @@ void diskHook() {
     { std::lock_guard<std::mutex> lk(g_hookMu); h = g_diskHook; }
     if (h) { h(); }
 }
+std::function<void()> g_flushHook;  // TEST SEAM (Reporter::setFlushHookForTest): called immediately before every force-to-disk of the queue's files
+void flushHook() {
+    std::function<void()> h;
+    { std::lock_guard<std::mutex> lk(g_hookMu); h = g_flushHook; }
+    if (h) { h(); }
+}
 
 // TEST SEAM (Reporter::setFileFaultHookForTest): a delete or a replace that fails, as one does on Windows while another thread has the file open.
 std::function<bool(const char*, const std::string&)> g_fileFaultHook;
@@ -86,25 +92,53 @@ std::string readAll(const fs::path& p) {
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
-// Appends `data` and forces it to the disk before returning: an event that comes before a call that can hang or kill the process is on disk
-// when that call is made (contract 3.9, C2).
-bool appendDurable(const fs::path& p, const std::string& data) {
+// Appends `data`; with `flush` it is also forced to the disk before this returns. WITHOUT `flush` the bytes are the operating system's when this returns (WriteFile / write has
+// completed), which is what an event needs before a call that can hang or take the process down: a killed process loses nothing the system already holds (contract 3.9, C2).
+// The force-to-disk (power loss, a crashed system) is then done by the reporter's own disk thread (Disk::queueFlush): the engine's threads never wait for it, because a slow disk,
+// a virus scan or a synced profile makes one flush take seconds (field freeze 2026-11-25, 0.99.114: the control thread stalled 5458 ms here, under the reporter's lock).
+bool appendDurable(const fs::path& p, const std::string& data, bool flush = true) {
 #if defined(_WIN32)
     HANDLE h = ::CreateFileW(p.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                              FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) { return false; }
     DWORD wrote = 0;
     const BOOL ok = ::WriteFile(h, data.data(), static_cast<DWORD>(data.size()), &wrote, nullptr);
-    const BOOL synced = ::FlushFileBuffers(h);
+    BOOL synced = TRUE;
+    if (flush) {
+        flushHook();
+        synced = ::FlushFileBuffers(h);
+    }
     ::CloseHandle(h);
     return ok && synced && wrote == data.size();
 #else
     const int fd = ::open(p.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0600);
     if (fd < 0) { return false; }
     const ssize_t n = ::write(fd, data.data(), data.size());
-    const int synced = ::fsync(fd);
+    int synced = 0;
+    if (flush) {
+        flushHook();
+        synced = ::fsync(fd);
+    }
     ::close(fd);
     return n == static_cast<ssize_t>(data.size()) && synced == 0;
+#endif
+}
+
+// Forces what an earlier appendDurable(.., flush=false) wrote to the disk. Opens the file again (a flush through any handle covers the file's cached data); a file that is gone
+// by now (sent and deleted, replaced) needs nothing.
+void flushFile(const fs::path& p) {
+#if defined(_WIN32)
+    HANDLE h = ::CreateFileW(p.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) { return; }
+    flushHook();
+    (void)::FlushFileBuffers(h);
+    ::CloseHandle(h);
+#else
+    const int fd = ::open(p.c_str(), O_WRONLY | O_APPEND);
+    if (fd < 0) { return; }
+    flushHook();
+    (void)::fsync(fd);
+    ::close(fd);
 #endif
 }
 
@@ -116,13 +150,14 @@ std::atomic<unsigned long long> g_tmpSeq{0};
 // `attempts`: the caller's own thread (the state save, a failure file) holds the reporter's lock across this and keeps to a few milliseconds; the batch thread's position write may wait longer.
 // `deleteFallback` (final review of fix/freezes, R4): false for a REWRITE of a file that already holds a report (a queued failure's withheld-text form). If the atomic
 // replace fails the original is left in place and the rewrite is retried later: the delete-then-rename below could lose the report when the rename then failed too.
-bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12, bool deleteFallback = true) {
+// `flushNow` false (a failure file written on the engine's thread): the temporary file is not forced to the disk before the replace; the caller queues the final file for the disk thread.
+bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12, bool deleteFallback = true, bool flushNow = true) {
     fs::path tmp = p;
     tmp += "." + std::to_string(g_tmpSeq.fetch_add(1, std::memory_order_relaxed)) + "." +
            std::to_string(static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()) % 1000000ull)) + ".tmp";
     std::error_code ec;
     (void)fs::remove(tmp, ec);
-    if (!appendDurable(tmp, data)) { (void)fs::remove(tmp, ec); return false; }
+    if (!appendDurable(tmp, data, flushNow)) { (void)fs::remove(tmp, ec); return false; }
     for (int attempt = 0; attempt < attempts; ++attempt) {
         if (fileFault("rename", p)) {
             ec = std::make_error_code(std::errc::permission_denied);
@@ -141,6 +176,62 @@ bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12, 
     (void)fs::remove(tmp, ec);
     return false;
 }
+
+// THE REPORTER'S DISK THREAD: the one place a force-to-disk happens for what the engine's threads wrote. They write (to the operating system: a killed process loses nothing) and
+// queue the file's name here; this thread opens it again and forces it to the disk. One thread, started on first use; the queued names are de-duplicated (a file queued twice
+// before the thread reaches it is forced once). A queue still waiting when the reporter is shut down is dropped: the bytes are the system's already.
+struct Disk {
+    std::mutex m;
+    std::condition_variable cv;
+    std::vector<fs::path> toFlush;
+    bool busy = false;                 // a flush is out of the queue and running
+    bool stop = false;
+    std::mutex lifeMu;                 // the thread's start and join
+    std::thread th;
+
+    void run() {
+        std::unique_lock<std::mutex> lk(m);
+        for (;;) {
+            cv.wait(lk, [this] { return stop || !toFlush.empty(); });
+            if (stop) { return; }
+            fs::path f = std::move(toFlush.front());
+            toFlush.erase(toFlush.begin());
+            busy = true;
+            lk.unlock();
+            flushFile(f);
+            lk.lock();
+            busy = false;
+            cv.notify_all();
+        }
+    }
+    // Takes only this struct's own short locks and never waits for the disk: safe under the reporter's lock, on any thread.
+    void queueFlush(const fs::path& p) {
+        {
+            std::lock_guard<std::mutex> lk(m);
+            if (std::find(toFlush.begin(), toFlush.end(), p) == toFlush.end()) { toFlush.push_back(p); }
+        }
+        cv.notify_one();
+        std::unique_lock<std::mutex> lf(lifeMu, std::try_to_lock);
+        if (lf.owns_lock() && !th.joinable()) { th = std::thread([this] { run(); }); }   // (a shutdown in progress: the name waits for the next call)
+    }
+    void stopThread() {
+        std::lock_guard<std::mutex> lf(lifeMu);
+        {
+            std::lock_guard<std::mutex> lk(m);
+            stop = true;
+        }
+        cv.notify_all();
+        if (th.joinable()) { th.join(); }
+        std::lock_guard<std::mutex> lk(m);
+        stop = false;
+        toFlush.clear();
+    }
+    // Test seam: true when nothing is queued and nothing is running, within `ms`.
+    bool waitIdle(int ms) {
+        std::unique_lock<std::mutex> lk(m);
+        return cv.wait_for(lk, std::chrono::milliseconds(ms), [this] { return toFlush.empty() && !busy; });
+    }
+};
 
 std::string dayOf(std::int64_t epoch) {
     std::time_t t = static_cast<std::time_t>(epoch);
@@ -276,6 +367,9 @@ struct Reporter::Impl {
     std::map<fs::path, std::size_t> unsavedPos;
     // Raised when Usage reporting goes OFF: a batch that began before it sends no journal line that was read before it.
     std::atomic<unsigned long long> optOutGen{0};
+    // The disk thread: forces to the disk what the engine's threads wrote (never waited for by them).
+    std::shared_ptr<Disk> disk = std::make_shared<Disk>();
+    void queueFlush(const fs::path& p) { disk->queueFlush(p); }
 
     bool isDeferred(const fs::path& p) {
         std::lock_guard<std::mutex> lk(retryMu);
@@ -415,7 +509,7 @@ struct Reporter::Impl {
 
     // The state is written FOR an install id (version 2, "id"): a state file of another id, or of an older version that wrote none (0.99.114), is not trusted at the next start - what it holds
     // cannot be shown to belong to a period in which Usage reporting was on (0.99.115, brief 79, review minor 8).
-    bool saveState() {
+    json stateJson() const {
         json j;
         j["v"] = 2;
         j["id"] = id.installId;
@@ -439,7 +533,14 @@ struct Reporter::Impl {
             h[kv.first] = std::move(e);
         }
         j["held"] = std::move(h);
-        if (!writeAtomic(statePath(), dumpJson(j))) { ++st.guardRefused; return false; }
+        return j;
+    }
+    // Written to the operating system before this returns (a killed process loses nothing: a failure the daily bound is holding is still there at the next start), replaced atomically;
+    // the force-to-disk is the disk thread's, so the caller - the engine's thread, under `mu` - never waits for the disk to confirm a flush.
+    bool saveState() {
+        const std::string text = dumpJson(stateJson());
+        if (!writeAtomic(statePath(), text, 12, true, /*flushNow=*/false)) { ++st.guardRefused; return false; }
+        queueFlush(statePath());
         return true;
     }
     // Used where the file must NOT keep what it held (a switch-off, a clearing at an edge): a rewrite that failed is deleted instead (held back from every listing and retried at each batch if the
@@ -686,7 +787,10 @@ struct Reporter::Impl {
             std::snprintf(name, sizeof(name), "fail-%012lld-%s.json", static_cast<long long>(atEpoch), randomHex(8).c_str());
             if (!fs::exists(dir / name, ec)) { break; }
         }
-        return writeAtomic(dir / name, dumpJson(w));
+        // The temporary file is not forced to the disk here: the replaced file is written and the disk thread forces it (this runs on the engine's thread, under `mu`).
+        const bool ok = writeAtomic(dir / name, dumpJson(w), 12, true, /*flushNow=*/false);
+        if (ok) { queueFlush(dir / name); }
+        return ok;
     }
 
     bool appendJournal(const json& env) {
@@ -706,8 +810,9 @@ struct Reporter::Impl {
             data = dumpJson(h) + "\n";
         }
         data += dumpJson(env) + "\n";
-        const bool ok = appendDurable(seg, data);
-        if (ok) { segBytes += data.size(); }
+        // In the system's hands when this returns (a killed process loses nothing); the disk thread forces it to the disk (contract 3.9, C2).
+        const bool ok = appendDurable(seg, data, /*flush=*/false);
+        if (ok) { segBytes += data.size(); queueFlush(seg); }
         return ok;
     }
 
@@ -1421,17 +1526,24 @@ void Reporter::setDiskHookForTest(std::function<void()> hook) {
     g_diskHook = std::move(hook);
 }
 
+void Reporter::setFlushHookForTest(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lk(g_hookMu);
+    g_flushHook = std::move(hook);
+}
+
 void Reporter::setFileFaultHookForTest(std::function<bool(const char* op, const std::string& path)> hook) {
     std::lock_guard<std::mutex> lk(g_hookMu);
     g_fileFaultHook = std::move(hook);
 }
+
+bool Reporter::waitDiskIdleForTest(int maxMs) { return p_->disk->waitIdle(maxMs); }
 
 bool Reporter::writeAtomicForTest(const std::string& path, const std::string& data) { return writeAtomic(pathOf(path), data, 40); }
 
 void Reporter::poll() {
     Impl& s = *p_;
     // TRY, NEVER WAIT: a pass that waited for the reporter is the freeze this exists to end (A488498B). (The batch thread no longer holds `mu` across a listing or a file
-    // call, review of fix/freezes finding 4; the durable append of an event on another thread still does, and a poll that finds the lock taken is the next pass's.)
+    // call, review of fix/freezes finding 4; an event's write on another thread still does - to the operating system only, never a flush to the disk (the disk thread's) - and a poll that finds the lock taken is the next pass's.)
     std::unique_lock<stall::TaggedMutex> lk(s.mu, std::try_to_lock);
     if (!lk.owns_lock()) { return; }
     if (!s.on) { return; }
@@ -1475,6 +1587,7 @@ void Reporter::flushAtQuit(int maxMs) {
 
 void Reporter::shutdown() {
     Impl& s = *p_;
+    s.disk->stopThread();
     if (s.worker.joinable()) {
         s.cancel->cancel();
         s.worker.join();

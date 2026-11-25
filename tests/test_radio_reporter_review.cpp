@@ -4,6 +4,9 @@
 //      finishes, clears the bit and finds the folder empty must still be sent in the same session: the bit is true when the write lands.
 //   B. THE BATCH THREAD HOLDS NO LOCK ACROSS A LISTING. While the batch thread's listing of the reports folder is blocked for seconds (a slow disk), Reporter::event()
 //      and Reporter::fileFailure() on the calling thread return at once, and a failure filed meanwhile is sent in the same session.
+//   C. NO CALL ON THE ENGINE'S THREAD WAITS FOR A DISK FLUSH (field freeze, 0.99.114: the control thread stalled 5458 ms in appendDurable under the reporter's lock). With every
+//      force-to-disk taking 2 s, event() and fileFailure() return within 50 ms, the bytes are in the queue's files at once (they survive the process being killed), and the
+//      background thread still forces them (and the state file) to the disk afterwards.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include <atomic>
@@ -174,6 +177,77 @@ int main() {
         // the failure filed meanwhile is sent in this session (the first batch lists after the block, the second is the bit's)
         CHECK(waitFor([&] { rig.rep.poll(); return rig.server->failures() == 2u; }, 8000));
         Reporter::setDiskHookForTest(nullptr);
+    }
+
+    // ------------------------------------------------------------------ C. NO WAIT FOR A DISK FLUSH
+    {
+        std::printf("C: event() and fileFailure() return within 50 ms while every flush to the disk takes 2 s; the queue files hold the bytes at once; the flush still happens\n");
+        Rig rig("flush");
+        {   // warm-up, before the slow disk: the one-time set-up (the key regex, the disk thread) is not what is timed
+            Event w;
+            w.kind = "radio_found";
+            w.radio = identify("airspyhf", "serial=HF0001D5", "Airspy HF+ (serial HF0001D5)");
+            w.word = "usb";
+            w.set("binding", "usb").set("source", "first-run-check");
+            rig.rep.event(w);
+        }
+        CHECK(rig.rep.waitDiskIdleForTest(5000));
+        std::atomic<bool> release{false};
+        std::atomic<int> flushes{0};
+        std::atomic<int> flushesDone{0};
+        Reporter::setFlushHookForTest([&] {
+            ++flushes;
+            const auto until = Clock::now() + std::chrono::seconds(2);
+            while (!release.load() && Clock::now() < until) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+            ++flushesDone;
+        });
+        auto openEvent = [](const char* args, const char* word) {
+            Event ev;
+            ev.kind = "radio_open";
+            ev.radio = identify("airspyhf", args, "Airspy HF+ (serial HF0001A2)");
+            ev.word = word;
+            ev.set("phase", word).set("trigger", "startup-restore");
+            return ev;
+        };
+        double worstMs = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            const Event ev = openEvent(i % 2 == 0 ? "serial=HF0001A2" : "serial=HF0001B3", i < 2 ? "start" : "ok");
+            const auto t0 = Clock::now();
+            rig.rep.event(ev);
+            worstMs = std::max(worstMs, msSince(t0));
+        }
+        const auto t1 = Clock::now();
+        rig.rep.fileFailure(failure("serial=HF0001C4"), kRing);
+        const double failMs = msSince(t1);
+        std::printf("   worst event() %.1f ms, fileFailure() %.1f ms, flushes started %d done %d\n", worstMs, failMs, flushes.load(), flushesDone.load());
+        CHECK(worstMs < 50.0);
+        CHECK(failMs < 50.0);
+        // the bytes are in the files already: a process killed now still leaves them (WriteFile data is the operating system's)
+        const fs::path q = rig.dir / "radio-reports";
+        int journalHits = 0, failFiles = 0;
+        for (const fs::directory_entry& e : fs::directory_iterator(q)) {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("fail-", 0) == 0) { ++failFiles; }
+            if (name.rfind("journal-", 0) == 0 && e.path().extension() == ".jsonl") {
+                std::FILE* f = std::fopen(e.path().string().c_str(), "rb");
+                std::string txt;
+                char buf[4096];
+                std::size_t n;
+                while (f && (n = std::fread(buf, 1, sizeof buf, f)) > 0) { txt.append(buf, n); }
+                if (f) { std::fclose(f); }
+                for (std::size_t at = txt.find("radio_open"); at != std::string::npos; at = txt.find("radio_open", at + 1)) { ++journalHits; }
+            }
+        }
+        CHECK(failFiles == 1);
+        CHECK(journalHits == 4);
+        // the flushes run on the background thread, so the disk is still told to confirm
+        CHECK(waitFor([&] { return flushes.load() >= 1; }, 3000));
+        release = true;
+        CHECK(rig.rep.waitDiskIdleForTest(8000));
+        CHECK(flushesDone.load() == flushes.load());
+        CHECK(flushes.load() >= 3);   // the journal segment, the failure file and state.json are each forced to the disk, on the disk thread
+        CHECK(fs::exists(q / "state.json"));
+        Reporter::setFlushHookForTest(nullptr);
     }
 
     return testSummary("test_radio_reporter_review");

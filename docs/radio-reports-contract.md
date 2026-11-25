@@ -336,8 +336,10 @@ Sent once per session, at the start (queued with the first events; a retry is th
 
 ### 3.9 Sending: the on-disk queue, the batches, the daily bound
 
-* THE QUEUE (C2). Events are APPENDED to a file on disk as they happen, flushed (to the operating system and to the disk) before any call
-  that could crash or hang, and sent from there; whatever was not sent is sent at the next start. It is a folder `radio-reports` BESIDE
+* THE QUEUE (C2). Events are APPENDED to a file on disk as they happen, written to the operating system before any call that could crash or
+  hang (so a killed process loses nothing), and forced to the disk right after by the reporter's own thread (a power loss or a crashed system
+  can lose only what that thread had not yet forced; no engine thread ever waits for the disk to confirm a flush: field freeze 2026-11-25,
+  a 5.4 s stall of the control thread), and sent from there; whatever was not sent is sent at the next start. It is a folder `radio-reports` BESIDE
   `config.json` (not the crash folder, which is empty when Diagnostics is off). A `radio_fail` is its own file (it may need the degraded
   resend of 2.2); journal events are lines of an append-only segment file per session (`journal-<sessionId>.jsonl`, each line a complete
   message with its `seq`, rotated at 256 KiB) with a cursor file of how many lines have been taken (`.pos`, written after each accepted

@@ -60,8 +60,8 @@ const Row kRows[] = {
     {"src/core/issue_report.cpp", 1, 0, 1, 1, "kThreadDiskJob", ""},   // fileIssueReportOffThread: one detached writer per report (freeze FA0B39E3)
     {"src/core/radio_handoff.cpp", 1, 0, 0, 0, "",
      "the hand-off listener: waits on its named pipe (overlapped, with a stop event) for another FoxSDR window asking this one to let a busy radio go, and ends when stop() signals; it waits for a person's second window, not for work, so a heartbeat would be wrong"},
-    {"src/core/radio_reporter.cpp", 1, 0, 0, 0, "",
-     "the radio reports' sender: one batch of one-message requests through core::postBounded, bounded by its own client timeouts and an UploadCancel that quit sets (flushAtQuit waits at most 1.5 s, then cancels); a batch is short-lived and has no loop to beat in - NOT COVERED by this batch (a known gap)"},
+    {"src/core/radio_reporter.cpp", 2, 0, 0, 0, "",
+     "two threads. (1) The radio reports' sender: one batch of one-message requests through core::postBounded, bounded by its own client timeouts and an UploadCancel that quit sets (flushAtQuit waits at most 1.5 s, then cancels); a batch is short-lived and has no loop to beat in. (2) The reporter's disk thread (struct Disk): it waits for the names of queue files the engine's threads have written and forces each to the disk (FlushFileBuffers / fsync), which is the one call that can take seconds; the engine's threads only queue a name under its own short mutex and never wait for it, shutdown() joins it - NOT COVERED by this batch (a known gap: a stuck flush stalls only this thread)"},
     {"src/core/radio_setup.cpp", 1, 0, 0, 0, "",
      "the radio-setup inventory's one-shot SetupAPI probe, detached and polled, bounded by the window's own timeout state - NOT COVERED by this batch (a known gap)"},
     {"src/core/rds_log.cpp", 1, 0, 0, 0, "",
