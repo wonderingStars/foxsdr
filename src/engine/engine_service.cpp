@@ -496,10 +496,21 @@ void EngineService::maybeSave(double nowS) {
     // start-up, and there is nothing to ask for.
     if (writer_.writesForbidden()) { return; }
     const bool held = retryHeld(nowS);
-    const cascade::core::AppConfig cur = engine_.configSnapshot();
+    std::uint64_t edges = 0;
+    const cascade::core::AppConfig cur = engine_.configSnapshot(&edges);
     const std::string curKey = comparable(cur);
     if (curKey == savedKey_) {
         lastChangeS_ = -1.0;  // clean again (e.g. change was undone)
+        if (edges > edgeRequested_) { edgeRequested_ = edges; }
+        return;
+    }
+    // RULE R, THE EDGE OF A DATA SWITCH IS SAVED AT ONCE (brief 80): a snapshot that carries a switch edge no save has carried yet (Usage reporting or Diagnostics clicked on or off)
+    // is requested now, not after the debounce window - the file must not keep the earlier period's pending usage record, or an "enabled" flag, for the seconds between the click and
+    // a periodic save (a crash in that gap would send them at the next start). A write that fails falls back to the debounce and the back-off below.
+    if (edges > edgeRequested_ && !held) {
+        edgeRequested_ = edges;
+        requestSave(cur);
+        lastChangeS_ = -1.0;
         return;
     }
     if (lastChangeS_ < 0.0 || curKey != pendingKey_) {

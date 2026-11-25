@@ -282,6 +282,7 @@ private:
     std::string pendingKey_;
     cascade::core::AppConfig lastRequested_;
     double lastChangeS_ = -1.0;
+    std::uint64_t edgeRequested_ = 0;   // the data-switch edges a requested save already carries (Engine::configSnapshot's number): the next one is saved without the debounce
     double lastLookS_ = -1.0;   // the keeper looks a few times a second, not on every wake of the waiting thread
     std::atomic<std::uint64_t> saves_{0};   // (the keeper thread counts them, the host reads them)
     // The back-off after a failed write: doubles from the debounce window to five minutes.

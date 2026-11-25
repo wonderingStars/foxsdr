@@ -2479,6 +2479,10 @@ private:
     EngineStatusText statusText_;
     mutable std::mutex configSnapMutex_;
     cascade::core::AppConfig configSnap_;
+    // RULE R, the save at once: counted at every edge of a data switch, after the engine's own state has changed (consent command, diagnosticsFamilyEdge); publishConfig
+    // reads it BEFORE it fills the snapshot and stores it with the snapshot, so a snapshot that carries number N includes edge N.
+    std::atomic<std::uint64_t> switchEdges_{0};
+    std::uint64_t configSnapEdges_ = 0;   // (under configSnapMutex_)
     // THE CONFIG AS LOADED (0.99.84 merge, 2026-10-21): publishConfig starts from it, so a field no half of this tree writes yet - the
     // ones master's 0.99.43-0.99.84 added and the merge has not re-expressed (docs/engine-merge-0.99.84.md: PPM, patch presets, plugin
     // sites, the per-radio gain memory ...) - goes back into the file as it was read instead of as a default. Every field a half DOES
@@ -3664,7 +3668,10 @@ public:
     // currentConfig() reads only this, never fillConfig, so no receiver field
     // is read across threads once the engine has one of its own.
     void publishConfig();
-    cascade::core::AppConfig configSnapshot() const;
+    // `edge` (optional): the number of data-switch edges (Usage reporting on or off, Diagnostics on or off) this snapshot already includes. The keeper saves a snapshot
+    // whose number is above what it last saved AT ONCE, without the debounce window (rule R, brief 80): a crash right after the click must not leave the earlier period's
+    // pending record or an enabled flag on disk.
+    cascade::core::AppConfig configSnapshot(std::uint64_t* edge = nullptr) const;
     // THE INTERFACE'S HALF OF THE CONFIGURATION (shell retirement R5; core/config_halves.hpp, docs/api-0.3-additions.md 9.16). An interface
     // owns part of the settings file (its view state, the key bindings, the update and diagnostics switches ...) and hands it to the engine
     // as a DOCUMENT, FOXAPP_OP_INTERFACE_CONFIG; the engine stores it and puts it into every snapshot (publishConfig), so the snapshot is the

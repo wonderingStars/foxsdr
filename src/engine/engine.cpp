@@ -10038,6 +10038,9 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // THE RADIO REPORTS FOLLOW THE SWITCH: off deletes EVERYTHING queued and everything held about radios - the journal, the first-session record, every queued failure report - and
             // sends nothing about a radio that fails to open (from 0.99.115); on starts the journal under the new id.
             radioReportsRefreshIdentity();
+            // THE EDGE IS MADE DURABLE AT ONCE (brief 80): the keeper saves the next snapshot without its debounce window, so a crash right after the click leaves neither an earlier
+            // period's pending usage record nor an "enabled" flag on disk.
+            switchEdges_.fetch_add(1);
             return res;
         case FOXAPI_OP_SERVER_CONFIG: {
             // Stage 5a (docs/api-0.3-additions.md 8.16): the local operator's configuration of the web server and the CAT listener.
@@ -10300,6 +10303,7 @@ void Engine::usageFamilyClear(UsageEdge edge) {
 void Engine::diagnosticsFamilyEdge(bool on, bool atStart) {
     healthLedger_->setAllowed(on);
     if (atStart) { return; }
+    switchEdges_.fetch_add(1);   // the save at once (brief 80): the interface's half already holds the new switch (applyInterfaceConfig copied it first)
     stallLedger_->forget();
     healthLedger_->forget();
     cascade::core::issue::discardPendingIssueReports();
@@ -12187,6 +12191,7 @@ Engine::StatusText Engine::statusText() const {
 // (fillConfig then writes the live ones over them), and puts the interface's half over that - the half as loaded until an interface sends its
 // own. A field the table does not name would be LOST here, which is why tests/test_config_halves.cpp fails when AppConfig grows one.
 void Engine::publishConfig() {
+    const std::uint64_t edges = switchEdges_.load();   // BEFORE the fill: the snapshot then includes every edge up to this number
     cascade::core::AppConfig c;
     cascade::core::copyEngineHalf(loadedCfg_, c);
     fillConfig(c);
@@ -12196,6 +12201,7 @@ void Engine::publishConfig() {
     }
     std::lock_guard<std::mutex> lk(configSnapMutex_);
     configSnap_ = std::move(c);
+    configSnapEdges_ = edges;
 }
 
 std::string Engine::interfaceConfigDocument() const {
@@ -12229,8 +12235,9 @@ bool Engine::applyInterfaceConfig(const std::string& document, std::string& erro
     return true;
 }
 
-cascade::core::AppConfig Engine::configSnapshot() const {
+cascade::core::AppConfig Engine::configSnapshot(std::uint64_t* edge) const {
     std::lock_guard<std::mutex> lk(configSnapMutex_);
+    if (edge != nullptr) { *edge = configSnapEdges_; }
     return configSnap_;
 }
 
