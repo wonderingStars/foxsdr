@@ -256,6 +256,10 @@ int main() {
         trail::noteMode(3);                                             // an ON period after the edge
         CHECK(!trail::formatNow().empty());
         trail::resetForTest();
+        CHECK(trail::formatNow().empty());                              // the test seam empties it as the edge does (review 4 D7: one body for both)
+        trail::noteMode(3);
+        trail::resetForTest();
+        CHECK(trail::formatNow().empty());
     }
 
     // --- D5: the two ledgers ------------------------------------------------------------------------------------------------------------------------
