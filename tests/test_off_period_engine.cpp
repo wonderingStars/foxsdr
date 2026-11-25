@@ -136,6 +136,8 @@ struct AppWindowTestAccess {
             CHECK(th::engine(a).applyInterfaceConfig(doc, err));
         });
     }
+    static std::size_t panelCount(AppWindow& a) { return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).telemetryPanels_.size(); }); }
+    static std::size_t modeSecondsCount(AppWindow& a) { return passseam::read<std::size_t>(th::engine(a), [&] { return th::engine(a).telemetryModeSeconds_.size(); }); }
     static bool exitCausePending(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).exitCausePending_; }); }
     static std::string interfaceDoc(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).interfaceConfigDocument(); }); }
     static void setControlDiagDir(AppWindow& a, const std::string& d) { passseam::on(th::engine(a), [&] { th::engine(a).controlDiagDir_ = d; }); }
@@ -314,6 +316,8 @@ int main() {
         }
         Access::notePanel(app, "while-off");                      // activity in the OFF period
         Access::accrueFrom(app, 5.0);
+        CHECK(Access::panelCount(app) == 0);                      // the entry points returned at once: nothing was kept (the ON edge's clearing is the second line of defence, not the first)
+        CHECK(Access::modeSecondsCount(app) == 0);
         Access::setModeSeconds(app, "USB", 4);                    // (what an accrual that was not refused would have banked)
         Access::consent(app, 1);                                  // ON: starts from empty
         {
@@ -329,6 +333,7 @@ int main() {
         Access::consent(app, 0);
         Access::notePanel(app, "off-again");
         Access::accrueFrom(app, 7.0);
+        CHECK(Access::panelCount(app) == 0 && Access::modeSecondsCount(app) == 0);
         Access::consent(app, 1);
         CHECK(Access::snapshot(app).session.panels.empty());
         CHECK(Access::snapshot(app).session.modeSeconds.empty());

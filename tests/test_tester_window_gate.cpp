@@ -176,6 +176,11 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         CHECK(server.accepted() == 0);                       // (delete the gate's call in testerUsagePoll and this is 1)
         CHECK(A::queued(app) == 0);                          // the report of the OFF period is gone (rule R), so it can never be sent after the ON
+        A::queue(app, reportFor(kCode));                     // something put back into the queue while the switch is OFF (no edge now: nothing empties it)
+        for (int i = 0; i < 40; ++i) { A::usagePoll(app); }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CHECK(server.accepted() == 0);                       // the poll's own gate holds it (delete the gate and this is 1; the edge's emptying is not what is tested here)
+        CHECK(A::queued(app) == 1);
         A::consent(app, 1);
         A::pump(app);
         A::usagePoll(app);                                   // the ON edge
