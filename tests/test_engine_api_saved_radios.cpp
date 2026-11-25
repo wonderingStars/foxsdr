@@ -67,6 +67,8 @@ struct AppWindowTestAccess {
         return e.configSnapshot();
     }
     static void restore(Engine& e, const cascade::core::AppConfig& c) { e.applyConfig(c); }
+    // Usage reporting ON, as the checkbox does it: since 0.99.115 (rule R) the engine counts nothing while it is OFF.
+    static void usageOn(Engine& e) { (void)e.applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1)); }
     static std::uint32_t radiosMax(Engine& e) { return e.telemetryRadiosMax_; }
     static bool running(Engine& e, std::size_t slot) { return e.receivers_[slot] && e.receivers_[slot]->pipeline_.running(); }
 };
@@ -498,6 +500,7 @@ void testTheUsageReportCountsTheMostRadiosRunning() {
     CHECK_EQ(json::parse(rep.toJson())["radios_max"].get<int>(), 8);
     // and the engine's counter: stopped radios do not count, running ones do, and it never goes down
     Restored a;
+    Access::usageOn(a.eng);
     testing::Session s(api(), a.eng.apiHandle(), FOXAPI_SESSION_LOCAL, kLocalGrants);
     CHECK(s.ok());
     passes(a.eng, 3);

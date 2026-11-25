@@ -213,7 +213,8 @@ Result once(const std::string& tag, int frames, const std::string& mainView, con
     const fs::path census = g_dir / (tag + ".census");
     {
         std::ofstream f(cfg, std::ios::binary | std::ios::trunc);
-        f << "{ \"telemetryEnabled\": false, \"updateCheckEnabled\": false, "
+        // Usage reporting ON (to the closed port set in main): since 0.99.115 (rule R) the tester's record is not built while Usage reporting is off.
+        f << "{ \"telemetryEnabled\": true, \"updateCheckEnabled\": false, "
              "\"sourceKind\": \"siggen\", \"uiTheme\": \"today\", \"interfaceScale\": \"100\", "
              "\"testerToken\": \"" << kTesterToken << "\", \"mainView\": \""
           << mainView << "\", \"railBank\": 2, \"bandPlanOverlay\": false }\n";

@@ -69,6 +69,10 @@ void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 namespace cascade::gui {
 struct AppWindowTestAccess {
     static void drawRadar(AppWindow& a) { a.drawRadarSection(); }
+    // Usage reporting ON the way the checkbox does it: since 0.99.115 (rule R) the engine counts nothing while it is OFF, and a test host starts with it OFF.
+    static void usageOn(AppWindow& a) {
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1)); });
+    }
     static void drawCat(AppWindow& a) { a.drawCatSection(); }
     static void notePanel(AppWindow& a, const char* name) { a.uiNotePanel(name); }
     // The engine's pass as far as the session's queue needs it - applied and
@@ -180,6 +184,7 @@ int main() {
 
     {
         th::TestWindow* a = new th::TestWindow();
+        A::usageOn(*a);
         int refused = 0;
 
         // A: nothing drawn, nothing said.

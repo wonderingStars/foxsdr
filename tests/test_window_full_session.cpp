@@ -123,6 +123,10 @@ struct AppWindowTestAccess {
         Engine::testHooks_.soapyScan = &engine_api_test::noSoapyRadios;
         Engine::testHooks_.pluginDir = &pluginDir;
     }
+    // Usage reporting ON the way the checkbox does it: since 0.99.115 (rule R) the engine counts nothing while it is OFF, and a test host starts with it OFF.
+    static void usageOn(AppWindow& a) {
+        passseam::on(th::engine(a), [&] { (void)th::engine(a).applyCommand(cascade::core::cmd::makeInt(FOXAPP_OP_TELEMETRY_CONSENT, 1)); });
+    }
     // THE ENGINE'S PASS (a whole one; the answers are NOT read here - a command counts against the session until its result is read) and the window's read of the state.
     static void pump(AppWindow& a) {
         passseam::whole(th::engine(a), [&] { th::engine(a).pump(); });
@@ -673,6 +677,7 @@ int main() {
     testTheFrameIsDrawUis();
     {
         th::TestWindow app;
+        A::usageOn(app);
         A::frame(app);
         A::frame(app);
         testNewestWins(app);
