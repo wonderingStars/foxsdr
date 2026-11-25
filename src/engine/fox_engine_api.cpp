@@ -1029,6 +1029,11 @@ public:
             // transport has no business reading it.
             if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
             v = engine_.interfaceConfigDocument();
+        } else if (std::strncmp(key, "fact.consent.", 13) == 0) {
+            // TWO RUNNING COPIES (0.99.115, brief 83; engine_consent.cpp): whether this copy holds the settings lock, and a count that moves when the copy that does adopted a Diagnostics or update-check
+            // switch another copy changed in the file (the window follows it). Read at the call. LOCAL.
+            if ((s->flags & FOXAPI_SESSION_LOCAL) == 0u) { return FOXAPI_DENIED; }
+            if (!engine_.consentFact(key + 13, v)) { return FOXAPI_NOT_FOUND; }
         } else if (std::strncmp(key, "fact.perf.", 10) == 0) {
             // wire-c (row S5): THE RESOURCE READ-OUT, read AT THE CALL from the sampler's last published figures (engine_wire_c.cpp), not from the list block: the figures
             // change every second, and a fact in the block would move the list counter (listSeq) every second for every client. LOCAL.

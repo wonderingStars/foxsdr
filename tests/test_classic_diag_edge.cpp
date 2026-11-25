@@ -124,6 +124,43 @@ int main(int argc, char** argv) {
         CHECK(runAt != std::string::npos && text.find("(void)sendInterfaceHalf(glfwGetTime());", runAt) != std::string::npos);
     }
 
+    // --- C3: TWO RUNNING COPIES (brief 83, review 4 D1 and D5): the Classic window's side, held as source pins (a window is not run here) ---------------------------------
+    {
+        std::printf("  C3  the Classic window follows what the engine adopted from the file, keeps both switches off in a copy without the lock, and sends the emptied tester queue at once\n");
+        const fs::path root = (argc > 1) ? fs::path(argv[1]) : fs::path(CASCADE_SOURCE_DIR);
+        const std::string text = readText(root / "src" / "gui" / "app_window.cpp");
+        const std::string tester = readText(root / "src" / "gui" / "app_window_tester.cpp");
+        const std::string updates = readText(root / "src" / "gui" / "app_window_updates.cpp");
+        CHECK(!text.empty() && !tester.empty() && !updates.empty());
+        const std::size_t runAt = text.find("int AppWindow::run(int frames) {");
+        const std::size_t followCall = text.find("followConsent();", runAt);
+        const std::size_t sendCall = text.find("(void)sendInterfaceHalf(glfwGetTime());", runAt);
+        CHECK(runAt != std::string::npos && followCall != std::string::npos && sendCall != std::string::npos && followCall < sendCall && sendCall - followCall < 400);   // followed before the half is sent
+        const std::size_t def = text.find("void AppWindow::followConsent() {");
+        CHECK(def != std::string::npos);
+        const std::size_t defEnd = def == std::string::npos ? std::string::npos : text.find("bool AppWindow::sendInterfaceHalf", def);
+        const std::string body = defEnd == std::string::npos ? std::string() : text.substr(def, defEnd - def);
+        CHECK(body.find(R"(readFactText("fact.consent.generation", generation))") != std::string::npos);
+        CHECK(body.find("applyDiagnosticsEnabled(parsed.diagnosticsEnabled)") != std::string::npos);
+        CHECK(body.find("updateCheckEnabled_ = parsed.updateCheckEnabled") != std::string::npos);
+        CHECK(text.find(R"(readFactText("fact.consent.holder", holder) && holder == "0")") != std::string::npos);   // the copy without the lock is known at the start
+        const std::size_t apply = text.find("void AppWindow::applyDiagnosticsEnabled(bool on) {");
+        const std::size_t applyEnd = apply == std::string::npos ? std::string::npos : text.find("void AppWindow::drawDiagnosticsSection() {", apply);
+        const std::string applyBody = applyEnd == std::string::npos ? std::string() : text.substr(apply, applyEnd - apply);
+        CHECK(applyBody.find("const bool eff = on && !consentSecond_;") != std::string::npos);
+        CHECK(applyBody.find("setCrashCaptureEnabled(eff, diagnosticsMinidump_)") != std::string::npos);
+        CHECK(applyBody.find("sentinelSetEnabled(eff)") != std::string::npos);
+        CHECK(applyBody.find("if (!eff) {") != std::string::npos);                       // the sweep follows what is armed, not what is shown
+        CHECK(text.find("if (!diagnosticsEnabled_ || consentSecond_ || diagCrashDir_.empty()) { return true; }") != std::string::npos);   // crashUploadStart
+        CHECK(updates.find("if (consentSecond_) { return; }") != std::string::npos);     // startUpdateCheck: no check of its own in a copy without the lock
+        // D5: the emptied tester queue goes to the engine at once, both edges, and the send honours the flag
+        std::size_t at = 0;
+        int forced = 0;
+        while ((at = tester.find("interfaceHalfForce_ = true;", at)) != std::string::npos) { ++forced; at += 10; }
+        CHECK(forced == 2);
+        CHECK(text.find("&& !interfaceHalfForce_) { return false; }") != std::string::npos);
+    }
+
     // --- C2: the window's two calls reach the engine's edge -------------------------------------------------------------------------------------------
     {
         std::printf("  C2  the click, the frame's send and the engine's pass run the Diagnostics edge (both directions)\n");

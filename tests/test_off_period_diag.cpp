@@ -297,6 +297,29 @@ int main() {
         CHECK(!hl.counts().empty());                                    // counts again after the edge
     }
 
+    // --- D6 (review 4): a marker that could not be written is not a mark ---------------------------------------------------------------------------------
+    {
+        std::printf("  D6  a report whose local-only marker could not be written is not counted as withheld (and the failure is in the log)\n");
+        const fs::path rd = dir / "reports-d6";
+        fs::create_directories(rd, ec);
+        const fs::path good = rd / "crash-20261124-121212-1-1.txt";
+        const fs::path bad = rd / "crash-20261124-121213-1-1.txt";
+        writeFile(good, "FoxSDR report body\nkind: crash\n");
+        writeFile(bad, "FoxSDR report body\nkind: crash\n");
+        // the marker's own path is a FOLDER: the write fails, and the report stays sendable if Diagnostics is switched on again
+        fs::create_directories(uploadSidecarPath(bad.string()), ec);
+        DiagLog::instance().resetForTest();
+        const int n = withholdUnsentReports(rd.string(), 1795000010ull);
+        CHECK(n == 1);                                                  // only the one that was marked
+        CHECK(statusOf(good) == "local-only");
+        bool logged = false;
+        for (const std::string& line : DiagLog::instance().ringSnapshot()) {
+            if (line.find("could not be marked") != std::string::npos) { logged = true; }
+        }
+        CHECK(logged);
+        fs::remove_all(uploadSidecarPath(bad.string()), ec);
+    }
+
     fs::remove_all(dir, ec);
     return testSummary("test_off_period_diag");
 }

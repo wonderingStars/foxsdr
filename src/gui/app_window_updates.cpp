@@ -65,6 +65,7 @@ void censusBannerFrame() {
 
 void AppWindow::startUpdateCheck() {
     if (updateStarted_ || updatePending_) { return; }
+    if (consentSecond_) { return; }   // a copy without the settings lock makes no update check of its own (brief 83)
     // WHICH CHANNEL, decided by one pure function (core/package_identity.hpp).
     //
     // Unticked asks nobody. An ordinary install asks foxsdr.com, below. A copy

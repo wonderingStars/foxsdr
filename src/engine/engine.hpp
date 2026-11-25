@@ -63,6 +63,7 @@
 #include "core/patch_plan.hpp"
 #include "core/patch_radio.hpp"
 #include "core/patch_recordings.hpp"
+#include "core/consent_file.hpp"
 #include "core/patch_runner.hpp"
 #include "core/pipeline.hpp"
 #include "core/smeter_cal.hpp"
@@ -2105,6 +2106,7 @@ private:
         bool faultDead = false;                   // and the driver said the device is dead (not merely faulted): the close's cause is `unplugged` or `fault`
         bool noSamplesDone = false;               // the "opened, no samples" look has been made
         bool streamNoteSent = false;
+        bool adopted = false;                     // found open by the pass (a radio that was open when Usage reporting was switched ON), not opened by a call site: its first minute began before it was known
         cascade::core::radioreport::RadioIdentity rid;   // which physical radio (model, serial, key)
         std::string kind, args, faultReason;
         double openedAtS = 0.0;
@@ -2155,6 +2157,29 @@ private:
     void usageFamilyClear(UsageEdge edge);
     // RULE R, DIAGNOSTICS FAMILY: both edges of that switch (also at a start with it OFF: atStart), from applyInterfaceConfig. See the definition for what it empties.
     void diagnosticsFamilyEdge(bool on, bool atStart);
+    // TWO COPIES (brief 83): see setConsentGuard. The Usage switch's edge as a click or an adoption of the disk runs it; the click writes the consent fields into the file (a merge) on a worker.
+    void usageSwitchEdge(bool on, const std::string& idFromDisk, bool fromDisk);
+    FoxCommandResult secondCopyUsageClick(bool on, FoxCommandResult res);
+    void consentMergeAsync(const cascade::core::AppConfig& source, const std::vector<std::string>& keys, bool verifyAfter);
+    void consentFillUsageFamily(cascade::core::AppConfig& c) const;
+    bool consentAllowsSend(const std::string& url);
+    void consentAdoptSwitches(const cascade::core::consent::Fields& f);
+    bool consentGuarded_ = false;
+    bool consentHolder_ = true;
+    std::string consentPath_;
+    std::unique_ptr<cascade::core::consent::Watch> consentWatch_;
+    std::atomic<bool> consentDirty_{false};            // a send was refused because the disk said OFF: the next pass looks at once
+    std::atomic<std::uint64_t> consentGen_{0};          // moves when the holder adopted a change of the Diagnostics or update-check switch (the windows follow it)
+    double consentLastPollS_ = -1.0;
+    std::shared_ptr<std::atomic<int>> consentWrites_ = std::make_shared<std::atomic<int>>(0);
+    // a copy without the lock re-checks a click of its own a few times (it lost to nobody unless two writes met in the same few milliseconds)
+    struct ConsentVerify { int left = 0; double nextS = 0.0; std::string document; std::vector<std::string> keys; };
+    ConsentVerify consentVerify_;
+    bool consentMintPending_ = false;   // an identifier minted at the start has not been written into the file yet (consentStartWrites)
+    bool consentLookAgain_ = false;     // a look was skipped because a click of this copy was still being written
+    // What the window's own half said last (under interfaceHalfMutex_): a half that carries the same switch value as the one before it is the window carrying its state along, not a click.
+    bool windowDiagLast_ = true;
+    bool windowUpdateLast_ = true;
     double radioSessionBaseS_ = 0.0;              // the engine clock when this ON period began: session_end's `sessionSec` counts from here
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
@@ -3649,6 +3674,21 @@ public:
     // engine, engine/engine_service.cpp).
     // `configDir`: where config.json lives (the usage record's ledgers and send marker sit beside it); empty = memory only.
     void telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir = std::string());
+    // TWO RUNNING COPIES ON ONE PROFILE (0.99.115, brief 83; core/consent_file.hpp, engine_consent.cpp). The service calls this BEFORE telemetryStartup for a run with a settings file:
+    // `holder` is whether this copy holds the settings lock. A copy that does not is the SECOND copy: it keeps both data families off for its whole run and never writes the consent fields
+    // of the file; a click in it still reaches the file (as a merge) and the copy that holds the lock adopts it. A run without this call (a hermetic one) is as it always was.
+    void setConsentGuard(const std::string& configPath, bool holder);
+    bool consentSecondCopy() const { return consentGuarded_ && !consentHolder_; }
+    bool consentGuarded() const { return consentGuarded_; }
+    cascade::core::consent::Role consentRole() const { return consentHolder_ ? cascade::core::consent::Role::Holder : cascade::core::consent::Role::Second; }
+    // The holder's look at the file (the pass makes it; a test may force one): a switch the disk says is OFF is turned OFF here at once (the same functions as a click), an ON is adopted from empty.
+    void consentPoll(bool force = false);
+    // Waits (bounded) for the merges a click started on a worker. The service calls it at the head of its stop.
+    void consentFlush(int boundMs = 3000);
+    // The service's start calls it before its first save: the identifier minted at the start (a consent write) goes into the file, as a merge.
+    void consentStartWrites();
+    // What a window reads to follow an adoption (fact.consent.*): "holder" 1/0, "generation" (moves when the holder adopted a change of the Diagnostics or update-check switch), "diagnostics", "updateCheck".
+    bool consentFact(const std::string& key, std::string& value) const;
     // The folder the web page's own HTTPS certificate ("web-tls.cer") is kept in: the settings folder (engine lane E1; EngineService calls it before the configuration is applied).
     void setWebCertFolder(const std::string& folder);
     void stopTransfers();

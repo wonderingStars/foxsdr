@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core/crash_upload.hpp"
+#include "core/consent_file.hpp"
 
 #include "core/diag_log.hpp"
 #include "core/event_trail.hpp"
@@ -1125,7 +1126,10 @@ bool postObserverVetoes(const std::string& url) {
         std::lock_guard<std::mutex> lk(postObserverMutex());
         obs = postObserver();
     }
-    return obs && obs(url);
+    if (obs && obs(url)) { return true; }
+    // THE CONSENT CHECK (core/consent_file.hpp), brief 83: the copy that holds the settings lock asks the disk whether the destination's switch is still ON, because a switch turned
+    // OFF in another running copy reaches this one through the file. Refused here means nothing was attempted, exactly as for a veto of the test seam.
+    return consent::sendVetoed(url);
 }
 
 RawPostResult postBounded(const std::string& url, const std::string& json,
@@ -1510,12 +1514,12 @@ bool terminalStatus(const std::string& s) {
            s == "too-large" || s == "expired" || s == "local-only";
 }
 
-void writeSidecar(const std::string& reportPath, const std::string& status, int attempts,
+bool writeSidecar(const std::string& reportPath, const std::string& status, int attempts,
                   const std::string& signature, std::uint64_t nowEpoch,
                   const std::string& note) {
     const std::string path = uploadSidecarPath(reportPath);
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) { return; }
+    if (!out) { return false; }
     // Written for a PERSON, because the person who reads it is the one asking
     // "did my crash report go anywhere". Machine-readable enough for a test,
     // plain enough for a support conversation.
@@ -1524,6 +1528,8 @@ void writeSidecar(const std::string& reportPath, const std::string& status, int 
     out << "at: " << epochStamp(nowEpoch) << "\n";
     out << "signature: " << (signature.empty() ? std::string("(none)") : signature) << "\n";
     out << "note: " << note << "\n";
+    out.flush();
+    return static_cast<bool>(out);   // (a write that failed part way is not a mark: review 4 D6)
 }
 
 std::string readCapped(const fs::path& p, std::size_t cap) {
@@ -1593,8 +1599,12 @@ int withholdUnsentReports(const std::string& crashDir, std::uint64_t nowEpoch) {
         const std::string path = e.path().string();
         const Sidecar sc = readSidecar(uploadSidecarPath(path));
         if (terminalStatus(sc.status)) { continue; }   // sent, refused, abandoned, local-only already: settled
-        writeSidecar(path, "local-only", sc.attempts, std::string(), nowEpoch,
-                     "written while Diagnostics was on and not sent before it was switched off; it stays on this machine and is not sent, also if Diagnostics is switched on again");
+        if (!writeSidecar(path, "local-only", sc.attempts, std::string(), nowEpoch,
+                          "written while Diagnostics was on and not sent before it was switched off; it stays on this machine and is not sent, also if Diagnostics is switched on again")) {
+            // NOT COUNTED AS DONE (review 4 D6): the report stays sendable if Diagnostics is switched on again, so the person is told, in the log, which one could not be marked
+            diagWarnf("crash upload: a report waiting to be sent could not be marked as this machine's own copy (its marker could not be written): %s", e.path().filename().string().c_str());
+            continue;
+        }
         ++withheld;
     }
     return withheld;

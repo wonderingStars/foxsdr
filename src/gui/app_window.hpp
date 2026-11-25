@@ -4271,6 +4271,14 @@ private:
     // --- update check --------------------------------------------------------
     bool closeRequested_ = false;     // set by the updater; the run loop honours it
     bool updateCheckEnabled_ = true;
+    // TWO RUNNING COPIES (0.99.115, brief 83): this copy does not hold the settings lock (fact.consent.holder is "0"): it keeps Diagnostics and the update check off for its whole run, whatever is
+    // asked of it (the engine serves the half with both off, and a click in this window is written into the file for the holder to adopt). A copy that does hold it follows a switch another copy
+    // turned off or on (fact.consent.generation moves; followConsent applies what the engine adopted).
+    bool consentSecond_ = false;
+    bool interfaceHalfForce_ = false;   // the next look sends the half although nothing it compares has moved (the tester's emptied queue: review 4 D5)
+    std::string consentGen_;
+    double consentLookS_ = -1.0;
+    void followConsent();
     // AppConfig::updateChannel (0.99.88): "stable" or "beta".
     std::string updateChannel_ = "stable";
     // The ids of the team messages whose Seen key was pressed, oldest first (AppConfig::messagesSeen, 0.99.79). Local only; pruned to the ids the last

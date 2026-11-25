@@ -239,9 +239,6 @@ void clear() noexcept {
     g_head.store(0, std::memory_order_relaxed);
 }
 
-void resetForTest() noexcept {
-    for (auto& s : g_slots) { s.store(0, std::memory_order_relaxed); }
-    g_head.store(0, std::memory_order_relaxed);
-}
+void resetForTest() noexcept { clear(); }   // (one body: review 4 D7)
 
 }  // namespace cascade::core::trail

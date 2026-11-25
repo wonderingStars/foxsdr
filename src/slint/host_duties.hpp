@@ -317,6 +317,7 @@ struct TickInput {
 
 // THE SENTINEL'S POLL runs every N ticks: the ImGui window looks every 300 frames (~5 s at 60 Hz); the tick is 33 ms.
 inline constexpr int kSentinelPollEveryTicks = 150;
+inline constexpr int kConsentFollowEveryTicks = 15;   // how often the window looks at fact.consent.generation (a fact read, no disk)
 
 class HostDuties {
 public:
@@ -405,6 +406,11 @@ private:
     cascade::core::UploadPolicyState crashState_;
 
     bool sweepArmed_ = false;
+    // TWO RUNNING COPIES (0.99.115, brief 83): this copy does not hold the settings lock (fact.consent.holder is "0"), so it keeps both data families off for its whole run: no crash-report sweep,
+    // no update check, whatever the switches say. A copy that does hold it follows a switch another copy turned off or on (fact.consent.generation moves; the half the engine serves says which).
+    bool secondCopy_ = false;
+    std::string consentGeneration_;
+    void followConsent();
     bool sweepRunning_ = false;
     // Stops the running crash-report sweep (the transfer in flight is cancelled), keeps its memory for the next one and logs its tally. A no-op when none runs.
     void stopSweep();
@@ -453,6 +459,8 @@ public:
     void setInstallerLauncher(InstallerLauncher launcher) { launcher_ = std::move(launcher); }
     // The main window's handle (an HWND as a pointer), which Windows' Store dialogs need as their owner (core/store_update.hpp). The host sets it; without one the Store is asked ownerless.
     void setOwnerWindowProvider(std::function<void*()> provider) { ownerWindow_ = std::move(provider); }
+    // THE FOLDER THIS RUN MAY WRITE DIAGNOSTICS IN ("" = none: a bounded run). The Diagnostics switch moves the log file and the sentinel only where there is one (brief 83, review 4 D3).
+    void setDiagnosticsDir(std::string dir) { diagnosticsDir_ = std::move(dir); }
 
     bool fact(const char* key, std::string& value) override;
     bool submitInterfaceHalf(const std::string& document) override;
@@ -502,6 +510,7 @@ private:
     cascade::core::AbandonableTask<cascade::core::StoreInstallOutcome> storeInstall_;
     InstallerLauncher launcher_;
     std::function<void*()> ownerWindow_;
+    std::string diagnosticsDir_;
     cascade::core::FeatureRequestSender feature_;
     cascade::core::ProblemReportSendFlow problem_;
 };

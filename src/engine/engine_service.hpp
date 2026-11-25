@@ -53,6 +53,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -270,6 +271,9 @@ private:
     // (which abandons a write still in flight after its short grace), the lock last - held to the end.
     cascade::core::ConfigLock lock_;
     cascade::gui::ConfigWriter writer_;
+    // TWO RUNNING COPIES (brief 83; core/consent_file.hpp): which role the writer's worker writes in - -1 none (a hermetic run: the plain atomic write), 0 holder, 1 second copy. Shared with the
+    // worker by pointer, because a write abandoned at the quit can outlive the service.
+    std::shared_ptr<std::atomic<int>> writerRole_ = std::make_shared<std::atomic<int>>(-1);
     Engine engine_;
 
     bool diagnosticsEnabled_ = true;   // the restored switch: the hang-report directory follows it

@@ -312,6 +312,7 @@ int main(int argc, char** argv) {
     // THE HOUSEKEEPING (host_duties.hpp): the interface's half read from the table, the update check, the crash sweep armed, the sentinel
     // left at "creating the window". The close it asks for (the installer has started, the console asked) is the event loop's end.
     LiveWorld world(api, session);
+    world.setDiagnosticsDir(run.diagnosticsDir);   // brief 83: the Diagnostics switch moves the log file and the sentinel only where this run may write
     world.setOwnerWindowProvider([] { return foxsdr::slintgaps::findMainWindow(); });   // the owner of the Microsoft Store's own dialogs (a Store copy)
     HostDuties duties(world, [] { slint::quit_event_loop(); });
     {

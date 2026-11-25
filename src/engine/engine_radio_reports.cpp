@@ -299,6 +299,12 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
     RadioRun& run = (*radioRun_)[scopedSlot()];
     const double ranSec = run.runningSec;
     run.runningSec = 0.0;
+    // A RADIO THE PASS FOUND ALREADY OPEN (the switch was turned ON while it streamed) HAS NO FIRST WINDOW (0.99.115, brief 83, review 4 D2): the DSP minute that is closing began before this radio was
+    // known, so its drop count, its absent count and its ring high water include what happened while Usage reporting was OFF. It is not summed or sent; the next whole minute is the first one counted.
+    if (j.adopted && beganS < j.openedAtS) {
+        j.lastMinuteS = now;
+        return;
+    }
     // THE PREVIOUS SOURCE'S SAMPLES ARE NOT THIS RADIO'S (final look of 7421b4c6, F6b): the read mark is the receiver's and the pipeline's counter runs
     // across sources, so the open's first window holds whatever was read between the last mark and the open. j.readAtOpen is the counter at the
     // open; readNow is the counter at this close, so the mark this window started from is readNow minus what this window read (closeDspMinute
@@ -504,6 +510,7 @@ void Engine::radioReportsPass() {
             j.lastMinuteS = now;
             (*radioRun_)[s] = RadioRun{};
             j.readAtOpen = rx().pipeline_.sourceSamplesRead();
+            j.adopted = true;
             radioOpenedThisSession_ = true;
             rr::registerSource(rx().device_, rid);
         }

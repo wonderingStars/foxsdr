@@ -792,7 +792,7 @@ int main(int argc, char** argv) {
                     replaceOnce(s, "engine_.startControlThread(opt);", "engine_.startControlThread(opt);\n    if (persistent()) { saveNow(); }");
          }},
         {"the writer bound AFTER the file is loaded",
-         [](std::string& s) { return swapStatements(s, "writer_.bind(cascade::core::ConfigStore::writeFile);", "engine_.publishStatusText();"); }},
+         [](std::string& s) { return swapStatements(s, "writer_.bind(cascade::core::consent::guardedWriter(writerRole_));", "engine_.publishStatusText();"); }},
         {"the usage journal started BEFORE the receiver's half is applied",
          [](std::string& s) { return swapStatements(s, "engine_.applyConfig(startup);", "engine_.telemetryStartup(cfg, settingsDirOf(options_.configPath));"); }},
         {"the final pass made AFTER the quiesce (the control thread already joined: nothing applies the window's last half)",

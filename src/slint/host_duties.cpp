@@ -415,6 +415,12 @@ void HostDuties::start(const DutyStart& s) {
             }
         }
     }
+    {
+        std::string holder;
+        secondCopy_ = w_.fact("fact.consent.holder", holder) && holder == "0";
+        (void)w_.fact("fact.consent.generation", consentGeneration_);
+        if (secondCopy_) { w_.say("settings: another FoxSDR program holds the settings lock; this copy keeps usage reporting and diagnostics off for its whole run"); }
+    }
     // The crash-upload limiter's memory, VALIDATED rather than trusted (diagnosticsStartup): it is user-editable text on disk, and the one
     // thing it controls is how much this machine may send.
     crashState_ = core::decodePolicyState(iface_.crashUploadRecent, iface_.crashUploadWindowStart, iface_.crashUploadWindowCount,
@@ -434,7 +440,7 @@ void HostDuties::start(const DutyStart& s) {
 
     // THE UPDATE CHECK, once (app_window.cpp ~1405).
     const bool canned = w_.manifestSeam();
-    const UpdatePlan plan = updatePlanFor(bounded, canned, w_.inPackage(), iface_.updateCheckEnabled, w_.storeSeam());
+    const UpdatePlan plan = updatePlanFor(bounded, canned, w_.inPackage(), iface_.updateCheckEnabled && !secondCopy_, w_.storeSeam());
     // (With the canned answer set, "asking foxsdr.com" would be a lie: the answer is a file and foxsdr.com is not asked.)
     w_.say(plan == UpdatePlan::Run && canned ? "update: reading the canned answer of FOXSDR_FAKE_UPDATE_MANIFEST; foxsdr.com is not asked"
                                              : updatePlanLine(plan));
@@ -442,7 +448,7 @@ void HostDuties::start(const DutyStart& s) {
     if (plan == UpdatePlan::StoreAsk) { startStoreCheck(); }
 
     // THE CRASH SWEEP, armed here and started by the first poll that can say whose install id it carries (app_window.cpp ~1444).
-    const SweepPlan sweep = sweepPlanFor(iface_.diagnosticsEnabled, s.diagnosticsDir);
+    const SweepPlan sweep = sweepPlanFor(iface_.diagnosticsEnabled && !secondCopy_, s.diagnosticsDir);
     w_.say(sweepPlanLine(sweep));
     sweepArmed_ = sweep == SweepPlan::Armed;
 
@@ -471,12 +477,33 @@ void HostDuties::poll(const TickInput& in) {
     // The two senders: a worker that has finished is collected, and a terminal state's cooldown ends (nothing here blocks).
     w_.sendersPoll(w_.nowEpoch());
 
+    if (ticks_ % kConsentFollowEveryTicks == 0) { followConsent(); }
     if (sweepArmed_ && !sweepRunning_) { trySweepStart(); }
     pollUpdate();
     // A radio found since the popup was last worked out (plugged in after the start-up scan) may be the one a message is for.
     if (core::radiomessage::generation() != radioGen_) { refreshCard(); }
     // A saved half the coalescing gap held back goes now that the gap has passed (saveInterfaceHalf).
     if (halfHeld_ && ticks_ - halfSentTick_ >= kInterfaceSendGapTicks) { (void)sendHeldHalf(); }
+}
+
+// TWO RUNNING COPIES (brief 83): the engine that holds the settings lock follows a switch another copy turned OFF or ON (the disk is the truth), and says so through fact.consent.generation. This window
+// then does what its own click would have done: the Diagnostics switch moves the capture, the log, the sentinel and the sweep (diagnosticsChanged), the update-check switch moves the check
+// (updateSettingChanged). Nothing is sent back: the engine already holds the same values.
+void HostDuties::followConsent() {
+    std::string generation;
+    if (!w_.fact("fact.consent.generation", generation) || generation == consentGeneration_) { return; }
+    consentGeneration_ = generation;
+    std::string document;
+    if (!w_.fact("fact.config.interface", document) || document.empty()) { return; }
+    core::AppConfig parsed;
+    std::string error;
+    if (!core::parseInterfaceHalf(document, parsed, error)) { return; }
+    const bool diagMoved = parsed.diagnosticsEnabled != iface_.diagnosticsEnabled;
+    const bool updateMoved = parsed.updateCheckEnabled != iface_.updateCheckEnabled;
+    iface_.diagnosticsEnabled = parsed.diagnosticsEnabled;
+    iface_.updateCheckEnabled = parsed.updateCheckEnabled;
+    if (diagMoved) { diagnosticsChanged(); }
+    if (updateMoved) { updateSettingChanged(); }
 }
 
 void HostDuties::trySweepStart() {
@@ -828,7 +855,7 @@ void HostDuties::diagnosticsChanged() {
         sweepArmed_ = false;
         stopSweep();
         w_.say(sweepPlanLine(SweepPlan::OffBySwitch));
-    } else if (!sweepArmed_ && !sweepRunning_) {
+    } else if (!sweepArmed_ && !sweepRunning_ && !secondCopy_) {
         const SweepPlan plan = sweepPlanFor(iface_.diagnosticsEnabled, cfg_.diagnosticsDir);
         sweepArmed_ = plan == SweepPlan::Armed;
         w_.say(sweepPlanLine(plan));
@@ -836,7 +863,7 @@ void HostDuties::diagnosticsChanged() {
 }
 
 void HostDuties::updateSettingChanged() {
-    if (!iface_.updateCheckEnabled) {
+    if (!iface_.updateCheckEnabled || secondCopy_) {
         // Off means off immediately: the answer is discarded, and none is asked for again this launch.
         update_ = core::UpdateInfo{};
         store_ = core::StoreUpdateCheck{};
@@ -1034,7 +1061,19 @@ void LiveWorld::beat() { core::breadcrumb::beat(); }
 void LiveWorld::radioOpening(bool on) { core::breadcrumb::setActivity(core::breadcrumb::kOpeningRadio, on); }
 void LiveWorld::sentinelPoll() { core::sentinelPoll(); }
 bool LiveWorld::consoleCloseRequested() { return core::consoleCloseRequested(); }
-void LiveWorld::applyDiagnosticsSwitches(bool enabled, bool minidump) { core::setCrashCaptureEnabled(enabled, minidump); }
+// THE DIAGNOSTICS SWITCH, IN THE RUNNING PROGRAM (brief 83, review 4 D3): the crash capture, the diagnostic log file and the sentinel (the watcher that writes a report when the program dies) all follow it,
+// as the Classic window's click does (AppWindow::applyDiagnosticsEnabled). Until now this window's click moved only the capture, so a copy switched OFF mid-session went on writing foxsdr.log and its
+// sentinel went on writing a report if the program then died. A copy without the settings lock keeps diagnostics off whatever is asked of it.
+void LiveWorld::applyDiagnosticsSwitches(bool enabled, bool minidump) {
+    std::string holder;
+    const bool second = fact("fact.consent.holder", holder) && holder == "0";
+    const bool on = enabled && !second;
+    core::setCrashCaptureEnabled(on, minidump);
+    if (!diagnosticsDir_.empty()) {
+        core::DiagLog::instance().configure(core::diagLogDir(), on);
+        (void)core::sentinelSetEnabled(on);   // (a no-op until boot configured one: a run that may not write has none)
+    }
+}
 
 void LiveWorld::say(const std::string& line) { std::fprintf(stderr, "foxsdr-slint: %s\n", line.c_str()); }
 void LiveWorld::diag(const std::string& line) { core::diagLogf("%s", line.c_str()); }

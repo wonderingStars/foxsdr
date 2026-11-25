@@ -685,6 +685,11 @@ AppWindow::AppWindow(const WindowHost& host)
             iface.telemetryCleanExit = !host.lastRunUnclean;
             // The crash count and the pending report were read from the file by the restore, after the apply (so not from freshly defaulted
             // members). Sends nothing unless the user previously opted in.
+            {
+                std::string holder;
+                consentSecond_ = readFactText("fact.consent.holder", holder) && holder == "0";
+                (void)readFactText("fact.consent.generation", consentGen_);
+            }
             diagnosticsEnabled_ = iface.diagnosticsEnabled;
             diagnosticsMinidump_ = iface.diagnosticsMinidump;
             diagnosticsStartup(iface);
@@ -2129,6 +2134,7 @@ int AppWindow::run(int frames) {
         // THE INTERFACE'S HALF TO THE ENGINE, when it changed (shell retirement R5): with or without a settings file, because the Diagnostics switch
         // in it is what moves the engine's hang watchdog - and, since R8, because the engine's keeper saves what the engine holds: this is how a
         // change of this window reaches the file.
+        followConsent();   // two copies (brief 83): what the engine adopted from the file, applied here before the half is sent
         (void)sendInterfaceHalf(glfwGetTime());
 
         // After every widget, so the hovered and active items are this frame's.
@@ -21186,31 +21192,33 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     // one call, and tests/test_diag_hang.cpp drives the real application
     // through THIS function in both of them.
     diagnosticsEnabled_ = on;
+    // A COPY WITHOUT THE SETTINGS LOCK KEEPS DIAGNOSTICS OFF FOR ITS WHOLE RUN (brief 83): what the window shows and sends is the person's click, what is armed is `eff`.
+    const bool eff = on && !consentSecond_;
     // THE FAILURE COUNTS FOLLOW THIS SWITCH TOO (0.99.64), as the stall count
     // does: with Diagnostics off nothing new is counted (what is already kept
     // stays, and is still sent with the next record). The ledger is the process's
     // one (core/health_events.hpp): the engine arms and reads it, this switch gates it.
-    cascade::core::health::globalLedger()->setAllowed(on);
+    cascade::core::health::globalLedger()->setAllowed(eff);
     {
         // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64, docs/DIAGNOSTICS.md, "The window
         // does no disk work"): the reports folder and the log folder are made and the
         // log file opened - once at start-up, and on a press of the switch.
         cascade::core::WatchdogPause holdWatchdog(watchdog_);
-        cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        cascade::core::setCrashCaptureEnabled(eff, diagnosticsMinidump_);
         cascade::core::issue::filePendingIssueReports();
         // Guarded on diagCrashDir_ for the same reason as in run(): a run that was
         // never allowed to write (a bounded CI run) must not start writing because
         // a switch was flipped.
         if (!diagCrashDir_.empty()) {
             cascade::core::DiagLog::instance().configure(cascade::core::diagLogDir(),
-                                                         diagnosticsEnabled_);
+                                                         eff);
         }
     }
-    watchdog_.setReportDir(diagnosticsEnabled_ ? diagCrashDir_ : std::string());
+    watchdog_.setReportDir(eff ? diagCrashDir_ : std::string());
     // AND THE CRASH-REPORT UPLOAD, by the same switch, in the running program (owner's rule of 2026-11-24: off sends nothing from that moment): a sweep in flight is stopped (the
     // transfer is cancelled; its memory is journalled at the quit by crashUploadFinish), and one is asked for again when the switch is turned back ON after the start, so the
     // folder is swept with no restart. crashUploadStart() already refuses to begin one while the switch is off.
-    if (!diagnosticsEnabled_) {
+    if (!eff) {
         crashUploader_.stop();
         crashUploadWanted_ = false;
     } else if (diagStartApplied_) {
@@ -21221,17 +21229,17 @@ void AppWindow::applyDiagnosticsEnabled(bool on) {
     // (main() armed it only for an interactive session, or a test that asked) and
     // none is running. A run never allowed to write has no directory, and gets none.
     if (!diagCrashDir_.empty()) {
-        cascade::core::sentinelSetEnabled(diagnosticsEnabled_);
+        cascade::core::sentinelSetEnabled(eff);
     }
     // THE FIRST CALL IS THE START OF THE SESSION (run() makes it before anything else is logged): whether the log file was on then is
     // whether this session's start line is in it, which is what tells this session from the one before. A switch turned on part-way
     // through leaves that line out of the file.
     if (!diagStartApplied_) {
         diagStartApplied_ = true;
-        diagLogHasSessionStart_ = on;
+        diagLogHasSessionStart_ = eff;
     }
     // The early read of the previous session's log (and nothing at all when off).
-    if (diagnosticsEnabled_) { startDiagHistoryRead(); }
+    if (eff) { startDiagHistoryRead(); }
     // THE ENGINE'S OWN WATCHDOG (the pump move's step P5) is a second hang detector with a report directory of its own: "off means
     // off" has to reach it, or a session switched off would keep writing the pass's hang reports. Since shell retirement R5 it does so as part
     // of the interface's half: the switch is a field of the document sendInterfaceHalf hands the engine (at once, uncoalesced, for this field),
@@ -21283,7 +21291,7 @@ void AppWindow::drawDiagnosticsSection() {
         diagnosticsMinidump_ = dump;
         // LEFT ON THIS THREAD, UNDER A PAUSE (0.99.64): the reports folder, on a click.
         cascade::core::WatchdogPause holdWatchdog(watchdog_);
-        cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_, diagnosticsMinidump_);
+        cascade::core::setCrashCaptureEnabled(diagnosticsEnabled_ && !consentSecond_, diagnosticsMinidump_);
         cascade::core::issue::filePendingIssueReports();
     }
     ImGui::TextDisabled(
@@ -21802,7 +21810,7 @@ bool AppWindow::crashUploadStart() {
     // switch, and "may this run write to the machine at all" - a bounded CI run
     // has an empty diagCrashDir_ and must not start sending whatever the config
     // says. (True: decided - there is nothing to start.)
-    if (!diagnosticsEnabled_ || diagCrashDir_.empty()) { return true; }
+    if (!diagnosticsEnabled_ || consentSecond_ || diagCrashDir_.empty()) { return true; }
 
     // THE SAME anonymous id the usage report uses, and empty when usage reporting is off - because then it does not exist. A
     // crash report must not be what mints an identifier the user switched off. See PRIVACY.md. Both come from the engine as
@@ -21977,16 +21985,42 @@ cascade::core::AppConfig AppWindow::withInterfaceHalfFromTable(const cascade::co
     return merged;
 }
 
+// TWO RUNNING COPIES (brief 83): the engine that holds the settings lock follows a switch another copy turned OFF or ON (the file is the truth) and says so through fact.consent.generation. This
+// window then does what its own click would have done (applyDiagnosticsEnabled; the update-check switch), and the half it sends next carries the same values the engine already holds.
+void AppWindow::followConsent() {
+    if (uiSession_ == nullptr) { return; }
+    const double now = glfwGetTime();
+    if (consentLookS_ >= 0.0 && now - consentLookS_ < 0.5) { return; }
+    consentLookS_ = now;
+    std::string generation;
+    if (!readFactText("fact.consent.generation", generation) || generation == consentGen_) { return; }
+    consentGen_ = generation;
+    std::string document;
+    if (!readFactText("fact.config.interface", document) || document.empty()) { return; }
+    cascade::core::AppConfig parsed;
+    std::string error;
+    if (!cascade::core::parseInterfaceHalf(document, parsed, error)) { return; }
+    if (parsed.diagnosticsEnabled != diagnosticsEnabled_) { applyDiagnosticsEnabled(parsed.diagnosticsEnabled); }
+    if (parsed.updateCheckEnabled != updateCheckEnabled_) {
+        updateCheckEnabled_ = parsed.updateCheckEnabled;
+        if (!updateCheckEnabled_) {
+            update_ = cascade::core::UpdateInfo{};
+            storeUpdate_ = cascade::core::StoreUpdateCheck{};
+            updateError_.clear();
+        }
+    }
+}
+
 bool AppWindow::sendInterfaceHalf(double nowS) {
     if (uiSession_ == nullptr || !interfaceSentKnown_) { return false; }
     // THE LOOK: is there anything to say? A compare of the fields that mean something (the self-moving ones - the tester's running report, the
     // retry queues, the crash-upload limiter's memory - are left out: a document sent because they moved would be a document sent every look).
     cascade::core::AppConfig half;
     buildInterfaceHalf(half, /*bookkeeping=*/false);
-    if (cascade::core::interfaceHalvesEqual(half, interfaceSent_)) { return false; }
+    if (cascade::core::interfaceHalvesEqual(half, interfaceSent_) && !interfaceHalfForce_) { return false; }
     // AT MOST ONE DOCUMENT PER kInterfaceSendGapS (a window drag changes a rectangle every frame, and the session's queue is bounded) - except that
     // the Diagnostics switch is not made to wait: "off means off" is a promise about what is written from now on.
-    const bool urgent = half.diagnosticsEnabled != interfaceSent_.diagnosticsEnabled;
+    const bool urgent = half.diagnosticsEnabled != interfaceSent_.diagnosticsEnabled || interfaceHalfForce_;
     if (!urgent && interfaceSentAtS_ >= 0.0 && nowS - interfaceSentAtS_ < kInterfaceSendGapS) { return false; }
     interfaceSentAtS_ = nowS;   // (the clock of the attempt: a refused one is not retried every look)
     buildInterfaceHalf(half, /*bookkeeping=*/true);   // the document carries the self-moving fields too: they ride along on every real change
@@ -22009,6 +22043,7 @@ bool AppWindow::sendInterfaceHalf(double nowS) {
         return false;
     }
     interfaceSent_ = std::move(half);
+    interfaceHalfForce_ = false;
     ++interfaceSends_;
     return true;
 }

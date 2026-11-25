@@ -136,6 +136,8 @@ struct AppWindowTestAccess {
             CHECK(th::engine(a).applyInterfaceConfig(doc, err));
         });
     }
+    static bool exitCausePending(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).exitCausePending_; }); }
+    static std::string interfaceDoc(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).interfaceConfigDocument(); }); }
     static void setControlDiagDir(AppWindow& a, const std::string& d) { passseam::on(th::engine(a), [&] { th::engine(a).controlDiagDir_ = d; }); }
     static bool healthAllowed(AppWindow& a) { return passseam::read<bool>(th::engine(a), [&] { return th::engine(a).healthLedger_->allowed(); }); }
     static std::string healthEncoded(AppWindow& a) { return passseam::read<std::string>(th::engine(a), [&] { return th::engine(a).healthLedger_->encoded(); }); }
@@ -462,7 +464,8 @@ int main() {
             CHECK(ends[0]["body"]["listed"].empty());
             CHECK(ends[0]["body"]["sessionSec"].get<long long>() < 120);   // counted from the ON, not from the session's start (600 s ago)
         }
-        CHECK(ofKind(q, "radio_close").empty());                  // the radio opened while OFF never gets a close line
+        CHECK(ofKind(q, "radio_close").empty());                  // (a hand-set slot with no receiver behind it: the engine itself is cleared. A radio that is REALLY open at the ON edge is found and adopted by the
+                                                                  // pass and does get a close line, and no stream window for the minute it was found in: test_radio_reports_engine, brief 83)
         CHECK(ofKind(q, "radio_fail").empty());
     }
 
@@ -543,6 +546,41 @@ int main() {
         CHECK(statusOf(rep) == "local-only");                     // still withheld after the ON
         fs::remove(rep, ec);
         fs::remove(cascade::core::uploadSidecarPath(rep.string()), ec);
+    }
+
+    // --- D4, D5 (review 4): a start with Usage OFF ---------------------------------------------------------------------------------------------------------
+    {
+        std::printf("  D4  a start with Usage OFF still reads the previous exit's evidence for the person's own log (the pending read is not cleared)\n");
+        resetProcessState();
+        th::TestWindow app;
+        Dir d("d4");
+        cascade::core::AppConfig c = startCfg(false, true);
+        c.telemetryCleanExit = false;                             // the last run ended unclean
+        c.telemetrySessionStarted = 1700000000;                   // ... and recorded when it began: there is evidence to read
+        Access::startup(app, c, d.str());
+        CHECK(!Access::enabled(app));
+        CHECK(Access::exitCausePending(app));                     // (0.99.115 round 3 cleared it: the log line was never written)
+        CHECK(Access::crashes(app) == 0);                         // but no counter moved: nothing is counted for a report that will not be sent
+    }
+    {
+        std::printf("  D5  a start with Usage OFF empties the beta tester's running report and its retry queue held in the interface's half\n");
+        resetProcessState();
+        th::TestWindow app;
+        Dir d("d5");
+        cascade::core::AppConfig c = startCfg(false, true);
+        c.testerUsageCurrent = "{\"sessionSeconds\":120}";
+        c.testerUsagePending = {"{\"queued\":1}"};
+        {
+            std::string err;
+            // the half as a window is served it: what the engine holds is what the application loaded
+            passseam::on(th::engine(app), [&] { th::engine(app).applyConfig(c); });
+        }
+        Access::startup(app, c, d.str());
+        cascade::core::AppConfig served;
+        std::string err;
+        CHECK(cascade::core::parseInterfaceHalf(Access::interfaceDoc(app), served, err));
+        CHECK(served.testerUsageCurrent.empty());
+        CHECK(served.testerUsagePending.empty());
     }
     resetProcessState();
     std::error_code ec;

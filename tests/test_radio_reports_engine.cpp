@@ -376,6 +376,13 @@ struct AppWindowTestAccess {
     }
     // THE FIRST WINDOW AFTER AN OPEN (review of 70d16f00, finding 4): the radio was opened `openAgoSec` ago and the minute clock armed only
     // `lenSec` ago (the marks, and the figures, began there). The window must be `lenSec` long, not the radio's whole age.
+    // A DSP minute that began `beganAgoSec` ago (before or after the radio was known), with the figures the pipeline's marks gave it.
+    static void minuteBegan(AppWindow& a, std::uint64_t read, std::uint64_t dropped, double beganAgoSec) {
+        passseam::on(th::engine(a), [&] { th::engine(a).journalStreamMinute(read, dropped, 0, 100, th::engine(a).clockS() - beganAgoSec, ~0ull); });
+    }
+    static std::uint64_t accDropped(AppWindow& a) { std::uint64_t v = 0; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].accDropped; }); return v; }
+    static bool slotOpen(AppWindow& a) { bool v = false; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].open; }); return v; }
+    static bool slotOpenAdopted(AppWindow& a) { bool v = false; passseam::on(th::engine(a), [&] { v = th::engine(a).radioJournal_[0].open && th::engine(a).radioJournal_[0].adopted; }); return v; }
     static void minuteFirstWindow(AppWindow& a, std::uint64_t read, double lenSec, double openAgoSec) {
         passseam::on(th::engine(a), [&] {
             const double now = th::engine(a).clockS();
@@ -2006,6 +2013,34 @@ int main(int argc, char** argv) {
         for (const json& m : fails) { if (std::string(m["body"].value("reason", std::string())).find("tuner is not one this driver supports") != std::string::npos && m["body"]["driver"] == "rtlsdr") { ++tuner; } }
         CHECK(tuner == 1);
         keep(fails);
+    }
+
+    // --- A RADIO OPEN WHEN USAGE REPORTING IS SWITCHED ON (0.99.115, brief 83, review 4 D2 and U3) --------------------------------------------------------
+    {
+        std::printf("  a radio already open at the ON edge is adopted by the pass: it gets a close line, and the minute it was found in is not counted (no OFF-period drops in the first stream window)\n");
+        resetFake();
+        th::TestWindow app;
+        Rig rig("adopt-on");
+        rig.start(/*usageOn=*/false);                  // Usage reporting OFF
+        Access::clock(app, 0.0);
+        Access::restore(app, savedRadio());            // the saved radio opens with the switch OFF: nothing is journalled
+        CHECK(Access::deviceOpen(app));
+        CHECK(!Access::slotOpen(app));
+        Access::consent(app, 1);                       // ON, with the radio streaming (and dropping, in the minute that is running)
+        Access::pass(app);                             // the pass finds it open and adopts it
+        CHECK(Access::slotOpen(app));
+        CHECK(Access::slotOpenAdopted(app));
+        Access::minuteBegan(app, 480000, 5000, 50.0);  // the DSP minute that closes now began 50 s ago: before the radio was known - the figures hold what the OFF period lost
+        CHECK(Access::accDropped(app) == 0);           // not summed
+        CHECK(Access::accRead(app) == 0);
+        Access::minuteBegan(app, 100000, 7, 0.0);      // the next minute began after the adoption: the first one counted
+        CHECK(Access::accDropped(app) == 7);
+        CHECK(Access::accRead(app) == 100000);
+        Access::quit(app);
+        const std::vector<json> q = queued(rig.qdir());
+        const std::vector<json> closes = ofKind(q, "radio_close");
+        CHECK(closes.size() == 1);                     // a radio open at the ON edge does get a close line, through the adoption (the old comment and test U3 said it never did)
+        if (!closes.empty()) { CHECK(closes[0]["body"]["cause"] == "quit"); }
     }
 
     // --- the Worker's own validator over every message the engine made ---------------------------------------------------------------------------------

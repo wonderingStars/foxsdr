@@ -25,7 +25,10 @@
 #include <thread>
 #include <vector>
 
+#include "core/breadcrumb.hpp"
 #include "core/config_halves.hpp"
+#include "core/diag_log.hpp"
+#include "core/sentinel.hpp"
 #include "core/config_lock.hpp"
 #include "engine/engine_service.hpp"
 #include "engine/fox_engine_api.hpp"
@@ -555,8 +558,8 @@ int main() {
         HostDuties d(w, [&] { ++closed; });
         w.facts["fact.config.interface"] = interfaceDoc(true, true, "beta");
         d.start(interactive());
-        CHECK((without(w.calls, {}) == Lines{"fact:fact.config.interface", "applyDiagnosticsSwitches:1:0", "updateCheckStart:0.99.104:beta",
-                                             "phase:creating-window"}));
+        CHECK((without(w.calls, {}) == Lines{"fact:fact.config.interface", "fact:fact.consent.holder", "fact:fact.consent.generation", "applyDiagnosticsSwitches:1:0",
+                                             "updateCheckStart:0.99.104:beta", "phase:creating-window"}));
         CHECK(anyContains(w.said, "program: slint (foxsdr-slint 0.99.104)"));
         CHECK(anyContains(w.diagged, "program: slint (foxsdr-slint 0.99.104)"));
         CHECK(anyContains(w.said, updatePlanLine(UpdatePlan::Run)));
@@ -1476,6 +1479,101 @@ int main() {
         const std::size_t taken = r.submitted.size();
         for (int i = 0; i < HostDuties::kInterfaceSendGapTicks * 2; ++i) { f.poll({}); }
         CHECK(r.submitted.size() == taken);   // taken: no longer held
+    }
+    {
+        // TWO RUNNING COPIES (brief 83, review 4 D1): the copy that holds the settings lock follows a switch another copy turned OFF. The engine says so through fact.consent.generation and serves the
+        // half with the new values; the duties do what the person's own click would have done: the crash handler, the sweep (stopped, and not started again), the update check.
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        w.facts["fact.consent.holder"] = "1";
+        w.facts["fact.consent.generation"] = "0";
+        tellFacts(w);
+        d.start(interactive());
+        d.poll({});
+        CHECK(countOf(w.calls, "sweepStart") == 1);
+        CHECK(d.sweepRunning());
+        // nothing moved: a poll that sees the same generation does nothing
+        for (int i = 0; i < kConsentFollowEveryTicks * 2; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "applyDiagnosticsSwitches:0:0") == 0);
+        // another copy turned Diagnostics and the update check OFF; the engine adopted it and moved the generation
+        w.facts["fact.config.interface"] = interfaceDoc(false, false);
+        w.facts["fact.consent.generation"] = "1";
+        for (int i = 0; i < kConsentFollowEveryTicks + 1; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "applyDiagnosticsSwitches:0:0") == 1);   // the crash handler (and, in the real world, the log file and the sentinel)
+        CHECK(countOf(w.calls, "sweepStop") == 1);                      // the running sweep is stopped
+        CHECK(!d.sweepRunning());
+        CHECK(!d.interfaceHalf().diagnosticsEnabled && !d.interfaceHalf().updateCheckEnabled);
+        for (int i = 0; i < 40; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "sweepStart") == 1);                     // and none starts while it is off
+        CHECK(countOf(w.calls, "submitInterfaceHalf") == 0);            // nothing is sent back: the engine already holds these values
+        // and ON again by another copy's click: adopted too, and a sweep starts with no restart
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        w.facts["fact.consent.generation"] = "2";
+        for (int i = 0; i < kConsentFollowEveryTicks + 2; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "applyDiagnosticsSwitches:1:0") >= 1);
+        CHECK(countOf(w.calls, "sweepStart") == 2);
+    }
+    {
+        // A COPY WITHOUT THE SETTINGS LOCK keeps both families off: no sweep and no update check, whatever the half says, and a switch turned on in its window starts neither
+        FakeWorld w;
+        HostDuties d(w, [] {});
+        w.facts["fact.config.interface"] = interfaceDoc(true, true);
+        w.facts["fact.consent.holder"] = "0";
+        tellFacts(w);
+        d.start(interactive());
+        for (int i = 0; i < 10; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "sweepStart") == 0);
+        bool anyCheck = false;
+        for (const std::string& c : w.calls) { if (c.rfind("updateCheckStart:", 0) == 0) { anyCheck = true; } }
+        CHECK(!anyCheck);
+        core::AppConfig half = d.interfaceHalf();
+        half.diagnosticsEnabled = false;
+        (void)d.saveInterfaceHalf(half);
+        d.diagnosticsChanged();
+        half.diagnosticsEnabled = true;
+        half.updateCheckEnabled = true;
+        (void)d.saveInterfaceHalf(half);
+        d.diagnosticsChanged();
+        d.updateSettingChanged();
+        for (int i = 0; i < 10; ++i) { d.poll({}); }
+        CHECK(countOf(w.calls, "sweepStart") == 0);
+        for (const std::string& c : w.calls) { if (c.rfind("updateCheckStart:", 0) == 0) { anyCheck = true; } }
+        CHECK(!anyCheck);
+    }
+    {
+        // THE NEW WINDOW'S DIAGNOSTICS SWITCH, CLICKED MID-SESSION, ALSO STOPS THE SENTINEL AND THE DIAGNOSTIC LOG (review 4 D3), as the Classic window's click does; ON starts them again with no
+        // restart; a run that may not write diagnostics (no folder) moves neither
+        const fs::path root = scratchDir() / "d3";
+        setEnv("FOXSDR_DIAG_DIR", (root / "diag").string());
+        const fs::path logs = root / "logs";
+        const fs::path crashes = root / "crashes";
+        std::error_code mk;
+        fs::create_directories(logs, mk);
+        fs::create_directories(crashes, mk);
+        core::DiagLog::instance().configure(logs.string(), true);
+        core::SentinelOptions so;
+        so.crashDir = crashes.string();
+        so.logDir = logs.string();
+        so.exePath = (root / "no-such-watcher.exe").string();   // a watcher that cannot start: the switch's flag is what is read
+        core::sentinelConfigure(so);
+        const auto reportsOff = [] { return (core::breadcrumb::read(core::breadcrumb::g_block.load()).flags & core::breadcrumb::kFlagReportsOff) != 0u; };
+        CHECK(core::DiagLog::instance().fileEnabled());
+        LiveWorld world(nullptr, nullptr);
+        world.setDiagnosticsDir(crashes.string());
+        world.applyDiagnosticsSwitches(false, false);
+        CHECK(!core::DiagLog::instance().fileEnabled());        // the log file stops
+        CHECK(reportsOff());                                    // the sentinel is told: nothing is written whatever happens next
+        world.applyDiagnosticsSwitches(true, false);
+        CHECK(core::DiagLog::instance().fileEnabled());         // and starts again with no restart
+        CHECK(!reportsOff());
+        LiveWorld bounded(nullptr, nullptr);                    // no diagnostics folder: this run may not write
+        bounded.applyDiagnosticsSwitches(false, false);
+        CHECK(core::DiagLog::instance().fileEnabled());
+        CHECK(!reportsOff());
+        core::DiagLog::instance().configure(std::string(), false);
+        (void)core::sentinelSetEnabled(false);
+        setEnv("FOXSDR_DIAG_DIR", "");
     }
     {
         // the diagnostics switches reach the crash handler with the user's minidump choice

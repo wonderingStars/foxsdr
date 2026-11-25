@@ -596,6 +596,7 @@ void AppWindow::testerUsageFollowSwitch() {
         testerUsageQueue_.setItems(std::vector<std::string>());
         testerUsage_->reset();
         testerUsage_->setArmed(false);
+        interfaceHalfForce_ = true;   // the emptied queue is handed to the engine at once: the fields are self-moving and no compare would send it (review 4 D5)
         return;
     }
     // ON. The first answer of a launch that starts ON is no edge: the session began at launch and the queue is the previous session's, as in 0.99.114.
@@ -603,6 +604,7 @@ void AppWindow::testerUsageFollowSwitch() {
     testerUsageQueue_.setItems(std::vector<std::string>());
     testerUsage_->reset();
     testerUsage_->setArmed(!activeTesterToken().empty());
+    interfaceHalfForce_ = true;
     testerSessionStart_ = wallTimeS();
     testerSessionStartWall_ = std::time(nullptr);
     testerUsageAccrual_.reset(testerSessionStart_);

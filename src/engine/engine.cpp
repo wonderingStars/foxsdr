@@ -276,6 +276,8 @@ void Engine::frameKick() {
 // specific needs doing, and detaching is the only safe choice. Proven with
 // tests/test_engine_fallback_teardown.cpp (a throwing constructor seam).
 Engine::~Engine() {
+    cascade::core::consent::clearSendHook(this);   // two copies (brief 83)
+    consentFlush(1500);
     stopHandoffServer();   // field fix A2: the pipe's thread is joined before anything it could ask about goes
     wireBShutdown();   // wire-b: every network I/Q output ends while the pipelines still exist
     cascade::core::beats::Registry::clearKeyedProbe(this);
@@ -10011,36 +10013,10 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // a later opt-in cannot be tied to the old one. ON WHILE ALREADY
             // ON changes nothing (the checkbox's own `on && !enabled`): the
             // id a machine reports under must not change behind its back.
-            if (on) {
-                if (telemetryEnabled_) { return refuse(FOXAPI_NO_CHANGE, "usage reporting is already on"); }
-                telemetryInstallId_ = cascade::core::newInstallId();
-                telemetryEnabled_ = !telemetryInstallId_.empty();
-            } else {
-                telemetryEnabled_ = false;
-                telemetryInstallId_.clear();
-            }
-            // RULE R (0.99.115, brief 79): NOTHING THAT HAPPENED WHILE USAGE REPORTING WAS OFF IS EVER SENT, also after it is switched on again. ONE clearing function for the whole usage
-            // family runs at this edge (usageFamilyClear): the session's accumulators, the counters, the radio report's engine side. The two ledgers follow in the same step: off disarms
-            // them and removes their files (what the start-up does with the switch off), on arms them fresh - nothing loaded from a file of an earlier period.
-            usageFamilyClear(telemetryEnabled_ ? UsageEdge::On : UsageEdge::Off);
-            if (telemetryEnabled_) {
-                stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_, /*loadExisting=*/false);
-                healthLedger_->arm(healthLedgerPath_, telemetryInstallId_, /*loadExisting=*/false);
-            } else {
-                stallLedger_->disarm();
-                healthLedger_->disarm();
-            }
-            // THE HEARTBEAT FOLLOWS THE SWITCH IN THE SAME STEP: off disarms
-            // it (configure refuses the now-empty id), on arms it with the
-            // new id - exactly as the window's click handler always did.
-            telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_,
-                                          cascade::versionString());
-            // THE RADIO REPORTS FOLLOW THE SWITCH: off deletes EVERYTHING queued and everything held about radios - the journal, the first-session record, every queued failure report - and
-            // sends nothing about a radio that fails to open (from 0.99.115); on starts the journal under the new id.
-            radioReportsRefreshIdentity();
-            // THE EDGE IS MADE DURABLE AT ONCE (brief 80): the keeper saves the next snapshot without its debounce window, so a crash right after the click leaves neither an earlier
-            // period's pending usage record nor an "enabled" flag on disk.
-            switchEdges_.fetch_add(1);
+            // TWO COPIES (brief 83): a copy without the settings lock keeps the family off; its click is written into the file for the holder to adopt.
+            if (consentSecondCopy()) { return secondCopyUsageClick(on, res); }
+            if (on && telemetryEnabled_) { return refuse(FOXAPI_NO_CHANGE, "usage reporting is already on"); }
+            usageSwitchEdge(on, std::string(), /*fromDisk=*/false);
             return res;
         case FOXAPI_OP_SERVER_CONFIG: {
             // Stage 5a (docs/api-0.3-additions.md 8.16): the local operator's configuration of the web server and the CAT listener.
@@ -10269,7 +10245,8 @@ void Engine::usageFamilyClear(UsageEdge edge) {
     // the lifetime counters under the install id: with the id deleted they do not exist; a new id's life begins now (this launch is its first)
     telemetryCrashes_ = 0;
     telemetryExits_ = cascade::core::ExitCounts{};
-    exitCausePending_ = false;
+    // (not at a start: the previous exit's evidence is still read and its line written for the person's own log - only the counters stopped; review 4 D4. The refinement is guarded by the switch.)
+    if (edge != UsageEdge::StartOff) { exitCausePending_ = false; }
     telemetryLaunches_ = on ? 1u : 0u;
     if (on) {
         telemetryFirstRun_ = cascade::core::utcDateToday();
@@ -10278,7 +10255,7 @@ void Engine::usageFamilyClear(UsageEdge edge) {
         telemetryFirstRun_.clear();
         telemetryFirstVersion_.clear();
     }
-    // the radio reports' engine side: the scans, what they listed, the failed opens, every radio's journal slot (a radio opened in the OFF period never gets a close line from the ON one),
+    // the radio reports' engine side: the scans, what they listed, the failed opens, every radio's journal slot (a radio that was open when the switch went ON is found by the next pass and adopted: it gets a close line from then, and no stream window for the minute it was found in),
     // the session flags and the session's length (session_end counts from here)
     radioScans_ = 0;
     radioScanModels_.clear();
@@ -10320,7 +10297,31 @@ void Engine::diagnosticsFamilyEdge(bool on, bool atStart) {
     }
 }
 
-void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::string& configDir) {
+void Engine::telemetryStartup(const cascade::core::AppConfig& cfgGiven, const std::string& configDirGiven) {
+    // TWO RUNNING COPIES (brief 83, review 4 D1): a copy that does not hold the settings lock runs with BOTH data families off for its whole run - no identifier, no ledgers, no journal or queue,
+    // no beat, no failure report - whatever the file says, and it touches none of the holder's files (it deletes none of them: no ledger path, no queue folder). The interface's half it serves
+    // to its window says Diagnostics and the update check are off, so the window starts no sweep and no check. The file keeps what the holder wrote (the writer's overlay, engine_consent.cpp).
+    const bool second = consentSecondCopy();
+    cascade::core::AppConfig cfgSecond;
+    if (second) {
+        cfgSecond = cfgGiven;
+        cfgSecond.telemetryEnabled = false;
+        cfgSecond.telemetryInstallId.clear();
+        cfgSecond.telemetryPending.clear();
+        cfgSecond.telemetryFirstRun.clear();
+        cfgSecond.telemetryFirstVersion.clear();
+        cfgSecond.telemetryLaunches = 0;
+        cfgSecond.telemetryCrashes = 0;
+        cfgSecond.telemetryExitsDied = cfgSecond.telemetryExitsKilled = cfgSecond.telemetryExitsEnded = cfgSecond.telemetryExitsUnknown = 0;
+        cfgSecond.diagnosticsEnabled = false;
+        cfgSecond.updateCheckEnabled = false;
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        interfaceCfg_.diagnosticsEnabled = false;
+        interfaceCfg_.updateCheckEnabled = false;
+    }
+    const cascade::core::AppConfig& cfg = second ? cfgSecond : cfgGiven;
+    const std::string configDir = second ? std::string() : configDirGiven;
+    bool mintedHere = false;
     telemetryEnabled_ = cfg.telemetryEnabled;
     telemetryInstallId_ = cfg.telemetryInstallId;
     telemetryFirstRun_ = cfg.telemetryFirstRun;
@@ -10337,6 +10338,7 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
         if (telemetryEnabled_) {
             telemetryFirstRun_ = cascade::core::utcDateToday();
             telemetryFirstVersion_ = cascade::versionString();
+            mintedHere = true;
         }
     }
     telemetryLaunches_ = cfg.telemetryLaunches + 1;
@@ -10392,7 +10394,14 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     telemetryModeAccrual_.reset(telemetrySessionStart_);
     // A START WITH USAGE REPORTING OFF (rule R, 0.99.115): nothing is counted for a report that will not be sent, and nothing of an earlier period is kept - the launch and crash counters, the exit
     // classes and the first-run date and version are not carried, and the save below writes them empty. (The same clearing function as the two edges.)
-    if (!telemetryEnabled_ || telemetryInstallId_.empty()) { usageFamilyClear(UsageEdge::StartOff); }
+    if (!telemetryEnabled_ || telemetryInstallId_.empty()) {
+        usageFamilyClear(UsageEdge::StartOff);
+        // THE BETA TESTER'S REPORT AND ITS RETRY QUEUE ARE THE USAGE FAMILY'S TOO (review 4 D5): they ride the interface's half, which the new window never clears, so the engine empties both at a start
+        // with the switch OFF (a later ON then starts from empty; the Classic window empties them itself at the edge).
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        interfaceCfg_.testerUsageCurrent.clear();
+        interfaceCfg_.testerUsagePending.clear();
+    }
     // THE FIRST STAGE of how far this session gets (core/health_events.hpp, Milestone): the settings are read and start-up is under way. Held in
     // memory until the ledger below has been decided, like every event before it.
     cascade::core::health::noteReached(cascade::core::health::Milestone::Launched);
@@ -10402,12 +10411,12 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // mid-freeze left its count in this file, written by the watchdog's own
     // thread). This is start-up: the read is not on the frame path. An opted-out
     // run also clears a file an earlier opted-in run left behind.
-    telemetryLedgerPath_ = cascade::core::StallLedger::pathIn(configDir);
+    telemetryLedgerPath_ = second ? std::string() : cascade::core::StallLedger::pathIn(configDir);
     if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
         stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
     } else {
         stallLedger_->disarm();
-        cascade::core::StallLedger::removeFile(telemetryLedgerPath_);
+        if (!second) { cascade::core::StallLedger::removeFile(telemetryLedgerPath_); }   // (a second copy deletes none of the holder's files)
     }
     // THE FAILURES THAT ARE NOT CRASHES (0.99.64), on the same terms: armed only
     // for a real identity, which an opted-out run does not have, and counted only
@@ -10417,13 +10426,13 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // restore, which ran first, and that failure belongs to this session. An
     // opted-out run drops all of it and removes a file an earlier opted-in run
     // left.
-    healthLedgerPath_ = cascade::core::health::HealthLedger::pathIn(configDir);
+    healthLedgerPath_ = second ? std::string() : cascade::core::health::HealthLedger::pathIn(configDir);
     diagnosticsFamilyEdge(cfg.diagnosticsEnabled, /*atStart=*/true);   // (the gate: the health ledger counts only while Diagnostics is on)
     if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
         healthLedger_->arm(healthLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
     } else {
         healthLedger_->disarm();
-        cascade::core::health::HealthLedger::removeFile(healthLedgerPath_);
+        if (!second) { cascade::core::health::HealthLedger::removeFile(healthLedgerPath_); }
     }
     // Last session's report goes now, on a thread, while the window is coming
     // up. Nothing waits for it and nothing reports if it fails.
@@ -10460,6 +10469,16 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // THE RADIO REPORTS' QUEUE is opened here, beside config.json, with what the radio opens above (which ran first) filed in it. A run with no
     // config directory (a bounded or hermetic one) opens none and queues nothing.
     radioReportsStart(cfg, configDir);
+    // WHAT THE WINDOW STARTS FROM is the interface's half as it stands now (served to it as fact.config.interface): its first half that carries a different switch value is a click.
+    {
+        std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        windowDiagLast_ = interfaceCfg_.diagnosticsEnabled;
+        windowUpdateLast_ = interfaceCfg_.updateCheckEnabled;
+    }
+    // THE IDENTIFIER MINTED AT THIS START IS A CONSENT WRITE, and a click is the only other one: it goes into the file as a merge (the ordinary save lays the disk's identifier over the
+    // document, so a minted one that was never merged would be lost, and with it the pending record that follows). Holder only: a second copy mints nothing.
+    // (Held until the service STARTS - consentStartWrites - because a run that is refused after the restore, a provision that fails, must leave the file exactly as it was.)
+    if (mintedHere && consentGuarded_ && consentHolder_) { consentMintPending_ = true; }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
     // and arming them for those put ctest's throwaway install ids on the live
     // endpoint. run() arms them, interactive runs only, beside the update
@@ -12096,6 +12115,8 @@ void Engine::pumpAudio() {
     pollMicOpen();
     // "Still running" beat, five-minute cadence. A no-op when reporting is
     // off, and never blocks - see HeartbeatSender::poll.
+    // TWO COPIES (brief 83): the copy that holds the settings lock looks at the file before it sends anything, and follows a switch another copy turned OFF (or ON) at once.
+    consentPoll();
     telemetryHeartbeat_.poll(clockS());
     // THE RADIO REPORTS' per-pass look (radio_close, "opened and no samples", the machine, the first session, the beat's radios, the queue's send).
     radioReportsPass();
@@ -12219,12 +12240,35 @@ bool Engine::applyInterfaceConfig(const std::string& document, std::string& erro
     cascade::core::AppConfig parsed;
     if (!cascade::core::parseInterfaceHalf(document, parsed, error)) { return false; }
     bool diagnosticsMoved = false;
+    bool updateMoved = false;
     {
         std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
+        if (consentGuarded_) {
+            // TWO COPIES (brief 83): the window's half carries both consent switches along with every other change it sends. A half whose switch is the same as the window's PREVIOUS half is
+            // the window carrying its state, not a click, and the engine's own value stands (the holder may have adopted a switch another copy turned OFF a moment ago, which this window has
+            // not yet heard of: it must not put it back). A switch that CHANGED between the window's halves is a click.
+            const bool diagClick = parsed.diagnosticsEnabled != windowDiagLast_;
+            const bool updateClick = parsed.updateCheckEnabled != windowUpdateLast_;
+            windowDiagLast_ = parsed.diagnosticsEnabled;
+            windowUpdateLast_ = parsed.updateCheckEnabled;
+            if (!diagClick) { parsed.diagnosticsEnabled = interfaceCfg_.diagnosticsEnabled; }
+            if (!updateClick) { parsed.updateCheckEnabled = interfaceCfg_.updateCheckEnabled; }
+        }
         diagnosticsMoved = interfaceCfg_.diagnosticsEnabled != parsed.diagnosticsEnabled;
+        updateMoved = interfaceCfg_.updateCheckEnabled != parsed.updateCheckEnabled;
         cascade::core::copyInterfaceHalf(parsed, interfaceCfg_);
         interfaceSpoke_ = true;
     }
+    // A CLICK WRITES THE CONSENT FIELDS INTO THE FILE AT ONCE, as a merge (brief 83): the ordinary save never writes them from memory.
+    if (consentGuarded_ && (diagnosticsMoved || updateMoved)) {
+        cascade::core::AppConfig c;
+        std::vector<std::string> keys;
+        if (diagnosticsMoved) { c.diagnosticsEnabled = parsed.diagnosticsEnabled; keys.push_back("diagnosticsEnabled"); }
+        if (updateMoved) { c.updateCheckEnabled = parsed.updateCheckEnabled; keys.push_back("updateCheckEnabled"); }
+        consentMergeAsync(c, keys, /*verifyAfter=*/!consentHolder_);
+    }
+    // A COPY WITHOUT THE LOCK KEEPS BOTH FAMILIES OFF FOR ITS WHOLE RUN: a click in it reaches the file (above) and nothing else.
+    if (consentSecondCopy()) { return true; }
     // "OFF MEANS OFF" reaches the control thread's own hang watchdog through the half: when the switch moved, its reports go to the directory the host
     // allowed (ControlThreadOptions::diagnosticsDir) or nowhere. A host that named none (a bounded run) keeps whatever it started with.
     if (diagnosticsMoved && !controlDiagDir_.empty()) {

@@ -19,6 +19,7 @@
 
 #include "core/app_commands.hpp"
 #include "core/config_halves.hpp"
+#include "core/consent_file.hpp"
 #include "core/damaged_file.hpp"
 #include "core/diag_log.hpp"
 #include "core/health_events.hpp"
@@ -206,9 +207,17 @@ EngineService::Restored EngineService::restore() {
     }
     engine_.initialise();
     engine_.startHotplugWatch(true);   // R10: the OS device-change notice (a local notification, no network)
-    writer_.bind(cascade::core::ConfigStore::writeFile);
+    // THE WRITER'S WORKER LAYS THE DISK'S CONSENT FIELDS OVER EVERY ORDINARY SAVE (brief 83, core/consent_file.hpp): no copy writes a data switch or an identifier from its memory.
+    writer_.bind(cascade::core::consent::guardedWriter(writerRole_));
 
     if (persistent()) {
+        // WHICH COPY THIS IS: the one that holds the settings lock, or a second copy (the lock is another program's, or could not be asked for). Decided before anything is loaded or written.
+        {
+            const cascade::core::ConfigLock::State lockState = lock_.state();
+            const bool second = lockState == cascade::core::ConfigLock::State::Contended || lockState == cascade::core::ConfigLock::State::Unavailable;
+            engine_.setConsentGuard(options_.configPath, !second);
+            writerRole_->store(second ? 1 : 0);
+        }
         cascade::core::AppConfig cfg;
         std::string err;
         const bool loaded = cascade::core::ConfigStore::load(options_.configPath, cfg, err);
@@ -217,7 +226,7 @@ EngineService::Restored EngineService::restore() {
             const cascade::core::AppConfig startup = cascade::core::startupState(cfg);
             engine_.setWebCertFolder(settingsDirOf(options_.configPath));   // engine lane E1: the web page's own HTTPS certificate is kept beside the settings
             engine_.applyConfig(startup);
-            diagnosticsEnabled_ = cfg.diagnosticsEnabled;
+            diagnosticsEnabled_ = cfg.diagnosticsEnabled && !engine_.consentSecondCopy();
             out.lastRunUnclean = !cfg.telemetryCleanExit;
             out.sourceKind = cfg.sourceKind;
             out.iqFilePath = cfg.iqFilePath;
@@ -354,6 +363,7 @@ bool EngineService::start(std::string& why) {
 
     const std::string reportDir = diagnosticsEnabled_ ? options_.diagnosticsDir : std::string();
 
+    if (persistent()) { engine_.consentStartWrites(); }   // an identifier minted at the restore reaches the file now that the run is really starting (brief 83)
     if (persistent()) { saveNow(); }
 
     cascade::engine::ControlThreadOptions opt;
@@ -581,6 +591,9 @@ void EngineService::requestSave(const cascade::core::AppConfig& cfg) {
 void EngineService::stop() {
     if (stopped_) { return; }
     stopped_ = true;
+
+    // The merges a click started on a worker (brief 83) land before the final saves are written.
+    engine_.consentFlush();
 
     // THE KEEPER THREAD, if there is one, first of all: from here the writer and the keeper's memory are this thread's alone.
     stopKeeper();
