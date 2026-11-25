@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Aliran tidak punya tuner: angka ini hanya label yang ditampilkan spektrum",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Satu rekaman masuk ke folder untuk hari dimulainya (baris kedua menunjukkan bentuk namanya).",
   "A take would be called": "Rekaman akan dinamai",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Kode penguji sudah diatur, tetapi Laporan penggunaan dimatikan, sehingga tidak ada sesi yang dicatat dan tidak ada yang dilaporkan. Nyalakan Laporan penggunaan untuk melaporkan sesi Anda.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Berkas teks yang baris pertamanya: foxmask 1, lalu baris seperti: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Thumbprint terdiri dari 40 digit heksadesimal.",
   "A town and a region, up to 96 characters.": "Nama kota dan wilayah, maksimal 96 karakter.",

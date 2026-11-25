@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Proud nemá tuner: toto číslo je jen popisek, který zobrazuje spektrum",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Záznam jde do složky podle dne, kdy začal (druhý řádek ukazuje tvar názvu).",
   "A take would be called": "Záznam by se jmenoval",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Kód testera je nastaven, ale Hlášení o používání je vypnuto, proto se nezaznamenává žádná relace a nic se nehlásí. Zapněte Hlášení o používání, aby se vaše relace hlásily.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Textový soubor, jehož první řádek zní: foxmask 1, dále řádky ve tvaru: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Kryptografický otisk má 40 hexadecimálních číslic.",
   "A town and a region, up to 96 characters.": "Město a region, nejvýše 96 znaků.",

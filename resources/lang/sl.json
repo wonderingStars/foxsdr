@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Tok nima tunerja: ta številka je le oznaka, ki jo prikaže spekter",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Posnetek gre v mapo za dan, ko se začne (druga vrstica kaže obliko imena).",
   "A take would be called": "Posnetek bi se imenoval",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Koda preizkuševalca je nastavljena, vendar je Poročanje o uporabi izklopljeno, zato se nobena seja ne beleži in nič se ne sporoča. Vklopite Poročanje o uporabi, da boste sporočali svoje seje.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Besedilna datoteka, katere prva vrstica je: foxmask 1, nato vrstice, kot so: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Thumbprint ima 40 šestnajstiških števk.",
   "A town and a region, up to 96 characters.": "Kraj in regija, do 96 znakov.",

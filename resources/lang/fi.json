@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Virralla ei ole viritintä: tämä luku on vain nimiö, jonka spektri näyttää",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Tallenne menee sen päivän kansioon, jona se alkaa (toinen rivi näyttää nimen muodon).",
   "A take would be called": "Tallenteen nimeksi tulisi",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Testaajan koodi on asetettu, mutta Käyttöraportointi on pois päältä, joten istuntoa ei tallenneta eikä mitään raportoida. Kytke Käyttöraportointi päälle, jos haluat raportoida istuntosi.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Tekstitiedosto, jonka ensimmäinen rivi on: foxmask 1, ja sen jälkeen rivejä kuten: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Sormenjälki on 40 heksadesimaalinumeroa.",
   "A town and a region, up to 96 characters.": "Kaupunki ja alue, enintään 96 merkkiä.",

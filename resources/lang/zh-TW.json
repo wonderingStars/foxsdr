@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "串流沒有調諧器：這個數字只是頻譜顯示的標籤",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "每次錄製存入以開始日期命名的資料夾（第二行顯示名稱格式）。",
   "A take would be called": "錄製將命名為",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "已設定測試人員代碼，但使用情況回報已關閉，因此不會記錄任何工作階段，也不會回報任何內容。請開啟使用情況回報以回報您的工作階段。",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "文字檔，第一行為：foxmask 1，之後的行形如：upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Thumbprint 為 40 位十六進位數字。",
   "A town and a region, up to 96 characters.": "城鎮和地區，最多 96 個字元。",

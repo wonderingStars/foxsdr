@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Η ροή δεν έχει δέκτη: αυτός ο αριθμός είναι μόνο η ετικέτα που δείχνει το φάσμα",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Η λήψη μπαίνει σε φάκελο για την ημέρα που ξεκινά (η δεύτερη γραμμή δείχνει τη μορφή του ονόματος).",
   "A take would be called": "Μια λήψη θα λεγόταν",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Έχει οριστεί κωδικός δοκιμαστή, αλλά η Αναφορά χρήσης είναι απενεργοποιημένη, επομένως δεν καταγράφεται καμία συνεδρία και δεν αναφέρεται τίποτα. Ενεργοποιήστε την Αναφορά χρήσης για να αναφέρονται οι συνεδρίες σας.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Ένα αρχείο κειμένου με πρώτη γραμμή: foxmask 1 και μετά γραμμές όπως: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Το αποτύπωμα αποτελείται από 40 δεκαεξαδικά ψηφία.",
   "A town and a region, up to 96 characters.": "Μια πόλη και μια περιοχή, έως 96 χαρακτήρες.",

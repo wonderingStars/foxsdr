@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Потокът няма тунер: това число е само етикетът, който показва спектърът",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Всеки запис отива в папка за деня, в който започва (вторият ред показва формата на името).",
   "A take would be called": "Записът би се казвал",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Зададен е код на тестер, но Отчитането на използването е изключено, затова не се записва сесия и нищо не се отчита. Включете Отчитането на използването, за да отчитате сесиите си.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Текстов файл, чийто първи ред е: foxmask 1, следван от редове като: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Отпечатъкът е от 40 шестнадесетични цифри.",
   "A town and a region, up to 96 characters.": "Град и област, до 96 знака.",

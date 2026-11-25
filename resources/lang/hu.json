@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "A folyamnak nincs tunere: ez a szám csak a spektrum által mutatott címke",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Minden felvétel az indulása napjának mappájába kerül (a második sor a név alakját mutatja).",
   "A take would be called": "A felvétel neve ez lenne:",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Be van állítva egy tesztelői kód, de a Használati jelentés ki van kapcsolva, ezért egyetlen munkamenet sem kerül rögzítésre, és semmi sem kerül jelentésre. Kapcsolja be a Használati jelentést a munkamenetei jelentéséhez.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Szövegfájl, amelynek első sora: foxmask 1, majd ilyen sorok: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Az ujjlenyomat 40 hexadecimális számjegyből áll.",
   "A town and a region, up to 96 characters.": "Egy város és egy régió, legfeljebb 96 karakter.",

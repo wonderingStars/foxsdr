@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Strumień nie ma tunera: ta liczba to tylko etykieta pokazywana na widmie",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Nagranie trafia do folderu z dniem rozpoczęcia (druga linia pokazuje kształt nazwy).",
   "A take would be called": "Nagranie nazywałoby się",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Kod testera jest ustawiony, ale Raportowanie użycia jest wyłączone, więc żadna sesja nie jest zapisywana i nic nie jest zgłaszane. Włącz Raportowanie użycia, aby zgłaszać swoje sesje.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Plik tekstowy, którego pierwszy wiersz to: foxmask 1, a dalej wiersze w postaci: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Odcisk certyfikatu składa się z 40 cyfr szesnastkowych.",
   "A town and a region, up to 96 characters.": "Miejscowość i region, do 96 znaków.",

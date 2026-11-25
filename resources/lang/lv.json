@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Straumei nav uztvērēja: šis skaitlis ir tikai etiķete, ko rāda spektrs",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Ieraksts tiek ievietots mapē par dienu, kad tas sākas (otrajā rindā redzama nosaukuma forma).",
   "A take would be called": "Ierakstu sauktu",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Testētāja kods ir iestatīts, bet Lietošanas ziņojumi ir izslēgti, tāpēc neviena sesija netiek ierakstīta un nekas netiek ziņots. Ieslēdziet Lietošanas ziņojumus, lai ziņotu par savām sesijām.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Teksta fails, kura pirmā rindiņa ir: foxmask 1, un tālāk rindiņas, piemēram: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Īkšķa nospiedums ir 40 heksadecimāli cipari.",
   "A town and a region, up to 96 characters.": "Pilsēta un reģions, līdz 96 rakstzīmēm.",

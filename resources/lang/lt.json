@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Srautas neturi imtuvo: šis skaičius yra tik etiketė, kurią rodo spektras",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Įrašas patenka į aplanką pagal jo pradžios dieną (antroje eilutėje rodoma pavadinimo forma).",
   "A take would be called": "Įrašas vadintųsi",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Testuotojo kodas nustatytas, bet Naudojimo ataskaitos išjungtos, todėl jokia sesija neįrašoma ir niekas nepranešama. Įjunkite Naudojimo ataskaitas, kad būtų pranešama apie jūsų sesijas.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Tekstinis failas, kurio pirma eilutė: foxmask 1, toliau eilutės, pvz.: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Kontrolinis kodas yra 40 šešioliktainių skaitmenų.",
   "A town and a region, up to 96 characters.": "Miestas ir regionas, iki 96 simbolių.",

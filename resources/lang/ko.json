@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "스트림에는 튜너가 없습니다. 이 숫자는 스펙트럼에 표시되는 라벨일 뿐입니다",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "녹화본은 시작한 날의 폴더에 저장됩니다(두 번째 줄에 이름 형식이 표시됩니다).",
   "A take would be called": "녹음 이름은 다음과 같습니다:",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "테스터 코드가 설정되어 있지만 사용 현황 보고가 꺼져 있어 세션이 기록되지 않고 아무것도 보고되지 않습니다. 세션을 보고하려면 사용 현황 보고를 켜세요.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "첫 줄이 foxmask 1이고 그다음에 upper 88e6 -30 108e6 -30 같은 줄이 이어지는 텍스트 파일",
   "A thumbprint is 40 hexadecimal digits.": "지문(썸프린트)은 16진수 40자리입니다.",
   "A town and a region, up to 96 characters.": "도시와 지역, 최대 96자입니다.",

@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "En strøm har ingen tuner: dette tallet er bare etiketten spekteret viser",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Hver opptaksøkt havner i en mappe for dagen den starter (andre linje viser navnemønsteret).",
   "A take would be called": "Et opptak ville hett",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "En testerkode er satt, men Bruksrapportering er slått av, så ingen økt registreres og ingenting rapporteres. Slå på Bruksrapportering for å rapportere øktene dine.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "En tekstfil der første linje er: foxmask 1, deretter linjer som: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Et tommelavtrykk er 40 heksadesimale sifre.",
   "A town and a region, up to 96 characters.": "En by og en region, opptil 96 tegn.",

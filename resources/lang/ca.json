@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Un flux no té sintonitzador: aquest número és només l'etiqueta que mostra l'espectre",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Cada presa va a una carpeta del dia en què comença (la segona línia mostra la forma del nom).",
   "A take would be called": "Una presa es diria",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "S'ha definit un codi de provador, però l'informe d'ús està desactivat, de manera que no es registra cap sessió ni s'informa de res. Activa l'informe d'ús per informar de les teves sessions.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Un fitxer de text amb la primera línia: foxmask 1, i després línies com: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Una empremta digital té 40 dígits hexadecimals.",
   "A town and a region, up to 96 characters.": "Una població i una regió, fins a 96 caràcters.",

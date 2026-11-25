@@ -426,6 +426,7 @@
   "A stream has no tuner: this number is only the label the spectrum shows": "Luồng không có bộ dò: con số này chỉ là nhãn mà phổ hiển thị",
   "A take goes into a folder for the day it starts (the second line shows the shape of the name).": "Mỗi lần ghi nằm trong thư mục của ngày bắt đầu (dòng thứ hai cho thấy dạng của tên).",
   "A take would be called": "Bản ghi sẽ được đặt tên là",
+  "A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. Switch Usage reporting on to report your sessions.": "Mã người kiểm thử đã được đặt, nhưng Báo cáo sử dụng đang tắt, nên không có phiên nào được ghi lại và không có gì được báo cáo. Hãy bật Báo cáo sử dụng để báo cáo các phiên của bạn.",
   "A text file whose first line is: foxmask 1, then lines like: upper 88e6 -30 108e6 -30": "Tệp văn bản có dòng đầu là: foxmask 1, tiếp theo là các dòng như: upper 88e6 -30 108e6 -30",
   "A thumbprint is 40 hexadecimal digits.": "Thumbprint gồm 40 chữ số thập lục phân.",
   "A town and a region, up to 96 characters.": "Một thị trấn và một khu vực, tối đa 96 ký tự.",
