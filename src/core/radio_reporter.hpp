@@ -3,8 +3,9 @@
 //
 // THE OWNER'S RULES THIS KEEPS (D4, D5, C2, C8, L7): every radio that does not open is its OWN report, never a count, sent whether the Diagnostics
 // switch is on or off and whether Usage reporting is on or off; everything that happens to every physical radio is a journal event, sent while
-// Usage reporting is on; one-time users are seen from inside their first session; nothing is lost to a crash (an event is on disk, flushed, BEFORE
-// the call that could hang or die, and whatever was not sent goes at the next start); nothing is dropped without being counted and said.
+// Usage reporting is on; one-time users are seen from inside their first session; nothing is lost to a crash (an event is written to the operating system BEFORE
+// the call that could hang or die, so a killed process loses nothing, and the reporter's own thread forces it to the disk right after: no engine thread ever waits for a disk
+// flush; whatever was not sent goes at the next start); nothing is dropped without being counted and said.
 //
 // THE QUEUE is a folder `radio-reports` beside config.json: one file per radio failure (`fail-*.json`, which may need a degraded resend), and an
 // append-only segment per session for the journal (`journal-<sessionId>.<n>.jsonl`, a header line then one complete message per line, rotated at
@@ -208,9 +209,14 @@ public:
     // TEST SEAM: called by every listing of the reports folder, on whichever thread lists, immediately before the file-system call (a test binds one that
     // sleeps: a slow disk as far as the caller can tell). Empty (the default) in the product.
     static void setDiskHookForTest(std::function<void()> hook);
+    // TEST SEAM: called immediately before every force-to-disk (FlushFileBuffers / fsync) of a file in the reports folder, on whichever thread does it (a test binds one that sleeps:
+    // a disk that takes seconds to confirm a flush). Empty (the default) in the product.
+    static void setFlushHookForTest(std::function<void()> hook);
     // TEST SEAM: asked before every delete ("remove") and every replace ("rename") of a file in the reports folder; true makes that call fail as a sharing violation does when another
     // thread has the file open. Empty (the default) in the product.
     static void setFileFaultHookForTest(std::function<bool(const char* op, const std::string& path)> hook);
+    // TEST SEAM: waits until the disk thread has nothing queued and nothing running (state.json written, flushes done); false after `maxMs`.
+    bool waitDiskIdleForTest(int maxMs);
     // TEST SEAM: the folder's atomic write (a uniquely named temporary file, then a replace that is retried), callable from several threads at once.
     static bool writeAtomicForTest(const std::string& path, const std::string& data);
     // Releases what the daily bound held and tries one last bounded send; returns after `maxMs` at the latest. Quit is never delayed by a stuck send.
