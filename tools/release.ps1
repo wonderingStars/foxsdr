@@ -14,6 +14,10 @@
 #                 release: the notes title line ends in an em dash and "Windows"; then the
 #                 installer is the only release file), every tool is present and the
 #                 two hosts answer, and a changed telemetry Worker has been deployed.
+#   gate-hash     (local-build release) AFTER the full gates have run in the build folder: record the SHA-256 of every file the
+#                 installer and the MSIX are made from (cascade.exe, foxsdr-engine.exe, SoapySDR.dll, softgl\*, foxsdr-slint.exe,
+#                 slint_cpp.dll) in verify\gate-binaries.json, with the commit. With -RequireGate, build, installer and msix then
+#                 refuse unless those files still have exactly those hashes: the shipped files are the gated files.
 #   build         configure and build Release twice, hash cascade.exe, run --version,
 #                 archive the symbols for exactly that binary. foxsdr-engine.exe is built
 #                 beside it and held to the same version line and its own symbols (it is not
@@ -41,6 +45,8 @@
 #                 artifacts, check every file, write the five hashes into the notes. A
 #                 Windows-only release has no Linux artifacts to download or check: the one
 #                 hash (the installer's) goes into the notes, the Linux parts say SKIPPED.
+#                 With -NoCiWait nothing is looked up or waited for: dist\sha256.txt and the notes hash come from the local installer
+#                 (Windows-only releases; GitHub's Windows job is then read afterwards with ci-check).
 #   symbols       mirror the Windows and Linux symbols to the NAS, append the index
 #                 rows, put the symbol maps on the Pi, verify every hash remotely. Windows maps go to the Pi as
 #                 <module>-<build id>.json.gz (cascade-<id>, foxsdr-slint-<id>; the id is the record's own per module).
@@ -48,6 +54,8 @@
 #   store         Microsoft Store submission through the Partner Center submission API.
 #   store-status  which version the public Store catalogue is serving, and whether the
 #                 site's StoreAppVersion is stale.
+#   ci-check      read GitHub's run for HEAD ONCE (or -CiRunId) and print every job's state. NEVER fails the run: a red job is a WARN
+#                 with the rerun command (investigate; it is not a rollback). Meant to run after the release, last in the order.
 #
 # Every step is IDEMPOTENT: it checks its own outputs (the files it wrote, by hash)
 # and says SKIP when they are all there for this commit. -Force runs it again. The
@@ -96,6 +104,12 @@ param(
     # The GitHub release is a PRE-RELEASE and not the latest: gh release create --prerelease, and the publish edit says
     # --latest=false. For a beta held back from the stable channel (0.99.105, the Slint window); a stable release omits it.
     [switch] $PreRelease,
+    # LOCAL-BUILD RELEASE (owner rule 2026-11-25). With this switch the build, installer and msix steps refuse unless every gated
+    # binary in -BuildDir still has the SHA-256 the gate-hash step recorded after the full gates (see Assert-GateBinaries).
+    [switch] $RequireGate,
+    # The ci step does not find or wait for GitHub's run: GitHub's Windows job is a non-blocking confirmation (read it afterwards
+    # with the ci-check step). Windows-only releases only; the Linux files of a five-file release come from CI.
+    [switch] $NoCiWait,
 
     [string] $ReleaseRoot = 'C:\Users\steve\foxsdr-build',
     [string] $BuildDir = '',
@@ -127,7 +141,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 . (Join-Path $PSScriptRoot 'release-common.ps1')
 
-$script:StepOrder = @('preflight', 'build', 'installer', 'msix', 'install-test', 'ci', 'symbols', 'github', 'store', 'store-status', 'package-manifests')
+$script:StepOrder = @('preflight', 'gate-hash', 'build', 'installer', 'msix', 'install-test', 'ci', 'symbols', 'github', 'store', 'store-status', 'package-manifests', 'ci-check')
 $script:Results = New-Object System.Collections.ArrayList
 $script:StoreSeamAnnounced = $false
 $script:Ctx.DryRun = [bool]$DryRun
@@ -612,6 +626,77 @@ function New-WindowsSymbolsRecord([string]$BuildId, [string]$IndexRow, [hashtabl
     return @{ buildId = $BuildId; indexRow = $IndexRow; files = $Files; modules = $table }
 }
 
+# The files the installer and the MSIX are made from, relative to -BuildDir: the three programs, the two DLLs and every file in
+# softgl\. The gates (headless + slint, gui) run on THESE files in this folder; the hashes below are what "gated" means.
+function Get-GateHashes {
+    $RC = $script:RC
+    $rels = @('Release\cascade.exe', 'Release\foxsdr-engine.exe', 'Release\SoapySDR.dll', 'src\slint\Release\foxsdr-slint.exe', 'src\slint\Release\slint_cpp.dll')
+    $softDir = Join-Path $RC.BuildDir 'Release\softgl'
+    if (Test-Path -LiteralPath $softDir) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $softDir -File | Sort-Object Name)) { $rels += ('Release\softgl\' + $f.Name) }
+    }
+    $h = @{}
+    foreach ($rel in $rels) {
+        $p = Join-Path $RC.BuildDir $rel
+        Assert-Check (Test-Path -LiteralPath $p) ('gated file ' + $rel) $p 'the build folder must hold the finished build the gates ran on'
+        $h[$rel] = Get-Sha256 $p
+    }
+    Assert-Check (@($h.Keys | Where-Object { $_ -like 'Release\softgl\*' }).Count -gt 0) 'gated files include softgl\' ($softDir) 'the software renderer is part of the payload'
+    return $h
+}
+
+function Step-GateHash {
+    $RC = $script:RC
+    $path = Join-Path $RC.Verify 'gate-binaries.json'
+    if ($script:Ctx.DryRun) {
+        Write-Plan 'gate-hash' ('record the SHA-256 of cascade.exe, foxsdr-engine.exe, SoapySDR.dll, softgl\*, foxsdr-slint.exe and slint_cpp.dll from ' + $RC.BuildDir + ' in ' + $path + ' (run it AFTER the full gates, in the folder they ran in)')
+        return 'done'
+    }
+    if (-not $Force -and (Test-StepDone 'gate-hash')) {
+        Write-Result 'SKIP' 'gate-hash' ('already recorded for this commit: ' + $path)
+        return 'skipped'
+    }
+    if (-not (Test-Path -LiteralPath $RC.Verify)) { New-Item -ItemType Directory -Path $RC.Verify -Force | Out-Null }
+    $now = Get-GateHashes
+    $old = Read-JsonFile $path
+    if ($null -ne $old -and -not $Force) {
+        $same = ($old['head'] -eq $RC.Head -and $old['files'].Count -eq $now.Count)
+        if ($same) { foreach ($k in $now.Keys) { if (-not $old['files'].ContainsKey($k) -or $old['files'][$k] -ne $now[$k]) { $same = $false } } }
+        Assert-Check $same 'gate record unchanged' $path 'a record from after the gates already exists and these files differ from it: the gates did not run on these files. Re-run the gates on them, or pass -Force to record these'
+        Write-Result 'PASS' 'gate record' 'already recorded, and the files still match it'
+    } else {
+        if ($null -ne $old) { Write-Result 'WARN' 'gate record' '-Force: the earlier record is replaced; the gates must have run on THESE files' }
+        Write-JsonFile $path @{ version = $RC.Version; head = $RC.Head; buildDir = $RC.BuildDir; recordedUtc = (Get-Date).ToUniversalTime().ToString('o'); files = $now }
+        foreach ($k in ($now.Keys | Sort-Object)) { Write-Result 'INFO' ('gated ' + $k) $now[$k] }
+        Write-Result 'PASS' 'gate record written' ($now.Count.ToString() + ' files in ' + $path)
+    }
+    Set-StepDone 'gate-hash' @{ 'verify\gate-binaries.json' = (Get-Sha256 $path) } @{ files = $now.Count }
+    return 'done'
+}
+
+# With -RequireGate: the files in the build folder are exactly the files the gate-hash step recorded after the gates, for this
+# commit, and nothing was added to softgl\. $Where names the step asking (build, installer, msix). Without -RequireGate it does nothing.
+function Assert-GateBinaries([string]$Where) {
+    if (-not $RequireGate) { return }
+    $RC = $script:RC
+    $path = Join-Path $RC.Verify 'gate-binaries.json'
+    if ($script:Ctx.DryRun) {
+        Write-Plan ('gate check (' + $Where + ')') ('-RequireGate: every gated file in ' + $RC.BuildDir + ' must still have the hash recorded in ' + $path)
+        return
+    }
+    $rec = Read-JsonFile $path
+    Assert-Check ($null -ne $rec) ('gate record for ' + $Where) $path 'run the gates in the build folder, then tools\release.ps1 -Steps gate-hash; without that record nothing says the files were gated'
+    Assert-Check ($rec['head'] -eq $RC.Head) ('gate record is for this commit (' + $Where + ')') ([string]$rec['head']) ('the record was made at another commit than HEAD ' + $RC.HeadShort + '; the gates must be run again on this commit')
+    $now = Get-GateHashes
+    $bad = @()
+    foreach ($k in ($now.Keys | Sort-Object)) {
+        if (-not $rec['files'].ContainsKey($k)) { $bad += $k; Write-Result 'FAIL' ('gate: ' + $k) 'is not in the gate record (added after the gates)'; continue }
+        if ($rec['files'][$k] -ne $now[$k]) { $bad += $k; Write-Result 'FAIL' ('gate: ' + $k) ('changed after the gates: recorded ' + $rec['files'][$k] + ', now ' + $now[$k]) }
+    }
+    foreach ($k in ($rec['files'].Keys | Sort-Object)) { if (-not $now.ContainsKey($k)) { $bad += $k; Write-Result 'FAIL' ('gate: ' + $k) 'is in the gate record but no longer in the build folder' } }
+    Assert-Check ($bad.Count -eq 0) ('gated binaries unchanged (' + $Where + ')') ($now.Count.ToString() + ' files match the gate record') ('a file changed after the gates (a rebuild, a relink, another configure of the folder): what would ship is not what was tested. Run the gates again on the new files, then gate-hash with -Force')
+}
+
 function Step-Build {
     $RC = $script:RC
     $v = $RC.Version
@@ -791,6 +876,8 @@ function Step-Build {
     $exeSha = Get-Sha256 (Join-Path $RC.MsixIn 'cascade.exe')
     $dllSha = Get-Sha256 (Join-Path $RC.MsixIn 'SoapySDR.dll')
     Assert-Check ($exeSha -eq $hashes[1]) 'payload copy matches the build' $exeSha 'the copy in msix-in differs from build\Release\cascade.exe'
+    # -RequireGate: this build (pass 2 and every check above) must have left the gated files exactly as the gates saw them.
+    Assert-GateBinaries 'build'
     $size = (Get-Item -LiteralPath $exe).Length
     Write-Result 'PASS' 'cascade.exe' ('{0:N0} bytes, sha256 {1}' -f $size, $exeSha)
     Write-Result 'PASS' 'softgl' (($softPins.Keys | ForEach-Object { $_ + ' ' + $softSha[$_] }) -join '; ')
@@ -815,6 +902,8 @@ function Step-Installer {
     $RC = $script:RC
     $v = $RC.Version
     $setup = Join-Path $RC.Dist $RC.InstallerName
+    # -RequireGate: before ISCC (and before a SKIP of an earlier installer), the files it packages are the gated files.
+    Assert-GateBinaries 'installer'
     if (-not $Force -and -not $script:Ctx.DryRun -and (Test-StepDone 'installer')) {
         if (Test-StepFlavour 'installer') {
             Write-Result 'SKIP' 'installer' ('already done: ' + (Get-FileInfoLine $setup))
@@ -901,6 +990,8 @@ function Step-Msix {
     $RC = $script:RC
     $v = $RC.Version
     $msix = Join-Path $RC.Msix $RC.MsixName
+    # -RequireGate: before makeappx, the package's payload comes from the gated files.
+    Assert-GateBinaries 'msix'
     if (-not $Force -and -not $script:Ctx.DryRun -and (Test-StepDone 'msix')) {
         Write-Result 'SKIP' 'msix' ('already done: ' + (Get-FileInfoLine $msix))
         return 'skipped'
@@ -1321,9 +1412,18 @@ function Step-Ci {
         $artifacts = @()
         Write-Result 'INFO' 'Linux artifacts' 'skipped: a Windows-only release carries the installer alone, so no Linux artifact is downloaded or checked'
     }
+    # -NoCiWait: GitHub's run is not looked up or waited for. Only a Windows-only release can do that: the Linux files of a five-file
+    # release are downloaded from the run, so there is nothing to build them from without it.
+    if ($NoCiWait) {
+        Assert-Check $windowsOnly '-NoCiWait needs a Windows-only release' ($RC.Files.Count.ToString() + ' release files') 'the Linux files of a five-file release come from the CI run; drop -NoCiWait, or make the notes title end in "<em dash> Windows"'
+    }
     if ($script:Ctx.DryRun) {
-        Write-Result 'DRY' 'find the run for HEAD' (Format-CommandLine 'gh' @('run', 'list', '--commit', $RC.Head, '-R', $cfg['repo'], '--json', 'databaseId,status,conclusion,workflowName,headSha,event,url,createdAt,attempt'))
-        Write-Result 'DRY' 'wait for jobs' ('poll every 60 s: gh run view <id> -R ' + $cfg['repo'] + ' --json jobs,status,conclusion,url ; required: ' + ($RequiredCiJobs -join ', ') + ' ; give up after ' + $CiTimeoutMinutes + ' min')
+        if ($NoCiWait) {
+            Write-Plan 'CI' 'not looked up and not waited for (-NoCiWait): GitHub''s Windows job is read afterwards with the ci-check step'
+        } else {
+            Write-Result 'DRY' 'find the run for HEAD' (Format-CommandLine 'gh' @('run', 'list', '--commit', $RC.Head, '-R', $cfg['repo'], '--json', 'databaseId,status,conclusion,workflowName,headSha,event,url,createdAt,attempt'))
+            Write-Result 'DRY' 'wait for jobs' ('poll every 60 s: gh run view <id> -R ' + $cfg['repo'] + ' --json jobs,status,conclusion,url ; required: ' + ($RequiredCiJobs -join ', ') + ' ; give up after ' + $CiTimeoutMinutes + ' min')
+        }
         foreach ($a in $artifacts) { Write-Result 'DRY' ('download ' + $a) (Format-CommandLine 'gh' @('run', 'download', '<run-id>', '-R', $cfg['repo'], '-n', $a, '-D', (Join-Path $RC.Ci $a))) }
         if ($windowsOnly) {
             Write-Plan 'write' ('dist\sha256.txt with the hash of ' + $RC.InstallerName + ' alone')
@@ -1337,6 +1437,11 @@ function Step-Ci {
     }
     Assert-StepDone 'installer' 'ci'
     $run = $null
+    $runId = ''
+    if ($NoCiWait) {
+        $run = [pscustomobject]@{ databaseId = ''; url = '' }
+        Write-Result 'INFO' 'CI' 'not looked up and not waited for (-NoCiWait): the release files are the locally built ones; read GitHub''s Windows job afterwards with the ci-check step'
+    } else {
     if ($CiRunId -ne '') {
         $run = [pscustomobject]@{ databaseId = [int64]$CiRunId; url = ('https://github.com/' + $cfg['repo'] + '/actions/runs/' + $CiRunId) }
     } else {
@@ -1365,6 +1470,7 @@ function Step-Ci {
     Write-Result 'PASS' 'CI required jobs succeeded' (($RequiredCiJobs -join ', ') + ' on run ' + $runId)
     $others = @($jobs | Where-Object { $RequiredCiJobs -notcontains $_.name })
     foreach ($o in $others) { Write-Result 'INFO' ('CI job ' + $o.name + ' (not required)') ($(if ($o.status -eq 'completed') { $o.conclusion } else { $o.status })) }
+    }
 
     # One artifact at a time, each into its own folder: a single -n download is
     # extracted into -D WITHOUT the artifact-name folder, a multi-artifact download
@@ -2184,6 +2290,47 @@ function Step-PackageManifests {
 # The run
 # ---------------------------------------------------------------------------
 
+# GitHub's run for HEAD, read ONCE, never waited for, never a failure of the release. For a local-build release GitHub's Windows
+# job is a confirmation that the tree builds on a clean runner; a red job is something to investigate, not a rollback.
+# (A hash commit made after the release moves HEAD: pass -CiRunId then, or run this before that commit.)
+function Step-CiCheck {
+    $cfg = $script:Cfg
+    if ($script:Ctx.DryRun) {
+        Write-Plan 'ci-check' ('read the run once: gh run list --commit <HEAD> -R ' + $cfg['repo'] + ' ; gh run view <id> --json jobs ; WARN on a red job, never fail')
+        return 'done'
+    }
+    try {
+        $runId = ''
+        $url = ''
+        if ($CiRunId -ne '') {
+            $runId = $CiRunId
+        } else {
+            $run = Get-CiRun
+            if ($null -eq $run) {
+                Write-Result 'WARN' 'CI run' ('no GitHub Actions run named "build" for commit ' + $script:RC.HeadShort + ' (not pushed yet, or HEAD moved after the push; pass -CiRunId)')
+                return 'done'
+            }
+            $runId = [string]$run.databaseId
+            $url = [string]$run.url
+        }
+        $info = Get-CiJobs $runId
+        Write-Result 'INFO' 'CI run' ($runId + ' ' + $url)
+        $red = @()
+        foreach ($j in @($info.jobs)) {
+            if ($j.status -ne 'completed') { Write-Result 'INFO' ('CI job ' + $j.name) ([string]$j.status + ' (not finished; read it again later)'); continue }
+            if ($j.conclusion -eq 'success') { Write-Result 'PASS' ('CI job ' + $j.name) 'success'; continue }
+            $red += $j.name
+            Write-Result 'WARN' ('CI job ' + $j.name) ([string]$j.conclusion + ': investigate; this does not roll the release back')
+        }
+        if ($red.Count -gt 0) {
+            Write-Detail ('To rerun only the failed jobs (hosted runners fail now and then with nothing wrong in the code): gh run rerun ' + $runId + ' --failed -R ' + $cfg['repo'])
+        }
+    } catch {
+        Write-Result 'WARN' 'CI could not be read' ($_.Exception.Message + ' (the release does not depend on it)')
+    }
+    return 'done'
+}
+
 function Resolve-SelectedSteps {
     $requested = @()
     foreach ($s in $Steps) { foreach ($t in ($s -split ',')) { if ($t.Trim() -ne '') { $requested += $t.Trim().ToLowerInvariant() } } }
@@ -2240,6 +2387,8 @@ try {
             'store'        { $outcome = Step-Store }
             'store-status' { $outcome = Step-StoreStatus }
             'package-manifests' { $outcome = Step-PackageManifests }
+            'gate-hash'    { $outcome = Step-GateHash }
+            'ci-check'     { $outcome = Step-CiCheck }
         }
         if ($DryRun -and $outcome -eq 'done') { $outcome = 'planned (dry run)' }
         [void]$script:Results.Add(@{ Step = $step; Outcome = $outcome })

@@ -232,7 +232,7 @@ try {
         $script:Clock = [datetime]'2026-10-14T00:00:00'; $script:Pending = $false
         $script:OldRootWait = $false; $script:Done = $false
         $script:ExeCalls = New-Object Collections.ArrayList; $script:IsccArgs = @(); $script:Unlogged = @()
-        $Force = $true; $KeepInstalled = $false
+        $Force = $true; $KeepInstalled = $false; $RequireGate = $false
         # The classic installer is what every case before the Slint window became the application exercised; the slint-* cases
         # (and the dry runs / installer plans named for it) run the default, the Slint application.
         $isSpecial = $name -in @('installer-slint', 'installer-classic', 'build-state')
