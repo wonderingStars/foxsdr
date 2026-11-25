@@ -2017,7 +2017,7 @@ int main(int argc, char** argv) {
 
     // --- A RADIO OPEN WHEN USAGE REPORTING IS SWITCHED ON (0.99.115, brief 83, review 4 D2 and U3) --------------------------------------------------------
     {
-        std::printf("  a radio already open at the ON edge is adopted by the pass: it gets a close line, and the minute it was found in is not counted (no OFF-period drops in the first stream window)\n");
+        std::printf("  a radio already open at the ON edge is adopted by the pass: it gets a close line, and the minute it was found in is not counted (no OFF-period drops in the first stream window)\n");
         resetFake();
         th::TestWindow app;
         Rig rig("adopt-on");
