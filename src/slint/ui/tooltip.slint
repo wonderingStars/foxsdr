@@ -14,8 +14,8 @@
 //   TipTimer { x: 0px; y: 0px; hovered: area.has-hover; text: root.tooltip; anchor-h: root.height; }
 // and, once per Window, as its last element:
 //   TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
-// Inside a PopupWindow (a Menu's items, the palette's rows) the layer would sit UNDER the popup: those few use
-// PopupTipTimer, the old popup-in-a-popup, which has the same properties.
+// Inside a PopupWindow (a Menu's items, a dropdown's rows) the layer would sit UNDER the popup: those few use
+// PopupTipTimer (the same properties) and end the popup's content with a PopupTipLayer { area-w: ...; area-h: ...; } that draws their tip.
 import { Theme } from "theme.slint";
 
 // The tip's face, for anything that wants to draw one in a popup of its own.
@@ -59,6 +59,7 @@ export global TipState {
     // which goes away with the owner.
     in-out property <float> now;          // the animation clock in ms, refreshed every 20 ms while `watch-until` is ahead of it or a tip is on screen
     in-out property <float> watch-until;  // an owner that waits for its 600 ms asks the clock to run until this time
+    in-out property <bool> in-popup;      // the owner lives inside a PopupWindow: x / y / anchor-y are in the popup's frame and that popup's PopupTipLayer draws the tip, not the window's TipLayer
 }
 
 // Opens the tip below its parent after 600 ms of hover and closes it when the pointer leaves. Writes TipState
@@ -69,6 +70,7 @@ export component TipTimer {
     in property <string> text;
     in property <length> anchor-h;          // the parent's height: the tip opens 6px under it
     in property <length> anchor-x: 0px;
+    in property <bool> in-popup: false;     // PopupTipTimer sets it
     // true while THIS timer's tip is the one on screen
     out property <bool> shown: TipState.shown && TipState.owner == root.my-id;
     // the owner id: the next number of the global counter, taken once when the instance is created
@@ -96,6 +98,7 @@ export component TipTimer {
             TipState.x = root.absolute-position.x + root.anchor-x;
             TipState.y = root.absolute-position.y + root.anchor-h + 6px; TipState.anchor-y = root.absolute-position.y;
             TipState.owner = root.my-id;
+            TipState.in-popup = root.in-popup;
             TipState.beat += 1;
             TipState.shown = true;
         }
@@ -164,7 +167,7 @@ export component TipLayer {
     in property <length> win-h;
     private property <int> seen-beat: -1;
     x: 0px; y: 0px; width: 0px; height: 0px;
-    if TipState.shown : TooltipFace {
+    if TipState.shown && !TipState.in-popup : TooltipFace {
         text: TipState.text;
         x: max(0px, min(TipState.x, root.win-w - self.width));
         y: TipState.y + self.height > root.win-h ? max(0px, TipState.anchor-y - 6px - self.height) : max(0px, TipState.y);   // below the item when it fits, else above it (the status bar's chips sit on the window's bottom edge)
@@ -185,27 +188,23 @@ export component TipLayer {
     }
 }
 
-// The legacy popup tip, for a TipTimer that lives inside a PopupWindow (a Menu's items, the palette's rows): the
-// TipLayer is under a popup, so such a tip is a popup of its own. Same properties as TipTimer. Being a PopupWindow it
-// is modal (it eats the click that follows it); menu rows and palette rows close their popup on a click anyway.
-export component PopupTipTimer {
-    in property <bool> hovered;
-    in property <string> text;
-    in property <length> anchor-h;          // the parent's height: the tip opens 6px under it
-    in property <length> anchor-x: 0px;
-    out property <bool> shown;
+// The tip for a TipTimer that lives inside a PopupWindow (a Menu's items, the palette's rows, a dropdown's rows). It is NOT a popup of its own and has no Timer of its own
+// (the TipLayer's one clock runs it, as for every tip owner): a PopupWindow is modal in Slint 1.18.1, so a tip opened as one took the pointer from the row under it,
+// the row lost its hover, the tip closed, the hover came back on the next pointer move and 600 ms later the tip opened again - a tip that flashed under a pointer that was
+// only resting (problem report b277ab24). It writes TipState exactly as TipTimer does; the popup draws the tip with a PopupTipLayer as the last element of its content
+// (the window's TipLayer is under the popup).
+export component PopupTipTimer inherits TipTimer { in-popup: true; }
+
+// The window's TipLayer is UNDER a popup, so a popup that holds rows with tips ends with one of these: the same face, from the same TipState, placed in the popup's own
+// frame. Zero-sized, no TouchArea (the pointer goes through to the row). A popup clips what it draws to its own rectangle, so the tip is kept inside the popup (above the
+// row when there is no room below it, pushed left when it would pass the right edge).
+export component PopupTipLayer {
+    in property <length> area-w;            // the popup's content size
+    in property <length> area-h;
     x: 0px; y: 0px; width: 0px; height: 0px;
-    tip := PopupWindow {
-        x: root.anchor-x; y: root.anchor-h + 6px;
-        close-policy: no-auto-close;
-        TooltipFace { text: root.text; }
-    }
-    Timer {
-        interval: 600ms;
-        running: root.hovered && root.text != "" && !root.shown;
-        triggered => { root.shown = true; tip.show(); }
-    }
-    changed hovered => {
-        if (!self.hovered && root.shown) { root.shown = false; tip.close(); }
+    if TipState.shown && TipState.in-popup : TooltipFace {
+        text: TipState.text;
+        x: max(0px, min(TipState.x - root.absolute-position.x, root.area-w - self.width));
+        y: TipState.y - root.absolute-position.y + self.height > root.area-h ? max(0px, TipState.anchor-y - root.absolute-position.y - 6px - self.height) : TipState.y - root.absolute-position.y;   // below the row when it fits in the popup, else above it
     }
 }

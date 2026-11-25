@@ -14,7 +14,7 @@
 // (at-x, at-y) in the coordinates of the CommandPalette element, which therefore sits at the top-left of the area it opens over.
 import { Theme, FocusProbe } from "theme.slint";
 import { Chip } from "chips.slint";
-import { PopupTipTimer } from "tooltip.slint";
+import { TipTimer } from "tooltip.slint";
 
 export struct PaletteResult { kind: string, title: string, detail: string, id: int }
 
@@ -100,7 +100,7 @@ export component CommandField inherits Rectangle {
             root.clicked();
         }
     }
-    PopupTipTimer {
+    TipTimer {   // the field is in the window, not in a popup
         x: 0px;
         y: 0px;
         hovered: area.has-hover;
