@@ -417,7 +417,7 @@ void fileSideRadioFailure(const char* driverKey, const std::string& args, const 
         for (const Trigger c : {Trigger::StartupRestore, Trigger::UserPick, Trigger::SavedRetry, Trigger::PatchRadio, Trigger::AutoReopen}) {
             if (t == triggerWord(c)) { in.trigger = c; }
         }
-        global().fileFailure(in, DiagLog::instance().ringSnapshot());
+        global().fileFailure(in, DiagLog::instance().ringSnapshotFor(DiagLog::ReportFamily::Usage));
     } catch (...) {
         ++g_lost;
     }

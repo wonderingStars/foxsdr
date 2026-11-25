@@ -96,6 +96,10 @@ bool waitForWritesForTest(unsigned ms);
 // nothing is pending or capture is still off.
 void filePendingIssueReports();
 
+// THE WORDS MET WHILE CAPTURE WAS OFF ARE FORGOTTEN, NOT KEPT (0.99.115, brief 79: nothing from a switched-off period is ever sent). Called at both edges of the Diagnostics
+// switch; `filePendingIssueReports` does the same when capture is off at the moment it is asked, so a word met before the start-up decision is filed only if the decision is ON.
+void discardPendingIssueReports();
+
 // How many reports were written since the last call - and then none, until the next is
 // written. The window's frame loop asks (AppWindow::crashUploadPoll) and sweeps the
 // reports folder when the answer is not zero, so an issue report is SENT IN THE SESSION

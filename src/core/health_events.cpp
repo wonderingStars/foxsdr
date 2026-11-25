@@ -1020,6 +1020,16 @@ void HealthLedger::disarm() {
     }
 }
 
+void HealthLedger::forget() {
+    std::lock_guard<std::mutex> lk(s_->m);
+    if (!s_->armed) { return; }
+    s_->counts.clear();
+    s_->prior.clear();
+    s_->once.clear();
+    ++s_->generation;
+    scheduleWriteLocked(s_);   // the file now says nothing
+}
+
 void HealthLedger::setAllowed(bool allowed) {
     std::lock_guard<std::mutex> lk(s_->m);
     s_->allowed = allowed;

@@ -159,8 +159,11 @@ static_assert(sizeof(kSentences) / sizeof(kSentences[0]) == health::kRecoveredCo
 // threads meeting the same word at once file one report between them.
 static_assert(health::kRecoveredCount <= 64, "one bit per word");
 std::atomic<std::uint64_t> g_filed{0};
-// The words met while capture was off: filed by filePendingIssueReports once it is on.
+// The words met BEFORE THE START-UP DECISION (capture not yet armed or refused: the settings are not read yet): filed by filePendingIssueReports if the decision is ON, dropped if it is OFF.
+// From the decision on, a word met while capture is off is NOT kept (0.99.115, brief 79: nothing from a switched-off period is ever sent, also after it is switched on again).
 std::atomic<std::uint64_t> g_pending{0};
+// True once the start-up decision has been made (filePendingIssueReports or discardPendingIssueReports ran).
+std::atomic<bool> g_decided{false};
 // The sequence field of the file name, so two words filed in one second are two files.
 std::atomic<unsigned> g_seq{0};
 // The reports written and not yet taken by takeNewlyFiled(): the window's cue to sweep.
@@ -241,7 +244,7 @@ std::string renderIssueReport(Recovered word) {
     out += "uptime-sec: " + std::to_string(static_cast<unsigned long long>(processUptimeSec())) + "\n";
     // THE LOG, which is what a report of a handled fault is for: the lines before it say
     // what the driver said.
-    const std::vector<std::string> ring = DiagLog::instance().ringSnapshot();
+    const std::vector<std::string> ring = DiagLog::instance().ringSnapshotFor(DiagLog::ReportFamily::Diagnostics);
     out += "--- log (last " + std::to_string(ring.size()) + " of " +
            std::to_string(static_cast<unsigned long long>(DiagLog::instance().linesWritten())) +
            " lines) ---\n";
@@ -363,7 +366,7 @@ static std::string fileImpl(Recovered word, bool offThread) {
     const std::uint64_t bit = 1ull << i;
     const std::string dir = activeCrashDir();
     if (dir.empty()) {
-        g_pending.fetch_or(bit, std::memory_order_acq_rel);
+        if (!g_decided.load(std::memory_order_acquire)) { g_pending.fetch_or(bit, std::memory_order_acq_rel); }
         return std::string();
     }
     if ((g_filed.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) { return std::string(); }
@@ -412,17 +415,28 @@ static std::string fileImpl(Recovered word, bool offThread) {
 unsigned takeNewlyFiled() { return g_newlyFiled.exchange(0u, std::memory_order_acq_rel); }
 
 void filePendingIssueReports() {
-    if (activeCrashDir().empty()) { return; }
+    // THIS CALL IS THE START-UP DECISION (and every later switch of Diagnostics asks it again): capture off means the words met before it are forgotten, not kept for a later ON.
+    g_decided.store(true, std::memory_order_release);
+    if (activeCrashDir().empty()) {
+        g_pending.store(0ull, std::memory_order_release);
+        return;
+    }
     const std::uint64_t bits = g_pending.exchange(0ull, std::memory_order_acq_rel);
     for (std::size_t i = 0; i < health::kRecoveredCount; ++i) {
         if ((bits & (1ull << i)) != 0) { fileIssueReport(static_cast<Recovered>(i)); }
     }
 }
 
+void discardPendingIssueReports() {
+    g_decided.store(true, std::memory_order_release);
+    g_pending.store(0ull, std::memory_order_release);
+}
+
 void resetIssueReportsForTest() {
     g_flushDeadlineMs.store(0, std::memory_order_release);
     g_filed.store(0ull, std::memory_order_release);
     g_pending.store(0ull, std::memory_order_release);
+    g_decided.store(false, std::memory_order_release);
     g_newlyFiled.store(0u, std::memory_order_release);
 }
 

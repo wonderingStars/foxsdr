@@ -805,6 +805,12 @@ void StallLedger::disarm() {
     }
 }
 
+void StallLedger::forget() {
+    if (!armed_.load(std::memory_order_acquire)) { return; }
+    count_.store(0, std::memory_order_relaxed);
+    persist();   // a count of nothing is no file at all (persist removes it)
+}
+
 std::uint64_t StallLedger::count() const {
     return armed_.load(std::memory_order_acquire) ? count_.load(std::memory_order_relaxed) : 0;
 }

@@ -406,6 +406,9 @@ public:
     // thread of its own), and count nothing from now on.
     void disarm();
 
+    // Forgets every count kept (earlier sessions' and this one's) and rewrites the file empty, STAYING armed (a Diagnostics edge: 0.99.115, brief 79).
+    void forget();
+
     // The Diagnostics switch (see the rule in the file header). Off: nothing new
     // is counted; what is already kept stays and is still sent.
     void setAllowed(bool allowed);

@@ -1581,6 +1581,25 @@ bool freezeStillPending(const fs::path& p) {
 }
 }  // namespace
 
+int withholdUnsentReports(const std::string& crashDir, std::uint64_t nowEpoch) {
+    if (crashDir.empty()) { return 0; }
+    std::error_code ec;
+    if (!fs::is_directory(fs::path(crashDir), ec)) { return 0; }
+    int withheld = 0;
+    for (const fs::directory_entry& e : fs::directory_iterator(fs::path(crashDir), ec)) {
+        if (ec) { break; }
+        if (!e.is_regular_file(ec)) { continue; }
+        if (!isReportName(e.path().filename().string())) { continue; }
+        const std::string path = e.path().string();
+        const Sidecar sc = readSidecar(uploadSidecarPath(path));
+        if (terminalStatus(sc.status)) { continue; }   // sent, refused, abandoned, local-only already: settled
+        writeSidecar(path, "local-only", sc.attempts, std::string(), nowEpoch,
+                     "written while Diagnostics was on and not sent before it was switched off; it stays on this machine and is not sent, also if Diagnostics is switched on again");
+        ++withheld;
+    }
+    return withheld;
+}
+
 SweepOutcome sweepCrashDir(const SweepParams& params,
                            const std::shared_ptr<UploadCancel>& cancel) {
     SweepOutcome out;

@@ -147,9 +147,8 @@ int main() {
         CHECK(activeCrashDir().empty());
         CHECK(issue::fileIssueReport(Recovered::Viewport).empty());
         CHECK(issueFiles(dir).empty());
-        // ...and flushing what waits writes nothing either while capture is off.
-        issue::filePendingIssueReports();
-        CHECK(issueFiles(dir).empty());
+        // (Asking for the pending words IS the start-up decision from 0.99.115 - brief 79: with capture off it forgets them, so it is NOT done here: the next block files the word that
+        // was met before any decision. tests/test_off_period_diag.cpp D1 holds the decision-off case.)
         // Nothing written, nothing to send.
         CHECK(issue::takeNewlyFiled() == 0);
     }

@@ -18,16 +18,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "core/breadcrumb.hpp"
 #include "core/config.hpp"
 #include "core/console_close.hpp"
 #include "core/console_owner.hpp"
 #include "core/crash_handler.hpp"
+#include "core/crash_upload.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/exit_record.hpp"
@@ -386,6 +389,19 @@ void armDiagnostics(ProcessKind kind, int argc, char** argv, BootResult& boot) {
     // applies the user's - a dump is process memory and is never armed on a
     // guess.
     cascade::core::setCrashCaptureEnabled(wanted, false);
+    // A START WITH DIAGNOSTICS OFF (0.99.115, brief 79: nothing from a switched-off period is ever sent, also after the switch is turned on again): a report an earlier run wrote and never sent is the
+    // person's own copy now. Its sidecar says `local-only` (the sweep never takes it); the file stays. On a worker: this runs before the window, and the folder may be on a slow disk.
+    if (mayWrite && !wanted) {
+        const std::string reports = cascade::core::diagCrashDir();
+        if (!reports.empty()) {
+            const std::uint64_t now = static_cast<std::uint64_t>(std::time(nullptr));
+            try {
+                std::thread([reports, now]() { (void)cascade::core::withholdUnsentReports(reports, now); }).detach();
+            } catch (...) {
+                (void)cascade::core::withholdUnsentReports(reports, now);
+            }
+        }
+    }
     // ...and the issue reports of faults met before this (0.99.100, core/issue_report.hpp): a watcher that did not start, a display
     // notification refused. Both programs (the host and the headless engine) come through here, so both file them.
     cascade::core::issue::filePendingIssueReports();

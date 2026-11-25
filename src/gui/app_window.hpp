@@ -2483,6 +2483,12 @@ private:
     // endpoint or a bad code cannot turn testerUsagePoll() into a per-frame
     // retry loop against it for the rest of the session.
     bool testerUsageQueueTriedThisSession_ = false;
+    // THE USAGE SWITCH AS THE TESTER REPORT SEES IT (0.99.115, brief 79: nothing from a switched-off period is ever sent). Followed once a frame from the engine's fact
+    // (testerUsageFollowSwitch): while it is not ON no session report is collected, built, written to config.json or queued, and the queue is emptied; turning it ON starts
+    // from empty. Unknown until the engine's first publish (a fact not yet answered is "not on" for building, but is no edge).
+    enum class TesterUsageSwitch { Unknown, On, Off };
+    TesterUsageSwitch testerUsageSwitch_ = TesterUsageSwitch::Unknown;
+    void testerUsageFollowSwitch();
     bool testerShowPreview_ = false;
     bool testerPreviewOpenedByEnv_ = false;
     std::string testerCodeError_;

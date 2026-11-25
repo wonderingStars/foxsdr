@@ -2148,6 +2148,14 @@ private:
                              double beganS, std::uint64_t readNow);
     void journalRecovery(const std::string& kind, const std::string& args, const char* phase, const std::string& what, const std::string& reason, long long ms);
     cascade::core::TelemetryReport telemetrySnapshot();
+    // RULE R, USAGE FAMILY (0.99.115, brief 79): nothing that happened while Usage reporting was OFF is ever sent, even after it is turned ON again; while OFF nothing is collected, counted or
+    // written for later sending; turning it ON starts from empty. ONE clearing function, run at every edge: StartOff (a start with the switch already off), Off (the switch turned off) and On
+    // (the switch turned on, after the id is minted). It empties every accumulator that a later usage report, journal or ledger would read; the callers arm what is armed afterwards.
+    enum class UsageEdge { StartOff, Off, On };
+    void usageFamilyClear(UsageEdge edge);
+    // RULE R, DIAGNOSTICS FAMILY: both edges of that switch (also at a start with it OFF: atStart), from applyInterfaceConfig. See the definition for what it empties.
+    void diagnosticsFamilyEdge(bool on, bool atStart);
+    double radioSessionBaseS_ = 0.0;              // the engine clock when this ON period began: session_end's `sessionSec` counts from here
     bool telemetryCleanExit_ = false;   // true only on the normal shutdown path
     double telemetrySessionStart_ = 0.0;                  // glfwGetTime at start
     // Time in the current mode. A plain "since" mark cannot be used here: the

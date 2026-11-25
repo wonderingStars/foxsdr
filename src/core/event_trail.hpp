@@ -125,6 +125,9 @@ std::string sanitise(std::string_view text);
 // Forgets everything (the tests share one process).
 void resetForTest() noexcept;
 
+// Forgets every entry: called at both edges of the Diagnostics switch, so a report written after it is switched on holds nothing that happened while it was off (0.99.115, brief 79).
+void clear() noexcept;
+
 }  // namespace cascade::core::trail
 
 #endif  // CASCADE_CORE_EVENT_TRAIL_HPP

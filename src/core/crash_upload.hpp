@@ -491,6 +491,11 @@ struct SweepOutcome {
 SweepOutcome sweepCrashDir(const SweepParams& params,
                            const std::shared_ptr<UploadCancel>& cancel);
 
+// WITHHOLDS every report in `crashDir` that no sweep has settled: writes the terminal `local-only` sidecar, so the sweep never sends it, now or after Diagnostics is switched on
+// again (0.99.115, brief 79: "turning a switch ON starts from empty"). The report itself stays where it is (it is the person's own copy; "Open reports folder" and "Copy
+// diagnostics" still show it). Called when Diagnostics goes OFF and at a start with Diagnostics OFF. Returns how many it withheld. Never sends, never opens a socket.
+int withholdUnsentReports(const std::string& crashDir, std::uint64_t nowEpoch);
+
 // The sidecar a swept report carries. Exposed so a test can read it back and
 // so the reader tool can explain a report that is still on a machine.
 std::string uploadSidecarPath(const std::string& reportPath);

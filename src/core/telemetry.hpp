@@ -348,6 +348,9 @@ public:
     // thread of its own so the Settings switch never waits on a disk.
     void disarm();
 
+    // Forgets the number and rewrites the file empty, STAYING armed (a Diagnostics edge: 0.99.115, brief 79). Nothing counted before it is ever reported.
+    void forget();
+
     bool armed() const { return armed_.load(std::memory_order_acquire); }
 
     // One more display stall. Called from the watchdog's thread. No-op when

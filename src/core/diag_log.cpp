@@ -250,6 +250,34 @@ std::vector<std::string> DiagLog::ringSnapshot() const {
     return out;
 }
 
+namespace {
+// THE REPORT FLOORS (0.99.115, brief 79): the number of lines written (DiagLog::linesWritten) when each family's switch last moved. A report of the family reads only the lines after it.
+// Plain atomics: copyRingRaw (the crash path's reader) reads the Diagnostics one without a lock.
+std::atomic<std::uint64_t> g_floorUsage{0};
+std::atomic<std::uint64_t> g_floorDiag{0};
+std::atomic<std::uint64_t>& floorOf(DiagLog::ReportFamily f) { return f == DiagLog::ReportFamily::Usage ? g_floorUsage : g_floorDiag; }
+}  // namespace
+
+void DiagLog::markReportFloor(ReportFamily family) {
+    std::lock_guard<std::mutex> lk(ringMutex_);
+    floorOf(family).store(written_.load(std::memory_order_relaxed), std::memory_order_release);
+}
+
+std::vector<std::string> DiagLog::ringSnapshotFor(ReportFamily family) const {
+    std::lock_guard<std::mutex> lk(ringMutex_);
+    const std::uint64_t total = written_.load(std::memory_order_relaxed);
+    const std::uint64_t floor = floorOf(family).load(std::memory_order_acquire);
+    const std::uint64_t since = total > floor ? total - floor : 0;
+    int count = (total < static_cast<std::uint64_t>(kRingLines)) ? static_cast<int>(total) : kRingLines;
+    if (since < static_cast<std::uint64_t>(count)) { count = static_cast<int>(since); }
+    int idx = next_.load(std::memory_order_relaxed) - count;
+    if (idx < 0) { idx += kRingLines; }
+    std::vector<std::string> out;
+    out.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) { out.emplace_back(ring_[(idx + i) % kRingLines]); }
+    return out;
+}
+
 std::uint64_t DiagLog::linesWritten() const { return written_.load(std::memory_order_relaxed); }
 
 std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
@@ -261,8 +289,14 @@ std::size_t DiagLog::copyRingRaw(char* out, std::size_t cap) const {
     out[0] = '\0';
     const std::uint64_t total = written_.load(std::memory_order_acquire);
     const int next = next_.load(std::memory_order_acquire);
-    const int count =
+    int count =
         (total < static_cast<std::uint64_t>(kRingLines)) ? static_cast<int>(total) : kRingLines;
+    // ONLY THE LINES SINCE THE DIAGNOSTICS SWITCH LAST MOVED (0.99.115, brief 79): this reader serves the crash handlers, whose reports are Diagnostics'.
+    {
+        const std::uint64_t floor = g_floorDiag.load(std::memory_order_acquire);
+        const std::uint64_t since = total > floor ? total - floor : 0;
+        if (since < static_cast<std::uint64_t>(count)) { count = static_cast<int>(since); }
+    }
     int idx = next - count;
     if (idx < 0) { idx += kRingLines; }
 
@@ -295,6 +329,8 @@ void DiagLog::resetForTest() {
     fileBytes_ = 0;
     written_.store(0, std::memory_order_relaxed);
     next_.store(0, std::memory_order_relaxed);
+    g_floorUsage.store(0, std::memory_order_relaxed);
+    g_floorDiag.store(0, std::memory_order_relaxed);
     std::memset(ring_, 0, sizeof(ring_));
 }
 

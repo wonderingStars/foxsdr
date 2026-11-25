@@ -114,7 +114,7 @@ bool appendDurable(const fs::path& p, const std::string& data) {
 // caller reading a position file the batch thread is replacing); only then the old delete-and-rename. False when the file could not be replaced: the caller must look at it.
 std::atomic<unsigned long long> g_tmpSeq{0};
 // `attempts`: the caller's own thread (the state save, a failure file) holds the reporter's lock across this and keeps to a few milliseconds; the batch thread's position write may wait longer.
-// `deleteFallback` (final review of fix/freezes, R4): false for a REWRITE of a file that already holds a report (the anonymous form of a queued failure, its withheld-text form). If the atomic
+// `deleteFallback` (final review of fix/freezes, R4): false for a REWRITE of a file that already holds a report (a queued failure's withheld-text form). If the atomic
 // replace fails the original is left in place and the rewrite is retried later: the delete-then-rename below could lose the report when the rename then failed too.
 bool writeAtomic(const fs::path& p, const std::string& data, int attempts = 12, bool deleteFallback = true) {
     fs::path tmp = p;
@@ -218,7 +218,6 @@ struct Item {
     std::string text;         // the JSON to post
     std::string radioKey;
     bool degraded = false;
-    bool anonymous = false;
     std::int64_t eventEpoch = 0;
     json env;                 // the message as stored (without `age`)
 };
@@ -320,6 +319,9 @@ struct Reporter::Impl {
         for (const fs::path& f : listFailFiles()) { removeOrDefer(f); }
         envSent = false;
         firstSessionSent = 0;
+        firstSessionLastAt = -1;
+        lastStreamAt.clear();
+        openKeys.clear();
         forgetFailureMemory();
     }
     void forgetFailureMemory() {
@@ -357,6 +359,7 @@ struct Reporter::Impl {
 
     // the day's bound state (persisted)
     std::string day;
+    std::string stateId;                             // the install id state.json was written for ("" for a file of version 1)
     int failAdmitted = 0;
     int journalAdmitted = 0;
     std::set<std::string> firstSeen;                 // "key|class" and "key|kind|word"
@@ -410,9 +413,12 @@ struct Reporter::Impl {
     // ------------------------------------------------------------------ state file
     fs::path statePath() const { return dir / "state.json"; }
 
-    void saveState() {
+    // The state is written FOR an install id (version 2, "id"): a state file of another id, or of an older version that wrote none (0.99.114), is not trusted at the next start - what it holds
+    // cannot be shown to belong to a period in which Usage reporting was on (0.99.115, brief 79, review minor 8).
+    bool saveState() {
         json j;
-        j["v"] = 1;
+        j["v"] = 2;
+        j["id"] = id.installId;
         j["day"] = day;
         j["failAdmitted"] = failAdmitted;
         j["journalAdmitted"] = journalAdmitted;
@@ -433,7 +439,13 @@ struct Reporter::Impl {
             h[kv.first] = std::move(e);
         }
         j["held"] = std::move(h);
-        if (!writeAtomic(statePath(), dumpJson(j))) { ++st.guardRefused; }
+        if (!writeAtomic(statePath(), dumpJson(j))) { ++st.guardRefused; return false; }
+        return true;
+    }
+    // Used where the file must NOT keep what it held (a switch-off, a clearing at an edge): a rewrite that failed is deleted instead (held back from every listing and retried at each batch if the
+    // delete fails too), so a failed write can never leave a held failure behind (review minor 5).
+    void saveStateOrDelete() {
+        if (!saveState()) { removeOrDefer(statePath()); }
     }
 
     // R10 (security review 2): a field of the saved state with the wrong type (a hand edit, a file from another version) used to throw out of start-up from json::value(). The file is
@@ -463,6 +475,7 @@ struct Reporter::Impl {
         failAdmitted = j.value("failAdmitted", 0);
         journalAdmitted = j.value("journalAdmitted", 0);
         refusedTotal = j.value("refused", 0LL);
+        stateId = j.value("id", std::string());
         if (j.contains("firstSeen") && j["firstSeen"].is_array()) {
             for (const json& x : j["firstSeen"]) { if (x.is_string()) { firstSeen.insert(x.get<std::string>()); } }
         }
@@ -840,7 +853,6 @@ struct Reporter::Impl {
             it.kind = "radio_fail";
             it.env = w["msg"];
             it.degraded = w.value("deg", 0) != 0;
-            it.anonymous = !it.env.contains("installId");
             it.radioKey = it.env.value("radioKey", std::string());
             it.eventEpoch = w.value("q", t);
             items.push_back(std::move(it));
@@ -936,7 +948,7 @@ struct Reporter::Impl {
                 //    sent (it can never be sent), unless the opt-out has just deleted its segment, when it is left alone.
                 //  - A radio_fail is posted only while Usage reporting is ON (owner's decision of 2026-11-24): with no current id it is consumed without being sent (its file is deleted, or held
                 //    back and deleted later), and that holds again after a degraded resend or any other pass round this loop. When the id it carries is not the current one (an id change
-                //    with Usage reporting still on) it is posted as before, in the anonymous form (contract 1.2): an item this batch read before the change is not posted with the old id.
+                //    with Usage reporting still on) it is consumed unsent too: there is no anonymous form from 0.99.115, and an item this batch read before the change is not posted with the old id.
                 std::string curId;
                 unsigned long long gen = 0;
                 {
@@ -1235,6 +1247,12 @@ void Reporter::configure(const Options& options) {
     s.loadState();
     const std::string dayLoaded = s.day;
     bool heldLoaded = !s.held.empty();
+    // A STATE FILE THAT WAS NOT WRITTEN FOR THIS INSTALL ID IS NOT TRUSTED (review 73, minor 8; brief 79): 0.99.114 wrote none, and after OFF then ON the id is a new one. What it held back
+    // cannot be shown to belong to a period in which Usage reporting was on, so it is dropped here and the file is rewritten without it.
+    if (hadState && s.stateId != s.id.installId && (heldLoaded || !s.dropped.empty() || !s.streamToday.empty() || !s.firstSeen.empty() || s.failAdmitted != 0 || s.journalAdmitted != 0)) {
+        s.forgetFailureMemory();
+        heldLoaded = true;
+    }
     // A START WITH USAGE REPORTING OFF forgets what the state file held back (a failure the daily bound kept, the counts said on the next event): it was written while Usage reporting was on
     // (review 73, should-fix 1). The file is rewritten below without it.
     if (s.id.installId.empty() && (heldLoaded || !s.dropped.empty() || !s.streamToday.empty() || !s.firstSeen.empty() || s.failAdmitted != 0 || s.journalAdmitted != 0)) {
@@ -1250,7 +1268,7 @@ void Reporter::configure(const Options& options) {
     s.sweepBounds();
     // the state file is written when there is something new to say (a new day, a released message, no file yet): the start-up is on the frame path's side
     // of the first window, and a forced write to disk for nothing is a stall a loaded machine feels
-    if (!hadState || dayLoaded != s.day || heldLoaded) { s.saveState(); }
+    if (!hadState || dayLoaded != s.day || heldLoaded) { s.saveStateOrDelete(); }
     // WHAT HAPPENED BEFORE THE QUEUE COULD BE OPENED (the start-up restore runs before Usage reporting is read): filed now, with the time it happened
     {
         std::vector<Impl::PreFail> pf;
@@ -1280,10 +1298,20 @@ void Reporter::setIdentity(const Identity& idn) {
         // none of them. The generation is raised AFTER the deletes have been requested and the rewrites made (review of fix/freezes part 3, F7): a batch that starts between the two
         // reads the old generation, lists nothing it can send (the id it reads under `mu` is already empty), and one that began earlier is stopped by the same id rule.
         s.purgeForOptOut();
-        s.saveState();   // what the daily bound held is gone from state.json too
+        s.saveStateOrDelete();   // what the daily bound held is gone from state.json too (a rewrite that fails deletes the file)
         s.optOutGen.fetch_add(1, std::memory_order_acq_rel);
     }
-    if (!hadId && !idn.installId.empty()) { s.envSent = false; }
+    if (!hadId && !idn.installId.empty()) {
+        // THE ON EDGE: the same clearing runs again before anything is collected (belt and braces: a delete the OFF edge could not do is retried and done now), and the session of the ON period
+        // begins at the ON: its own id, its own start, its numbering from the start (a report must not describe how long Usage reporting was off).
+        s.retryDeferred();
+        s.purgeForOptOut();
+        s.saveStateOrDelete();
+        s.sessionId = randomHex(16);
+        s.sessionStart = s.now();
+        s.seq = 0;
+        s.envSent = false;
+    }
 }
 
 void Reporter::setLiveSend(bool on) {

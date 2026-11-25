@@ -1695,6 +1695,20 @@ void testNotePanel() {
     testing::Session s(api(), eng.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
     CHECK(s.ok());
     CHECK(Access::panels(eng).empty());
+    // THE PANELS ARE A USAGE COUNT, so they are counted only while Usage reporting is ON (0.99.115, brief 79: nothing is counted while it is OFF - a hermetic engine starts OFF).
+    CHECK_EQ(pumped(eng, s, appCmd(FOXAPP_OP_TELEMETRY_CONSENT, 1)).status(), FOXAPI_OK);
+    CHECK(Access::panels(eng).empty());
+    {
+        // ...and before that, while it is off, a panel is not listed at all
+        cascade::engine::Engine off;
+        off.configureApi(kHooks);
+        off.initialise();
+        off.controlPass();
+        testing::Session so(api(), off.apiHandle(), FOXAPI_SESSION_LOCAL, FOXAPI_GRANT_VIEW);
+        CHECK(so.ok());
+        CHECK_EQ(pumped(off, so, notePanel("radar")).status(), FOXAPI_OK);
+        CHECK(Access::panels(off).empty());
+    }
 
     // radar twice, cat once: listed once each, in the order first said.
     const testing::Outcome r1 = pumped(eng, s, notePanel("radar"));

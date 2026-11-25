@@ -519,10 +519,131 @@ void testFailureOfAnotherInstallIdIsNeverSent() {
     rep.shutdown();
 }
 
+// F1 review 79, M5: a failed rewrite of state.json at the switch-off must not leave the held failure in it
+void testFailedStateRewriteAtSwitchOffDeletesTheFile() {
+    std::printf("F1 the rewrite of state.json at the switch-off fails: the file is deleted (retried at the next batch) and holds nothing for a later start\n");
+    Bench b("f1");
+    rr::Reporter rep;
+    rr::Reporter::Options o = b.options(true, false, 3);
+    o.failuresPerDay = 1;
+    rep.configure(o);
+    rep.fileFailure(failureOf("00000007"), kRing);
+    rr::FailureInput held = failureOf("00000007", rr::Trigger::UserPick);
+    held.reason = "HELDSECRET text of the held failure";
+    rep.fileFailure(held, kRing);
+    CHECK(rep.heldCount() == 1);
+    CHECK(b.everything().find("HELDSECRET") != std::string::npos);
+    std::atomic<bool> fault{true};
+    rr::Reporter::setFileFaultHookForTest([&](const char* op, const std::string& path) {
+        (void)op;
+        return fault.load() && path.find("state.json") != std::string::npos;   // neither the replace nor the delete of state.json works
+    });
+    identityOff(rep);                                          // the rewrite fails; the delete cannot be done now either
+    CHECK(rep.heldCount() == 0);
+    fault = false;                                             // the sharing violation ends
+    rep.setLiveSend(true);
+    (void)rep.runBatchNow();                                   // the next batch retries the delete
+    CHECK(b.everything().find("HELDSECRET") == std::string::npos);
+    rr::Reporter::setFileFaultHookForTest(nullptr);
+    rep.shutdown();
+}
+
+// F2 review 79, M8: a held failure written by an older version (no install id in state.json) is not released at the first start of this one
+void testStateOfAnOlderVersionIsNotReleased() {
+    std::printf("F2 a held failure in a state.json of an older version (no id) is dropped at the first start with Usage ON; one this version wrote, with the same id, is kept\n");
+    for (int variant = 0; variant < 2; ++variant) {
+        Bench b(variant == 0 ? "f2a" : "f2b");
+        {
+            rr::Reporter rep;
+            rr::Reporter::Options o = b.options(true, false, 3);
+            o.failuresPerDay = 1;
+            rep.configure(o);
+            rep.fileFailure(failureOf("00000007"), kRing);
+            rr::FailureInput held = failureOf("00000007", rr::Trigger::UserPick);
+            held.reason = "HELDSECRET text of the held failure";
+            rep.fileFailure(held, kRing);
+            CHECK(rep.heldCount() == 1);
+            rep.shutdown();
+        }
+        // the file this version wrote names the id it was written for
+        const fs::path state = b.root / "radio-reports" / "state.json";
+        json j = readFailFile(state);
+        CHECK(j.is_object() && j.contains("id") && j["id"] == kInstallId);
+        if (variant == 0) {   // what 0.99.114 wrote: no id, version 1
+            j.erase("id");
+            j["v"] = 1;
+            std::ofstream f(state, std::ios::binary | std::ios::trunc);
+            f << j.dump();
+        }
+        // wipe the failure files so only state.json can carry the held one
+        for (const fs::path& f : b.failFiles()) { std::error_code ec; fs::remove(f, ec); }
+        rr::Reporter again;
+        rr::Reporter::Options o2 = b.options(true, false, 3);
+        o2.failuresPerDay = 1;
+        again.configure(o2);                                   // the first start of the new version, Usage reporting ON, the same id
+        again.flushAtQuit(300);
+        again.shutdown();
+        const bool released = b.everything().find("HELDSECRET") != std::string::npos;
+        if (variant == 0) {
+            CHECK(!released);                                  // cannot be shown to belong to an ON period: dropped
+        } else {
+            CHECK(released);                                   // written by this version for this id: the 0.99.114 behaviour stands
+        }
+    }
+}
+
+// F3 review 79: turning ON starts from empty - the clearing also runs at the ON edge, and the session starts then
+void testOnEdgeStartsFromEmpty() {
+    std::printf("F3 the ON edge clears again and starts a fresh session (session start, id and numbering)\n");
+    Bench b("f3");
+    rr::Reporter rep;
+    rep.configure(b.options(true, false, 3));
+    const std::string first = rep.sessionId();
+    rep.fileFailure(failureOf("00000001"), kRing);
+    CHECK(b.failFiles().size() == 1);
+    // a file the OFF edge could not delete (a sharing violation then) is gone at the ON edge
+    const fs::path keep = b.failFiles().front();
+    std::string content;
+    { std::ifstream f(keep, std::ios::binary); content.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()); }
+    std::atomic<bool> fault{true};
+    rr::Reporter::setFileFaultHookForTest([&](const char* op, const std::string& path) { return fault.load() && std::string(op) == "remove" && path.find("fail-") != std::string::npos; });
+    identityOff(rep);                                          // the delete fails: the file stays, held back from every listing
+    CHECK(b.failFiles().size() == 1);
+    fault = false;
+    rr::Reporter::setFileFaultHookForTest(nullptr);
+    b.clock += 600;                                            // ten minutes OFF
+    identityOn(rep, kOtherId);
+    CHECK(b.failFiles().empty());                              // deleted at the ON edge, not left for a batch to consume
+    CHECK(rep.sessionId() != first);
+    rr::Event ev;
+    ev.kind = "radio_open";
+    ev.radio = rr::identify("rtlsdr", "serial=00000001", "RTL-SDR (serial 00000001)");
+    ev.word = "start";
+    ev.set("phase", "start").set("trigger", "startup-restore");
+    rep.event(ev);
+    std::int64_t ss = -1;
+    std::error_code ec;
+    for (fs::directory_iterator it(b.root / "radio-reports", ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string n = it->path().filename().string();
+        if (n.rfind("journal-", 0) != 0 || it->path().extension() != ".jsonl") { continue; }
+        std::ifstream f(it->path(), std::ios::binary);
+        std::string line;
+        if (std::getline(f, line)) {
+            const json h = json::parse(line, nullptr, false);
+            if (h.is_object() && h.contains("ss")) { ss = h["ss"].get<std::int64_t>(); }
+        }
+    }
+    CHECK(ss == kT0 + 600);                                    // the session of the ON period began at the ON, not ten minutes earlier
+    rep.shutdown();
+}
+
 }  // namespace
 
 int main() {
     testOffSendsNothing();
+    testFailedStateRewriteAtSwitchOffDeletesTheFile();
+    testStateOfAnOlderVersionIsNotReleased();
+    testOnEdgeStartsFromEmpty();
     testOnIsUnchanged();
     testQueuedFailuresGoWhenSwitchedOff();
     testPreConfigureBufferWithUsageOff();

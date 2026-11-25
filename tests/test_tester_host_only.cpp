@@ -390,7 +390,7 @@ void writeSettings(const fs::path& path, int webPort, int catPort) {
     c["testerToken"] = kToken;
     c["testerUsageCurrent"] = reportJson(kToken, "left-by-the-last-session");
     c["testerUsagePending"] = json::array({reportJson(kToken, "already-queued")});
-    c["telemetryEnabled"] = false;
+    c["telemetryEnabled"] = true;   // the tester report is Usage reporting's (0.99.115, brief 79): it is built, written and sent only while that is ON (a bounded run sends nothing of its own)
     c["updateCheckEnabled"] = false;
     c["sourceKind"] = "siggen";
     c["volume"] = 0.0;

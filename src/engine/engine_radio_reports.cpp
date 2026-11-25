@@ -144,7 +144,7 @@ void Engine::reportFailedOpen(const std::string& kind, const std::string& args, 
         std::lock_guard<std::mutex> lk(interfaceHalfMutex_);
         g.setDiagOn(interfaceCfg_.diagnosticsEnabled);
     }
-    g.fileFailure(in, cascade::core::DiagLog::instance().ringSnapshot());
+    g.fileFailure(in, cascade::core::DiagLog::instance().ringSnapshotFor(cascade::core::DiagLog::ReportFamily::Usage));
     // a failure also puts the first session in front of the owner at once (contract 7), when this is the install's first
     if (telemetryLaunches_ == 1) { g.firstSession(telemetrySnapshot().toJson(), "on-failure"); }
 }
@@ -167,6 +167,8 @@ void Engine::journalOpenStart(const std::string& kind, const std::string& args, 
 
 void Engine::journalOpenOk(const std::string& kind, const std::string& args, rr::Trigger trigger, double requestRateHz, long long openMs) {
     if (!physicalKind(kind)) { return; }
+    // WHILE USAGE REPORTING IS OFF nothing is collected for a later report (0.99.115, brief 79): no slot is opened, no flag raised. (acceptsFailures: on, or not yet decided.)
+    if (!rr::global().acceptsFailures()) { return; }
     const std::size_t slot = scopedSlot();
     RadioJournalSlot& j = radioJournal_[slot];
     rr::RadioIdentity rid = kind == "soundcard" ? rr::soundCardIdentity() : rr::identify(kind, args, kind == "soapy" ? std::string() : nativeLabelFor(kind, args));
@@ -275,6 +277,7 @@ void Engine::journalRecovery(const std::string& kind, const std::string& args, c
 // since it (readNow - readAtOpen), so the pre-open generator's samples are not credited to it either.
 void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t samplesDropped, std::uint64_t samplesAbsent, std::size_t ringHighWaterSamples,
                                  double beganS, std::uint64_t readNow) {
+    if (!rr::global().acceptsFailures()) { return; }   // nothing is summed while Usage reporting is off (0.99.115, brief 79)
     RadioJournalSlot& j = radioJournal_[scopedSlot()];
     // A FAULTED RADIO IS OVER (field data 2026-11-19: 38 windows after a close): its slot stays open until the pass sees it leave, but no window is said for it
     if (!j.open) { return; }
@@ -351,6 +354,8 @@ void Engine::journalStreamMinute(std::uint64_t samplesRead, std::uint64_t sample
 // ---------------------------------------------------------------------------
 
 void Engine::radioReportsScanLanded(bool native, bool soapy) {
+    // WHILE USAGE REPORTING IS OFF a scan is neither counted nor listed for the session_end line, and no radio_found is built (0.99.115, brief 79; review 73 of lane 62, minor 6).
+    if (!rr::global().acceptsFailures()) { return; }
     ++radioScans_;
     std::vector<std::string> models;
     auto note = [&models](const std::string& m) {
@@ -430,6 +435,13 @@ void Engine::radioReportsScanLanded(bool native, bool soapy) {
 void Engine::radioReportsPass() {
     rr::Reporter& g = rr::global();
     const double now = clockS();
+    // WHILE USAGE REPORTING IS OFF nothing about the radios is collected: the slots are not followed, the beat names none (0.99.115, brief 79).
+    if (!g.acceptsFailures()) {
+        telemetryHeartbeat_.setRadios({});
+        g.setOpenRadios({});
+        g.poll();
+        return;
+    }
 
     // THE MACHINE, once a session: read on a worker a few seconds in (the window has said which it is by then), sent as one event.
     if (!radioEnvSent_ && !radioEnvPending_ && now >= 3.0 && g.active() && !g.identity().installId.empty()) {
@@ -551,7 +563,7 @@ void Engine::radioReportsQuit() {
         ev.set("opened", false).set("scans", static_cast<long long>(std::min<std::uint64_t>(radioScans_, 1000000ull)));
         ev.set("openFailures", static_cast<long long>(std::min<std::uint64_t>(radioOpenFailures_, 1000000ull)));
         ev.set("listed", radioScanModels_);
-        ev.set("sessionSec", static_cast<long long>(std::clamp<double>(now, 0.0, 2592000.0)));
+        ev.set("sessionSec", static_cast<long long>(std::clamp<double>(now - radioSessionBaseS_, 0.0, 2592000.0)));
         g.event(ev);
     }
     g.flushAtQuit(1500);

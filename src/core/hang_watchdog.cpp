@@ -1832,7 +1832,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
         out.flush();
     }
 
-    const std::vector<std::string> ring = DiagLog::instance().ringSnapshot();
+    const std::vector<std::string> ring = DiagLog::instance().ringSnapshotFor(DiagLog::ReportFamily::Diagnostics);
     out << "--- log (last " << ring.size() << " of " << DiagLog::instance().linesWritten()
         << " lines) ---\n";
     for (const std::string& line : ring) { out << line << "\n"; }
@@ -2008,7 +2008,7 @@ void HangWatchdog::captureAllThreads(const std::string& path, double stalledMs, 
         out.flush();
     }
 
-    const std::vector<std::string> ring = DiagLog::instance().ringSnapshot();
+    const std::vector<std::string> ring = DiagLog::instance().ringSnapshotFor(DiagLog::ReportFamily::Diagnostics);
     out << "--- log (last " << ring.size() << " of " << DiagLog::instance().linesWritten()
         << " lines) ---\n";
     for (const std::string& line : ring) { out << line << "\n"; }

@@ -78,6 +78,16 @@ not the current one, is consumed unsent: after Usage reporting is switched OFF a
 Usage reporting off also forgets what the daily bound (2.3, point 3) was holding back, the per-radio attempt numbers and the dropped counts. Usage reporting ON behaves as before:
 the failure report carries the install id.**
 
+**Rule R (0.99.115, third round of "off sends nothing"): nothing that happened while a data switch was OFF is ever sent, even after that switch is turned ON again. While it is OFF nothing
+of its family is collected, counted or written for later sending; turning it ON starts from empty.** For Usage reporting that is one clearing function in the engine (`Engine::usageFamilyClear`)
+and the reporter's own (`purgeForOptOut`, run at BOTH edges: it also gives the ON period its own session start, session id and numbering): the session's modes, panels and length, the launch,
+crash and exit counters and the first-run date, the stall and health ledgers (disarmed and their files removed at the OFF edge, armed fresh at the ON edge), the scans, failed-open count and
+journal slots of the radio reports, the session flags and the log lines a failure report carries (only the lines since the ON), and the Classic window's beta-tester session report and its queue.
+`state.json` is written for an install id (`"id"`, version 2); a file of another id, or of 0.99.114 (no id), is not trusted at the next start: what it held back is dropped. For Diagnostics: the
+words an issue report waits for are forgotten (not kept for a later ON), the reports on disk that no sweep has settled get a `local-only` sidecar at the OFF edge and at a start with it OFF
+(the file stays, it is the person's own copy), the log ring and the event trail a fault report carries start at the ON, and the new window's tick moves the health ledger's gate as the Classic
+window's always did.
+
 Decision 12 as it stood in 0.99.109 to 0.99.114: the Usage reporting switch turns the journal off, but radio failure reports are still sent, always. Such an install has
 no install id (the id exists only while Usage reporting is on and is deleted when it is turned off). So a `radio_fail` is valid
 WITHOUT `installId`, and then, and only then:

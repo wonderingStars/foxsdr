@@ -3848,6 +3848,10 @@ void otherOps(AppWindow& a) {
         // listed once (a repeat is an answered no-op), an empty name is
         // BAD_ARGUMENT and lists nothing. (The cap of 16 and the REMOTE
         // refusal are test_engine_api_03's group U.)
+        // (Panels are a usage count: listed only while Usage reporting is ON - 0.99.115, brief 79. The consent block above left it OFF; a panel noted now is not listed.)
+        CHECK(ok(A::apply(a, text(FOXAPP_OP_NOTE_PANEL, "stage1-panel-before-on"))));
+        CHECK(A::telemetryPanels(a).empty());
+        CHECK(ok(A::apply(a, ints(FOXAPP_OP_TELEMETRY_CONSENT, 1))));
         const std::vector<std::string> before = A::telemetryPanels(a);
         CHECK(before.size() < 16u);
         CHECK(ok(A::apply(a, text(FOXAPP_OP_NOTE_PANEL, "stage1-panel-note"))));

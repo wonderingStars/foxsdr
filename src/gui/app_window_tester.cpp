@@ -133,6 +133,14 @@ void AppWindow::drawTesterUsageSection() {
            "tested. Pasting a code IS the opt-in; with none, nothing here is "
            "collected or sent."));
     ImGui::Spacing();
+    // THE TRUTH WHEN USAGE REPORTING IS OFF (0.99.115, brief 79; review 73 of lane 62, S3): the code is set, the chip says ON, and nothing is recorded or sent - say so, here, in one line.
+    if (active && testerUsageSwitch_ == TesterUsageSwitch::Off) {
+        ImGui::TextWrapped(
+            "%s",
+            tr("A tester code is set, but Usage reporting is switched off, so no session is recorded and nothing is reported. "
+               "Switch Usage reporting on to report your sessions."));
+        ImGui::Spacing();
+    }
 
     if (!testerAppToken_.empty()) {
         // A CONFIRMED LINK (core/tester_link.hpp) - the paste box below is
@@ -454,6 +462,9 @@ void AppWindow::testerUsageJournal(cascade::core::AppConfig& cfg, bool bookkeepi
     cfg.testerUsageCurrent.clear();
     // The report so far moves by itself (every second of the session is in it): built only when someone is about to keep it (shell retirement R5).
     if (!bookkeeping) { return; }
+    // USAGE REPORTING GOVERNS THIS REPORT (0.99.115, brief 79; review 73 of lane 62, B2): while it is OFF - or not yet answered - no session report is built and none is written to config.json, and
+    // the queue is empty (testerUsageFollowSwitch emptied it), so nothing from an OFF period can be sent after a later ON.
+    if (testerUsageSwitch_ != TesterUsageSwitch::On) { return; }
     if (activeTesterToken().empty()) {
         // Opted out: nothing here is collected, so there is nothing to write
         // beyond the token fields above (which record the removal itself).
@@ -495,7 +506,7 @@ void AppWindow::setTesterToken(const std::string& token, bool startFreshSession)
         testerSessionStartWall_ = std::time(nullptr);
         testerUsageAccrual_.reset(testerSessionStart_);
     }
-    testerUsage_->setArmed(!testerToken_.empty());
+    testerUsage_->setArmed(!testerToken_.empty() && testerUsageSwitch_ != TesterUsageSwitch::Off);   // (a code collects only while Usage reporting is not off: rule R, 0.99.115)
 }
 
 void AppWindow::setTesterAppToken(const std::string& token, const std::string& name) {
@@ -512,7 +523,7 @@ void AppWindow::setTesterAppToken(const std::string& token, const std::string& n
     testerSessionStart_ = wallTimeS();
     testerSessionStartWall_ = std::time(nullptr);
     testerUsageAccrual_.reset(testerSessionStart_);
-    testerUsage_->setArmed(true);
+    testerUsage_->setArmed(testerUsageSwitch_ != TesterUsageSwitch::Off);
 }
 
 void AppWindow::clearTesterAppToken() {
@@ -546,7 +557,7 @@ void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
     testerAppTokenName_ = cfg.testerAppTokenName;
     testerMigrationTried_ = false;
     testerUsage_->reset();
-    testerUsage_->setArmed(!activeTesterToken().empty());
+    testerUsage_->setArmed(!activeTesterToken().empty() && testerUsageSwitch_ != TesterUsageSwitch::Off);
     testerSessionStart_ = wallTimeS();
     testerSessionStartWall_ = std::time(nullptr);
     testerUsageAccrual_.reset(testerSessionStart_);
@@ -569,6 +580,33 @@ void AppWindow::testerUsageStartup(const cascade::core::AppConfig& cfg) {
     // never blocking start-up - the same reason telemetry's own send happens
     // off the constructor. The migration exchange (if a portal token needs
     // one) is likewise started from testerLinkPoll(), not here.
+}
+
+// THE TESTER REPORT FOLLOWS THE USAGE SWITCH (0.99.115, brief 79; rule R). Read once a frame from the engine's fact, UNCACHED (readFactText: the cached uiFact is refreshed when the engine's lists
+// move, which a switch is not). An unanswered fact is no edge. At the OFF edge - also the first answer, for a launch that starts OFF - what the tester collected and queued is dropped and the
+// collector disarmed; at the ON edge the collector starts from empty and the session of the ON period begins now (the report says when it began and for how long).
+void AppWindow::testerUsageFollowSwitch() {
+    std::string v;
+    (void)readFactText("fact.telemetry.enabled", v);
+    const TesterUsageSwitch now = v == "1" ? TesterUsageSwitch::On : (v == "0" ? TesterUsageSwitch::Off : TesterUsageSwitch::Unknown);
+    if (now == TesterUsageSwitch::Unknown || now == testerUsageSwitch_) { return; }
+    const TesterUsageSwitch before = testerUsageSwitch_;
+    testerUsageSwitch_ = now;
+    if (now == TesterUsageSwitch::Off) {
+        testerUsageQueue_.setItems(std::vector<std::string>());
+        testerUsage_->reset();
+        testerUsage_->setArmed(false);
+        return;
+    }
+    // ON. The first answer of a launch that starts ON is no edge: the session began at launch and the queue is the previous session's, as in 0.99.114.
+    if (before != TesterUsageSwitch::Off) { return; }
+    testerUsageQueue_.setItems(std::vector<std::string>());
+    testerUsage_->reset();
+    testerUsage_->setArmed(!activeTesterToken().empty());
+    testerSessionStart_ = wallTimeS();
+    testerSessionStartWall_ = std::time(nullptr);
+    testerUsageAccrual_.reset(testerSessionStart_);
+    testerUsageQueueTriedThisSession_ = false;
 }
 
 void AppWindow::testerUsagePoll() {
@@ -602,9 +640,10 @@ void AppWindow::testerUsagePoll() {
         // lets the loop below try the NEXT queued report immediately rather
         // than waiting for the next launch.
     }
-    // THIS POSTS ON ITS OWN, once a frame, so Usage reporting governs it (review 73 of lane 62): switched OFF, the report waits in the queue (and in the config) and nothing is sent. The fact
-    // answers "" before the engine's first publish, which reads as "not on".
-    const bool usageOn = uiFact("fact.telemetry.enabled") == "1";
+    // THIS POSTS ON ITS OWN, once a frame, so Usage reporting governs it (review 73 of lane 62): switched OFF, nothing is collected, queued or sent (from 0.99.115 the queue is emptied at the OFF
+    // edge, brief 79). The fact answers "" before the engine's first publish, which reads as "not on".
+    testerUsageFollowSwitch();
+    const bool usageOn = testerUsageSwitch_ == TesterUsageSwitch::On;
     const std::string token = activeTesterToken();
     if (!cascade::core::testerUsageMayPost(usageOn, testerUsageSender_.busy(), testerUsageQueueTriedThisSession_, token, testerTokenInvalid_, testerUsageQueue_.empty())) { return; }
     testerUsageSender_.send(cascade::core::testerUsageEndpoint(), testerUsageQueue_.front());
@@ -644,7 +683,7 @@ void AppWindow::testerLinkPoll() {
             testerAppTokenName_ = result->name;
             testerToken_.clear();
             testerTokenInvalid_ = false;
-            testerUsage_->setArmed(true);
+            testerUsage_->setArmed(testerUsageSwitch_ != TesterUsageSwitch::Off);
         } else if (result->outcome == BetaMigrationOutcome::Invalid) {
             // 404/401: the portal token is dead. Clear it and stop - retrying
             // forever would show "linking..." to someone no longer a tester
@@ -652,7 +691,7 @@ void AppWindow::testerLinkPoll() {
             testerToken_.clear();
             testerTokenInvalid_ = false;
             testerUsageQueue_.dropOthers(activeTesterToken());
-            testerUsage_->setArmed(!activeTesterToken().empty());
+            testerUsage_->setArmed(!activeTesterToken().empty() && testerUsageSwitch_ != TesterUsageSwitch::Off);
         }
         // NetworkError: testerToken_ is untouched - testerMigrationTried_
         // stays true for the rest of THIS session (a black-holed endpoint
@@ -661,7 +700,8 @@ void AppWindow::testerLinkPoll() {
     }
     // The exchange of an old portal token is a request of the program's own at launch: Usage reporting governs it like the sender above (review 73 of lane 62). It is tried again once
     // the switch is on (the flag is set only when it is sent).
-    if (cascade::core::testerMaySendOnItsOwn(uiFact("fact.telemetry.enabled") == "1") && !testerMigrationTried_ && !testerMigrationSender_.busy() && testerAppToken_.empty() &&
+    testerUsageFollowSwitch();
+    if (cascade::core::testerMaySendOnItsOwn(testerUsageSwitch_ == TesterUsageSwitch::On) && !testerMigrationTried_ && !testerMigrationSender_.busy() && testerAppToken_.empty() &&
         !testerToken_.empty() && cascade::core::validTesterToken(testerToken_)) {
         testerMigrationTried_ = true;
         testerMigrationSender_.send(cascade::core::betaApiBaseUrl(), testerToken_);

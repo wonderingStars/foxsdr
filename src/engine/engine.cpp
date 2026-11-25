@@ -48,6 +48,7 @@
 #include "core/breadcrumb.hpp"
 #include "core/frame_timing.hpp"
 #include "core/damaged_file.hpp"
+#include "core/crash_upload.hpp"
 #include "core/diag_log.hpp"
 #include "core/radio_handoff.hpp"
 #include "engine/radio_refusal_data.hpp"
@@ -10018,6 +10019,17 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
                 telemetryEnabled_ = false;
                 telemetryInstallId_.clear();
             }
+            // RULE R (0.99.115, brief 79): NOTHING THAT HAPPENED WHILE USAGE REPORTING WAS OFF IS EVER SENT, also after it is switched on again. ONE clearing function for the whole usage
+            // family runs at this edge (usageFamilyClear): the session's accumulators, the counters, the radio report's engine side. The two ledgers follow in the same step: off disarms
+            // them and removes their files (what the start-up does with the switch off), on arms them fresh - nothing loaded from a file of an earlier period.
+            usageFamilyClear(telemetryEnabled_ ? UsageEdge::On : UsageEdge::Off);
+            if (telemetryEnabled_) {
+                stallLedger_->arm(telemetryLedgerPath_, telemetryInstallId_, /*loadExisting=*/false);
+                healthLedger_->arm(healthLedgerPath_, telemetryInstallId_, /*loadExisting=*/false);
+            } else {
+                stallLedger_->disarm();
+                healthLedger_->disarm();
+            }
             // THE HEARTBEAT FOLLOWS THE SWITCH IN THE SAME STEP: off disarms
             // it (configure refuses the now-empty id), on arms it with the
             // new id - exactly as the window's click handler always did.
@@ -10216,6 +10228,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
 }
 
 void Engine::telemetryAccrueMode() {
+    if (!telemetryEnabled_) { return; }   // rule R: nothing is counted while Usage reporting is off
     // Seconds are banked against the mode that was ACTUALLY running, once per
     // frame. Accumulating against the mode selected at shutdown would credit
     // the whole session to whatever happened to be last.
@@ -10228,12 +10241,78 @@ void Engine::telemetryAccrueMode() {
 }
 
 void Engine::telemetryNotePanel(const char* name) {
+    if (!telemetryEnabled_) { return; }   // rule R: nothing is counted while Usage reporting is off
     if (name == nullptr || name[0] == '\0') { return; }
     const std::string n(name);
     if (telemetryPanels_.size() >= 16) { return; }
     if (std::find(telemetryPanels_.begin(), telemetryPanels_.end(), n) ==
         telemetryPanels_.end()) {
         telemetryPanels_.push_back(n);
+    }
+}
+
+// RULE R, USAGE FAMILY (0.99.115, brief 79). Everything an engine keeps for a later usage report, journal or ledger is emptied here, at the OFF edge, at the ON edge and at a start with the
+// switch OFF: one function, so a collector cannot be cleared at one edge and forgotten at the other. What it does NOT touch: the install id and the switch (the caller's), the ledgers' arming
+// (the caller's: it differs by edge), the reporter's own queue (Reporter::setIdentity does the same at both edges). While the switch is OFF the entry points of these collectors return at
+// once (telemetryAccrueMode, telemetryNotePanel, telemetryNoteRadios, the radio reports' pass and its journal), so nothing is counted between the edges either.
+void Engine::usageFamilyClear(UsageEdge edge) {
+    const bool on = edge == UsageEdge::On;
+    // the session's usage accumulators (modes, panels, radios at most, how long)
+    telemetryModeSeconds_.clear();
+    telemetryPanels_.clear();
+    telemetryRadiosMax_ = 1;
+    telemetrySessionStart_ = host_->wallTimeS();
+    telemetryModeAccrual_.reset(telemetrySessionStart_);
+    // the lifetime counters under the install id: with the id deleted they do not exist; a new id's life begins now (this launch is its first)
+    telemetryCrashes_ = 0;
+    telemetryExits_ = cascade::core::ExitCounts{};
+    exitCausePending_ = false;
+    telemetryLaunches_ = on ? 1u : 0u;
+    if (on) {
+        telemetryFirstRun_ = cascade::core::utcDateToday();
+        telemetryFirstVersion_ = cascade::versionString();
+    } else {
+        telemetryFirstRun_.clear();
+        telemetryFirstVersion_.clear();
+    }
+    // the radio reports' engine side: the scans, what they listed, the failed opens, every radio's journal slot (a radio opened in the OFF period never gets a close line from the ON one),
+    // the session flags and the session's length (session_end counts from here)
+    radioScans_ = 0;
+    radioScanModels_.clear();
+    radioOpenFailures_ = 0;
+    for (RadioJournalSlot& j : radioJournal_) { j = RadioJournalSlot{}; }
+    for (RadioRun& r : *radioRun_) { r = RadioRun{}; }
+    radioOpenedThisSession_ = false;
+    radioFirstSessionSent_ = false;
+    radioSessionEndSent_ = false;
+    radioEnvSent_ = false;
+    radioSessionBaseS_ = clockS();
+    telemetryHeartbeat_.setRadios({});
+    // the log lines a radio failure report carries begin here
+    cascade::core::DiagLog::instance().markReportFloor(cascade::core::DiagLog::ReportFamily::Usage);
+}
+
+// RULE R, DIAGNOSTICS FAMILY (0.99.115, brief 79), at both edges of the switch as the interface's half carries it (the new window's tick and the Classic window's checkbox both arrive through
+// applyInterfaceConfig). The gates first: the health ledger counts only while Diagnostics is on (the new window never told it). Then, except at a start (nothing was counted yet by a period of the
+// other kind), what the family kept is emptied: the stall and health counts the usage record would carry, the trail and the log ring a fault report would carry, the issue words waiting. At the
+// OFF edge the reports on disk that were never sent become the person's own copy (a local-only sidecar: the sweep never takes them, now or after Diagnostics is on again); the folder is the
+// host's (ControlThreadOptions::diagnosticsDir), empty for a bounded run, and the sidecars are written on a worker (no disk on the control thread).
+void Engine::diagnosticsFamilyEdge(bool on, bool atStart) {
+    healthLedger_->setAllowed(on);
+    if (atStart) { return; }
+    stallLedger_->forget();
+    healthLedger_->forget();
+    cascade::core::issue::discardPendingIssueReports();
+    cascade::core::trail::clear();
+    cascade::core::DiagLog::instance().markReportFloor(cascade::core::DiagLog::ReportFamily::Diagnostics);
+    if (!on && !controlDiagDir_.empty()) {
+        const std::string dir = controlDiagDir_;
+        const std::uint64_t now = static_cast<std::uint64_t>(std::time(nullptr));
+        try {
+            std::thread([dir, now]() { (void)cascade::core::withholdUnsentReports(dir, now); }).detach();
+        } catch (...) {
+            (void)cascade::core::withholdUnsentReports(dir, now);
+        }
     }
 }
 
@@ -10275,13 +10354,14 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // no minidump, nothing uploaded from the failure itself - just the
     // observation that last time the marker was never set.
     if (!cfg.telemetryCleanExit) {
-        ++telemetryCrashes_;
+        // (counted only for an install id that exists: with Usage reporting off the unclean exit is still READ and logged, below, but no counter moves - rule R, 0.99.115)
+        if (telemetryEnabled_) { ++telemetryCrashes_; }
         // HOW IT ENDED (0.99.69). Counted as `unknown` in the same breath as
         // `crashes` goes up, so the four classes add up to the unclean exits at every
         // instant; the evidence is read a moment later, off this thread, and moves it
         // to its class (exitCausePoll). A run with nothing to read - Diagnostics off,
         // or a predecessor that recorded no start - is final at once.
-        telemetryExits_.noteUnclean();
+        if (telemetryEnabled_) { telemetryExits_.noteUnclean(); }
         exitCausePrevStart_ = cfg.telemetrySessionStarted;
         if (!cfg.diagnosticsEnabled) {
             exitCauseFinish(cascade::core::unknownExit(
@@ -10306,6 +10386,9 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // window's diagnostics, AppWindow::diagnosticsStartup.)
     telemetrySessionStart_ = host_->wallTimeS();
     telemetryModeAccrual_.reset(telemetrySessionStart_);
+    // A START WITH USAGE REPORTING OFF (rule R, 0.99.115): nothing is counted for a report that will not be sent, and nothing of an earlier period is kept - the launch and crash counters, the exit
+    // classes and the first-run date and version are not carried, and the save below writes them empty. (The same clearing function as the two edges.)
+    if (!telemetryEnabled_ || telemetryInstallId_.empty()) { usageFamilyClear(UsageEdge::StartOff); }
     // THE FIRST STAGE of how far this session gets (core/health_events.hpp, Milestone): the settings are read and start-up is under way. Held in
     // memory until the ledger below has been decided, like every event before it.
     cascade::core::health::noteReached(cascade::core::health::Milestone::Launched);
@@ -10331,7 +10414,7 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfg, const std::st
     // opted-out run drops all of it and removes a file an earlier opted-in run
     // left.
     healthLedgerPath_ = cascade::core::health::HealthLedger::pathIn(configDir);
-    healthLedger_->setAllowed(cfg.diagnosticsEnabled);
+    diagnosticsFamilyEdge(cfg.diagnosticsEnabled, /*atStart=*/true);   // (the gate: the health ledger counts only while Diagnostics is on)
     if (telemetryEnabled_ && !telemetryInstallId_.empty()) {
         healthLedger_->arm(healthLedgerPath_, telemetryInstallId_, /*loadExisting=*/true);
     } else {
@@ -10514,7 +10597,7 @@ void Engine::exitCauseFinish(const cascade::core::ExitVerdict& v) {
     cascade::core::diagLogf("%s", cascade::core::previousExitLogLine(v).c_str());
     // The count is moved from `unknown` to the class; for `unknown` itself it is
     // already there. Either way the total has not changed.
-    telemetryExits_.refine(v.cls);
+    if (telemetryEnabled_) { telemetryExits_.refine(v.cls); }
 }
 
 // THE RECEIVER'S HALF OF THE CONFIG RESTORE (engine stage 3a): every line of
@@ -12141,6 +12224,8 @@ bool Engine::applyInterfaceConfig(const std::string& document, std::string& erro
     if (diagnosticsMoved && !controlDiagDir_.empty()) {
         setControlWatchdogReportDir(parsed.diagnosticsEnabled ? controlDiagDir_ : std::string());
     }
+    // RULE R, Diagnostics family: both edges (the health ledger's gate, what the family counted, the unsent reports on disk).
+    if (diagnosticsMoved) { diagnosticsFamilyEdge(parsed.diagnosticsEnabled, /*atStart=*/false); }
     return true;
 }
 

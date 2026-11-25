@@ -135,6 +135,14 @@ public:
     // reader: takes the lock, allocates, and is used by Copy diagnostics.
     std::vector<std::string> ringSnapshot() const;
 
+    // THE RING AND THE RULE "NOTHING FROM A SWITCHED-OFF PERIOD IS EVER SENT" (0.99.115, brief 79). The ring keeps running whatever the switches say (it
+    // is the person's own, for Copy diagnostics), so a report built from it would carry lines written while its family's switch was OFF. A report of a family
+    // therefore reads the ring through its FLOOR: only the lines written since that family's switch was last turned ON (or off: the floor moves at both edges).
+    // Usage: the radio failure report. Diagnostics: crash, freeze and issue reports (copyRingRaw, the crash path's reader, honours this floor too).
+    enum class ReportFamily : int { Usage = 0, Diagnostics = 1 };
+    void markReportFloor(ReportFamily family);
+    std::vector<std::string> ringSnapshotFor(ReportFamily family) const;
+
     // Total lines ever written, including the ones the ring has dropped.
     // A report that says "last 256 of 4011 lines" is honest about what it is
     // not carrying.

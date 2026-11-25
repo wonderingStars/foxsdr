@@ -234,6 +234,11 @@ std::string sanitise(std::string_view text) {
     return out;
 }
 
+void clear() noexcept {
+    for (auto& s : g_slots) { s.store(0, std::memory_order_relaxed); }
+    g_head.store(0, std::memory_order_relaxed);
+}
+
 void resetForTest() noexcept {
     for (auto& s : g_slots) { s.store(0, std::memory_order_relaxed); }
     g_head.store(0, std::memory_order_relaxed);

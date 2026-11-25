@@ -373,6 +373,7 @@ void Engine::restoreSavedRadios(const cascade::core::AppConfig& cfg) {
 }
 
 void Engine::telemetryNoteRadios() {
+    if (!telemetryEnabled_) { return; }   // rule R (0.99.115): nothing is counted while Usage reporting is off
     std::uint32_t running = 0;
     for (std::size_t slot = 0; slot < kMaxReceivers; ++slot) {
         if (receivers_[slot] && receivers_[slot]->pipeline_.running()) { ++running; }

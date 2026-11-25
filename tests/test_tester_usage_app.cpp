@@ -244,7 +244,7 @@ Result once(const Run& r) {
     fs::create_directories(diag, ec);
     fs::remove(census, ec);
     writeFile(cfg, std::string("{ ") + r.configExtra +
-                       "\"telemetryEnabled\": false, \"updateCheckEnabled\": false, \"diagnosticsEnabled\": true, \"sourceKind\": \"siggen\", \"uiTheme\": \"today\", "
+                       "\"telemetryEnabled\": true, \"updateCheckEnabled\": false, \"diagnosticsEnabled\": true, \"sourceKind\": \"siggen\", \"uiTheme\": \"today\", "
                        "\"interfaceScale\": \"100\", \"mainView\": \"receiver\", \"railBank\": 4, \"bandPlanOverlay\": false }\n");
     if (!r.linkRequest.empty()) {
         // The link-request file is written where the run's own poll looks: beside its settings file (the process boot wrote it there for a real click).
