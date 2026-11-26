@@ -69,6 +69,7 @@ struct Reading {
     std::string args;                  // fact.transmit.args (the address the engine uses: the one typed, else its seed)
     std::string transmit_error;        // fact.status.transmitError
     PluginReading plugin;
+    bool opening = false;              // fact.transmit.opening == "1" and no radio yet: the open's connect is under way (the answer comes on a later pass)
     bool have = false, on_air = false, latched = false, key_mine = false, remote_armed = false, faulted = false, split = false, monitor = false, mic_opening = false, has_range = false;
 };
 

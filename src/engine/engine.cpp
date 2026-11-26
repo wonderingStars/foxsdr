@@ -6438,6 +6438,8 @@ void Engine::openTransmitRadio() {
     txOpenPending_ = true;
     txOpenArgs_ = transmitArgs_;
     txOpenAbandon_ = std::make_shared<std::atomic<bool>>(false);
+    try {
+    if (txOpenNoThreadForTest_) { throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again)); }   // TESTS ONLY: "std::async could not start a thread"
     txOpenFuture_ = std::async(std::launch::async,
         [args = transmitArgs_, abandon = txOpenAbandon_, hook = txOpenForTest_]() -> TransmitOpenResult {
             TransmitOpenResult out;
@@ -6455,6 +6457,15 @@ void Engine::openTransmitRadio() {
             if (abandon->load()) { out.sink.reset(); }
             return out;
         });
+    } catch (...) {
+        // std::async could not start a thread: nothing is pending and nothing will ever answer, so the flag must not stay set (it would refuse every later TX_OPEN as busy until a
+        // TX_CLOSE; review of 0e95c7e1, F10). The failure is published the way an open's own failure is.
+        txOpenPending_ = false;
+        txOpenArgs_.clear();
+        txOpenAbandon_.reset();
+        transmitError_ = "the transmit open could not be started";
+        cascade::core::diagWarnf("tx: could not open %s - %s", transmitArgs_.c_str(), transmitError_.c_str());
+    }
 }
 
 void Engine::pollTransmitOpen() {
@@ -6480,8 +6491,13 @@ void Engine::abandonTransmitOpen() {
     // THE FUTURE OF A std::async TASK BLOCKS IN ITS DESTRUCTOR, so it is moved to a detached reaper that waits for the worker (the connect is bounded by
     // iiod::kConnectWait and the replies by kReplyWait) and lets the board go. Nothing here waits: close and exit stay inside their budgets.
     if (txOpenFuture_.valid()) {
-        std::thread([f = std::move(txOpenFuture_)]() mutable {
+        // THE ABANDONED WORKER IS COUNTED until it has ended: a new TX_OPEN is refused meanwhile (applyCommand), so two connects to the same board never overlap and the late
+        // one's quieten writes (maximum attenuation, oscillator down) can never land on a board a newer open has just installed and keyed (review of 0e95c7e1, F10).
+        // The counter is shared with the reaper, not reached through the engine.
+        txOpenEnding_->fetch_add(1);
+        std::thread([f = std::move(txOpenFuture_), ending = txOpenEnding_]() mutable {
             try { (void)f.get(); } catch (...) {}
+            ending->fetch_sub(1);
         }).detach();
     }
     txOpenPending_ = false;
@@ -6497,6 +6513,13 @@ void Engine::finishTransmitOpen(TransmitOpenResult r, const std::string& args) {
         return;
     }
     auto tx = std::move(r.sink);
+    // A KEY NEVER SURVIVES A TRANSMITTER CHANGE (API 0.2), and the change is HERE, not where the open was accepted: TX_OPEN ended the key then, but a board that was already
+    // installed stayed so until now. Key requests are refused while an open is pending (ApiHostImpl::apply, txPluginArmOp), and this ends whatever still stands - the
+    // rules' hold or latch and the plugin's window - BEFORE the new board is installed, so no key given to the outgoing board is carried to the incoming one (review of
+    // 0e95c7e1, F1: a board nobody keyed would otherwise be keyed one pass after it landed).
+    api_->endKeyFromEngine("the transmitter was changed");
+    // The board that opened is the one at THIS address: the box, the saved config and the facts say what is connected (review F2; SET_TRANSMIT_ARGS is refused meanwhile too).
+    transmitArgs_ = args;
     // THE POWER IS WRITTEN BEFORE THE SINK IS INSTALLED, and it is written
     // through the driver's own clamp - so a config file carrying a number
     // from a board with a different range lands on that board's quiet end
@@ -9895,6 +9918,7 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // ONE OPEN AT A TIME: the connect is on a worker, so a second press does not queue a second connect behind the first (freeze diagnosis P2).
             // Refused before anything is changed, so the pending open's address and the key stay as they were.
             if (txOpenPending_) { return refuse(FOXAPI_BUSY, "the transmitter is still opening"); }
+            if (txOpenEnding_->load() > 0) { return refuse(FOXAPI_BUSY, "the transmitter's previous open is still ending"); }
             // A KEY NEVER SURVIVES A TRANSMITTER CHANGE (API 0.2).
             api_->endKeyFromEngine("the transmitter was changed");
             transmitArgs_ = text;
@@ -10194,6 +10218,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // nothing opens until TX_OPEN, and a board already open keeps
             // the address it was opened with (the box is disabled then).
             if (transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter is open"); }
+            // NOT UNDER A PENDING OPEN: the open will land on the address it was asked for, and the box, the saved config and the facts must say the same (review F2).
+            if (txOpenPending_) { return refuse(FOXAPI_BUSY, "the transmitter is still opening"); }
             transmitArgs_ = text;
             return res;
         case FOXAPP_OP_SET_CATALOGUE_URL:

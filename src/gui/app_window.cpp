@@ -18036,6 +18036,8 @@ void AppWindow::drawTransmitPage() {
     const FoxReceiverState& st = uiState_;
     const bool have = (st.flags & FOXAPI_RX_TX_AVAILABLE) != 0u;
     const bool onAir = (st.flags & FOXAPI_RX_TX_KEYED) != 0u;
+    // AN OPEN IS UNDER WAY (fact "transmit.opening": the connect runs on a worker, so TX_OPEN's OK means accepted): the box and Open are left alone and the line says so.
+    const bool opening = !have && uiFact("fact.transmit.opening") == "1";
 
     // --- the radio -----------------------------------------------------------
     ImGui::TextUnformatted(tr("RADIO"));
@@ -18052,7 +18054,7 @@ void AppWindow::drawTransmitPage() {
         // so the page opens on a real address, never blank) whenever it is
         // not being typed in - and each edit committed as typed
         // (FOXAPP_OP_SET_TRANSMIT_ARGS), so config.json keeps what was typed.
-        ImGui::BeginDisabled(have);
+        ImGui::BeginDisabled(have || opening);
         ImGui::SetNextItemWidth(260.0f);
         if (ImGui::GetActiveID() != ImGui::GetID("##txargs")) {
             cascade::core::formatUtf8(transmitArgsDraft_, sizeof(transmitArgsDraft_), "%s",
@@ -18074,7 +18076,7 @@ void AppWindow::drawTransmitPage() {
     // a board the box does not show.
     const bool noAddress = std::string(transmitArgsDraft_).find_first_not_of(" \t") == std::string::npos;
     if (!have) {
-        ImGui::BeginDisabled(noAddress);
+        ImGui::BeginDisabled(noAddress || opening);
         if (ImGui::Button(trId("Open##txopen"))) {
             uiSubmit(cmd::makeText(FOXAPI_OP_TX_OPEN, transmitArgsDraft_));
         }
@@ -18096,6 +18098,12 @@ void AppWindow::drawTransmitPage() {
     }
     if (have) {
         ImGui::TextUnformatted(st.txDeviceName);
+    } else if (opening) {
+        std::string line;
+        cascade::core::formatUtf8(line, tr("Opening %s..."), uiFact("fact.transmit.args").c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kInkFaint));
+        ImGui::TextUnformatted(line.c_str());
+        ImGui::PopStyleColor();
     } else if (!statusLines_.transmitError.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, cascade::gui::theme::vec(cascade::gui::theme::kAlarmHot));
         // tr() at the point of drawing: the one sentence this page writes into

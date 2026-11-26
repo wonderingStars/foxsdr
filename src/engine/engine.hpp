@@ -942,6 +942,9 @@ private:
     bool txOpenPending_ = false;
     std::string txOpenArgs_;                              // the address the pending open was asked for
     std::shared_ptr<std::atomic<bool>> txOpenAbandon_;    // raised when the answer is no longer wanted
+    // Abandoned opens whose worker has not ended yet (shared with their reapers). TX_OPEN is refused while any is outstanding. PUBLISHED: fact.transmit.opening says
+    // txOpenPending_ (both windows read it and do not offer Open again). Key requests and ARM are refused while txOpenPending_ (A KEY NEVER SURVIVES A TRANSMITTER CHANGE).
+    std::shared_ptr<std::atomic<int>> txOpenEnding_ = std::make_shared<std::atomic<int>>(0);
     // Pushes the receiver's centre into the transmitter when SPLIT is off,
     // and nothing when it is on. Called once a frame.
     void followTransmitFrequency();
@@ -2546,6 +2549,7 @@ private:
     std::unique_ptr<cascade::source::IqSink> (*txSinkForTest_)() = nullptr;
     // TESTS ONLY: stands in for "make a PlutoTx and open it" on the open worker (a fake connect). Null in the product. Returns the sink, or null with the reason in `err`.
     std::unique_ptr<cascade::source::IqSink> (*txOpenForTest_)(const std::string& args, std::string& err) = nullptr;
+    bool txOpenNoThreadForTest_ = false;   // TESTS ONLY: the worker cannot be started (std::async throws), to prove the pending flag is not left set
     // TESTS ONLY (test.rds, test.autoNotch, test.pilot; API 0.3 8.4): stand-ins
     // for what the DSP thread measures, which a hermetic engine on the signal
     // generator cannot produce - the RDS decoder's snapshot, the auto-notch's

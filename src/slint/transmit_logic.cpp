@@ -152,6 +152,7 @@ Reading readTransmit(TableReader& t, const FoxReceiverState& st) {
     r.has_range = r.have && (st.txFlags & FOXAPI_TX_POWER_RANGE) != 0u;
     r.args = factOf(t, "fact.transmit.args");
     r.transmit_error = factOf(t, "fact.status.transmitError");
+    r.opening = !r.have && factOf(t, "fact.transmit.opening") == "1";   // the connect is on a worker: Open and the box are left alone and the line says so
     PluginReading& p = r.plugin;
     p.armed = factOf(t, "fact.tx.plugin.armed") == "1";
     p.minutes = p.armed ? factInt(factOf(t, "fact.tx.plugin.minutes")) : 0;
@@ -185,8 +186,8 @@ Model TransmitPage::model() const {
     const Reading& r = r_;
     m.address = draft_;
     m.have = r.have;
-    m.address_enabled = !r.have;
-    m.open_enabled = !r.have && !addressBlank(draft_);
+    m.address_enabled = !r.have && !r.opening;
+    m.open_enabled = !r.have && !r.opening && !addressBlank(draft_);
     m.close_enabled = r.have && !r.on_air;
     m.open_tooltip = addressBlank(draft_) ? tr("Type the board's address first.")
                                           : tr("Connects to the board's iiod daemon and leaves it QUIET:\n"
@@ -194,6 +195,8 @@ Model TransmitPage::model() const {
                                                "out until the key below is held.");
     if (r.have) {
         m.radio_line = r.device_name;
+    } else if (r.opening) {
+        cascade::core::formatUtf8(m.radio_line, tr("Opening %s..."), r.args.c_str());
     } else if (!r.transmit_error.empty()) {
         m.radio_line = tr(r.transmit_error.c_str());
         m.radio_tone = Tone::Err;
@@ -267,13 +270,13 @@ Model TransmitPage::model() const {
 // ---- the gestures ----
 
 Command TransmitPage::addressEdited(const std::string& text) {
-    if (r_.have) { return {}; }
+    if (r_.have || r_.opening) { return {}; }
     draft_ = cutAddress(text);
     return make(cmd::makeText(FOXAPP_OP_SET_TRANSMIT_ARGS, draft_));
 }
 
 Command TransmitPage::open() const {
-    if (r_.have || addressBlank(draft_)) { return {}; }
+    if (r_.have || r_.opening || addressBlank(draft_)) { return {}; }
     return make(cmd::makeText(FOXAPI_OP_TX_OPEN, draft_));
 }
 

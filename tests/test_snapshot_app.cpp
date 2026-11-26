@@ -232,15 +232,30 @@ struct AppWindowTestAccess {
         }
     }
 
+    // THE TRANSMIT RADIO'S NETWORK OPEN IS ON A WORKER (freeze diagnosis P2): TX_OPEN answers OK when it is ACCEPTED and a later pass installs the board. Waits (bounded) until the
+    // open has landed or failed, polling as the pass does (inline and stepped the wait runs the poll; free-running the pass runs its own and the wait watches).
+    static void settleTransmitOpen(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            const bool pending = passseam::read<bool>(th::engine(a), [&a] {
+                if (passseam::mode() != passseam::Mode::Free) { th::engine(a).pollTransmitOpen(); }
+                return th::engine(a).txOpenPending_;
+            });
+            if (!pending) { return; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c) {
         const FoxCommandResult r =
             passseam::read<FoxCommandResult>(th::engine(a), [&] { return th::engine(a).applyCommand(c, {}); });
+        if (c.op == FOXAPI_OP_TX_OPEN) { settleTransmitOpen(a); }
         if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
         const FoxCommandResult r = passseam::read<FoxCommandResult>(
             th::engine(a), [&] { return th::engine(a).applyCommand(q.c, q.longText); });
+        if (q.c.op == FOXAPI_OP_TX_OPEN) { settleTransmitOpen(a); }
         if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         return r;
     }

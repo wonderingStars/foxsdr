@@ -417,6 +417,7 @@ std::uint64_t Engine::apiListsFingerprint() {
     f.text(rx().sourceKind_);
     f.text(rx().deviceArgs_);
     f.value(transmitter_.haveSink());
+    f.value(txOpenPending_);   // fact.transmit.opening
     // Plugin marks, the band plan, the presets people saved.
     f.value(pluginMarkersSeq_);
     f.value(pluginApi_ ? pluginApi_->openSeq() : 0u);   // wire-c: what plugins asked the user to open
@@ -1193,6 +1194,9 @@ void Engine::buildApiLists03(ApiListBlock& b) {
     b.txArgs = transmitArgs_.empty() ? transmitArgsSeed() : transmitArgs_;
     b.txOpen = transmitter_.haveSink();
     fact("transmit.args", b.txArgs, true);
+    // AN OPEN IS UNDER WAY (the connect is on a worker): "1" from the accepted TX_OPEN until the answer lands, is dropped or is abandoned. LOCAL, like the address. Both windows read it
+    // to letter "Opening ..." and to leave Open and the address box alone; TX_OPEN's OK means ACCEPTED, the failure arrives later as the transmit error.
+    fact("transmit.opening", txOpenPending_ ? "1" : "0", true);
     // PLUGIN MARKS on the spectrum.
     for (const cascade::core::HostMarker& m : pluginMarkers_) {
         if (m.m.credit[0] != '\0') { fact("plugin.marker.credit." + std::to_string(b.markers.size() + 1u), m.m.credit, true); }   // wire-c: the credit a data source asks for, by the mark's place in the list
