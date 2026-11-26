@@ -30,7 +30,7 @@ From 0.99.116: "Clean install" starts unticked on every install, whatever you ch
 
 ## What was and was not tested
 
-- Both full test suites (every headless and new-window test, then every new-window screen drive) were run on the exact files this installer is made from. Their totals are in the release record, not here, because the notes are fixed before the tests run.
+- Both full test suites (every headless and new-window test, then every new-window screen drive) were run on the exact files this installer is made from. Result: 1770 tests, 5 failed, none of the 5 fixed in this release. One is a test-data file (`tools/slint-clip-explained.tsv`) that still names an old line number in `tooltip.slint` after the tooltip change moved it, so that test fails its own check; the shipped programs do not read that file, and it is not part of the installer. The other four are new-window screen drives (`mapj-antenna`, `mapj-sky`, `patch-decoders`, `runs-on-radio2`) that need plugins installed, and the test profile had none; they were not shown to pass with plugins present.
 - **No independent code review of any change in this release was made.**
 - The installer was tested end to end only in silent runs against a test copy of itself (35 checks passed, 1 skipped; removing either safeguard brought the wipe back). Its wizard pages (the box starting unticked over a remembered tick, a tick in this run still wiping, the desktop shortcut still remembered) were never tested with a pointer or a visible window.
 - The installer was not install-tested on a clean machine, and no machine-wide (all users) install was tested.
@@ -42,4 +42,4 @@ From 0.99.116: "Clean install" starts unticked on every install, whatever you ch
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.116.exe`:**
-`TBD`
+`260484ea11abb179a5128e3a75029db91537ef4d9b4a23d413929f6fe48a51af`
