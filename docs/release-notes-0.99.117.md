@@ -35,7 +35,7 @@ Tested with a fake dongle whose reads all fail; no real stream stop was seen, so
 
 ## What was and was not tested
 
-- Both full test suites (every headless and new-window test, then every new-window screen drive) were run on the exact files this installer is made from. Their totals are in the release record, not here, because the notes are fixed before the tests run. From earlier runs, four new-window screen drives (`mapj-antenna`, `mapj-sky`, `patch-decoders`, `runs-on-radio2`) need plugins installed and the test profile has none; they have not been shown to pass with plugins present.
+- Both full test suites (every headless and new-window test, then every new-window screen drive) were run on the exact files this installer is made from. Result: 1774 tests, 4 failed; the 0.99.116 red (the test-data file `tools/slint-clip-explained.tsv`, not part of the installer) is fixed and passes. The 4 failures are new-window screen drives (`mapj-antenna`, `mapj-sky`, `patch-decoders`, `runs-on-radio2`) that need plugins installed; the test profile has none (the log says no plugin DLLs were copied), and they have not been shown to pass with plugins present.
 - **No independent code review of any change in this release was made**, the transmit change included.
 - No installer change was made in this release; the installer is built from the same installer script as 0.99.116, with the new version number.
 - The installer was not install-tested on a clean machine, and no machine-wide (all users) install was tested.
@@ -46,4 +46,4 @@ Tested with a fake dongle whose reads all fail; no real stream stop was seen, so
 ---
 
 **SHA-256 of `foxsdr-setup-0.99.117.exe`:**
-`TBD`
+`87494e96bd310bc39945a0f5fb8ec6dc9248f51d31a06240a8b1df0d8d28ed60`
