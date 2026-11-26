@@ -10341,6 +10341,9 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfgGiven, const st
             mintedHere = true;
         }
     }
+    // A START WITH THE SWITCH OFF HOLDS NO IDENTITY (brief H1, 2026-11-26): the switch-off click clears the id, but a settings file can say "off" and still carry a valid one (a hand edit, a
+    // restored or copied file, a crash between two writes). The id is treated as gone, so no later path can use it, and the save below writes it empty - exactly what the click does.
+    if (!telemetryEnabled_) { telemetryInstallId_.clear(); }
     telemetryLaunches_ = cfg.telemetryLaunches + 1;
     telemetryCrashes_ = cfg.telemetryCrashes;
     telemetryExits_.died = cfg.telemetryExitsDied;
@@ -10478,7 +10481,9 @@ void Engine::telemetryStartup(const cascade::core::AppConfig& cfgGiven, const st
     // THE IDENTIFIER MINTED AT THIS START IS A CONSENT WRITE, and a click is the only other one: it goes into the file as a merge (the ordinary save lays the disk's identifier over the
     // document, so a minted one that was never merged would be lost, and with it the pending record that follows). Holder only: a second copy mints nothing.
     // (Held until the service STARTS - consentStartWrites - because a run that is refused after the restore, a provision that fails, must leave the file exactly as it was.)
-    if (mintedHere && consentGuarded_ && consentHolder_) { consentMintPending_ = true; }
+    // The same write removes an id a file still held with the switch OFF (brief H1): the ordinary save lays the disk's id over the document, so without this merge the id would stay in the file.
+    const bool offWithIdOnDisk = !telemetryEnabled_ && !cfg.telemetryInstallId.empty();
+    if ((mintedHere || offWithIdOnDisk) && consentGuarded_ && consentHolder_) { consentMintPending_ = true; }
     // Heartbeats are NOT armed here: this runs for bounded --frames runs too,
     // and arming them for those put ctest's throwaway install ids on the live
     // endpoint. run() arms them, interactive runs only, beside the update
@@ -12768,7 +12773,8 @@ ConfigReadback Engine::configReadback() {
 }
 
 void Engine::configureHeartbeat() {
-    telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryInstallId_, cascade::versionString());
+    // Armed only with the switch ON and a valid id (an id alone is not consent; brief H1).
+    telemetryHeartbeat_.configure(cascade::core::telemetryEndpoint(), telemetryEnabled_ ? telemetryInstallId_ : std::string(), cascade::versionString());
     // AN INTERACTIVE RUN ARMS THE RADIO REPORTS' SEND beside the heartbeat (a bounded run never does). Whether anything is actually posted is
     // radioreport::kRadioReportsLiveSend, which is true in this build (a test or a drive still sends nothing off this computer: core/report_send_guard.hpp).
     cascade::core::radioreport::global().setLiveSend(true);
