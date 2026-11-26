@@ -1,0 +1,43 @@
+// The MENU-TIP specimen: a dropdown built the way patch_page.slint's DropKey / DropRow build it (a PopupWindow of rows, each row a TouchArea plus a PopupTipTimer with the
+// row's note, the popup ending in a PopupTipLayer), a Key with an ordinary tip, and the window's TipLayer. test_slint_menutip.cpp rests a drifting pointer on a row
+// and counts how often its tip opens (problem report b277ab24: the tip of a row opened as a modal PopupWindow, took the pointer from the row, closed, and opened again).
+//
+//   x,   y,   w,   h   what
+//   20,  20,  120, 30  Key "Plain", tooltip "plain tip"
+//   20, 100,  200, 88  the dropdown popup (opened by open()), rows 26 px high at y 105 + 26i: notes "note 0", "note 1", "note 2" (row i is hovered at 60, 118 + 26i)
+import { Theme } from "../theme.slint";
+import { TipState, TipLayer, PopupTipTimer, PopupTipLayer } from "../tooltip.slint";
+import { Key } from "../keys.slint";
+export { Theme, TipState }
+
+export component MenutipSpecimen inherits Window {
+    width: 400px;
+    height: 300px;
+    background: Theme.bg;
+    out property <int> openings;   // how many times a row's tip has gone on screen (counted from the row's own `shown`, so it reads the same whatever draws the tip)
+    out property <int> open-now;   // how many row tips are on screen now
+    out property <string> last-text;   // the words of the row tip that opened last
+    out property <int> row1-hover-lost;   // how many times row 1 lost the pointer
+    public function open() { popup.show(); }
+    Key { x: 20px; y: 20px; width: 120px; label: "Plain"; tooltip: "plain tip"; }
+    popup := PopupWindow {
+        x: 20px; y: 100px; width: 200px; height: 88px;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.menu; border-width: Theme.hairline; border-color: Theme.knob-ring; border-radius: Theme.radius-panel;
+            Rectangle {
+                x: 5px; y: 5px; width: 190px; height: 78px;
+                for i in [0, 1, 2] : Rectangle {
+                    x: 0px; y: i * 26px; width: parent.width; height: 26px;
+                    background: ta.has-hover ? Theme.menu-hot : transparent;
+                    ta := TouchArea { changed has-hover => { if (i == 1 && !self.has-hover) { root.row1-hover-lost += 1; } } }
+                    tt := PopupTipTimer { x: 0px; y: 0px; hovered: ta.has-hover; text: "note " + i; anchor-h: parent.height; }
+                    private property <bool> sh: tt.shown;
+                    changed sh => { if (self.sh) { root.openings += 1; root.open-now += 1; root.last-text = "note " + i; } else { root.open-now -= 1; } }
+                }
+            }
+            PopupTipLayer { area-w: parent.width; area-h: parent.height; }
+        }
+    }
+    TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+}

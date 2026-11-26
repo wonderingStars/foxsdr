@@ -38,7 +38,7 @@ import { Lamp } from "lamps.slint";
 import { Checkbox } from "fields.slint";
 import { Slider } from "sliders.slint";
 import { SelectKey } from "sections.slint";
-import { TipTimer, PopupTipTimer } from "tooltip.slint";
+import { TipTimer, PopupTipTimer, PopupTipLayer } from "tooltip.slint";
 import { SelectItem } from "signal_bank.slint";
 import { SettingField, PluginSettingsForm } from "forms.slint";
 import { MapTarget, MapPane } from "map.slint";
@@ -508,6 +508,7 @@ component DropKey inherits Rectangle {
                     }
                 }
             }
+            PopupTipLayer { area-w: parent.width; area-h: parent.height; }   // the rows' tips (their notes): the window's TipLayer is under this popup
         }
     }
 }
