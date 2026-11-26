@@ -25,7 +25,7 @@
 // and `entries` feed the Menu and can be replaced.
 import { Theme, Skin, Workbench } from "../theme.slint";
 import { MenuItemKind, MenuEntry, MenuItem, Menu } from "../menus.slint";
-import { TipLayer } from "../tooltip.slint";
+import { TipLayer, PopupTipLayer } from "../tooltip.slint";
 export { Theme, Skin, Workbench }
 export { MenuItemKind, MenuEntry }
 
@@ -200,4 +200,5 @@ export component MenusSpecimen inherits Window {
         item-hovered(id) => { root.hovered-id = id; }
     }
     TipLayer { x: 0px; y: 0px; win-w: root.width; win-h: root.height; }
+    PopupTipLayer { x: 0px; y: 0px; area-w: root.width; area-h: root.height; }   // the rows here are laid on the window, not in a popup: a MenuItem's tip (PopupTipTimer) is drawn by this layer, as the Menu panel draws it
 }
