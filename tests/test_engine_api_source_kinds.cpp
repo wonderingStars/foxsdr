@@ -732,6 +732,7 @@ void testDPlutoAsRadioTwoAndTheTransmitter() {
     // THE TRANSMITTER: opened with no address of its own it takes the Pluto's (radio 2's, not radio 1's generator), and follows radio 2
     CHECK_EQ(Access::transmitSlot(r.eng), static_cast<std::size_t>(0));   // (no transmitter open yet: the rule's first answer)
     CHECK_EQ(r.send(r.aimed(FOXAPI_OP_TX_OPEN, 1, 0.0, 0, pluto.uriArgs().c_str())).status(), FOXAPI_OK);
+    CHECK(r.until([&] { return Access::transmitSlot(r.eng) == static_cast<std::size_t>(1); }));   // the connect is on a worker: a later pass installs the board
     CHECK_EQ(Access::transmitArgs(r.eng), pluto.uriArgs());
     CHECK_EQ(Access::transmitSlot(r.eng), static_cast<std::size_t>(1));
     r.pump(5);
@@ -760,7 +761,9 @@ void testDPlutoSurvivesARestart() {
     CHECK_EQ(Access::deviceArgs(b.eng, 1), pluto.uriArgs());
     // the transmitter's address in the file is the board radio 2 is on: the rule gives radio 2 once the board is open
     CHECK_EQ(b.send(b.aimed(FOXAPI_OP_TX_OPEN, 1, 0.0, 0, pluto.uriArgs().c_str())).status(), FOXAPI_OK);
+    CHECK(b.until([&] { return Access::transmitSlot(b.eng) == static_cast<std::size_t>(1); }));
     CHECK_EQ(Access::transmitSlot(b.eng), static_cast<std::size_t>(1));
+    CHECK(b.until([&] { return b.fact("transmit.radio") == "2"; }));   // the fact follows the installed board on a later pass
     CHECK_EQ(b.fact("transmit.radio"), std::string("2"));
 }
 

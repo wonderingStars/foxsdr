@@ -187,6 +187,9 @@ FoxCommandResult Engine::txPluginArmOp(std::uint64_t session, bool remote, bool 
     }
 
 
+    // NO WINDOW WHILE AN OPEN IS PENDING (review of 0e95c7e1, F1): the board that is installed is about to be replaced, and a window armed over it would survive the swap and
+    // let a plugin key a board nobody armed. Refused before anything is changed (the refusal fact is left as it was).
+    if (txOpenPending_) { return refused(res, FOXAPI_BUSY, "not armed: the transmitter is still opening"); }
     // ARM. A radio that is open AND has not faulted: arming a window over a board that has already stopped answering is arming nothing.
     const bool radioOpen = transmitter_.haveSink() && !(transmitter_.sink() != nullptr && transmitter_.sink()->faulted());
     const int asked = minutes > 0 && minutes < 1000 ? static_cast<int>(minutes) : -1;   // (a number the window cannot mean is BadMinutes below)

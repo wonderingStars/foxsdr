@@ -378,14 +378,30 @@ struct AppWindowTestAccess {
         return c.op == FOXAPI_OP_SELECT_SOURCE && (std::string(c.text).rfind("file:", 0) == 0 || lt.rfind("file:", 0) == 0);
     }
 
+    // THE TRANSMIT RADIO'S NETWORK OPEN IS ON A WORKER (freeze diagnosis P2): TX_OPEN answers OK when it is ACCEPTED and a later pass installs the board. Waits (bounded) until the
+    // open has landed or failed, polling as the pass does (inline and stepped the wait runs the poll; free-running the pass runs its own and the wait watches).
+    static void settleTransmitOpen(AppWindow& a) {
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(20)) {
+            const bool pending = passseam::read<bool>(th::engine(a), [&a] {
+                if (passseam::mode() != passseam::Mode::Free) { th::engine(a).pollTransmitOpen(); }
+                return th::engine(a).txOpenPending_;
+            });
+            if (!pending) { return; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    static std::string transmitError(AppWindow& a) { return rd(a, [&] { return th::engine(a).transmitError_; }); }
     static FoxCommandResult apply(AppWindow& a, const FoxCommand& c, const std::string& lt = {}) {
         const FoxCommandResult r = rd(a, [&] { return th::engine(a).applyCommand(c, lt); });
+        if (c.op == FOXAPI_OP_TX_OPEN) { settleTransmitOpen(a); }
         if (c.op == FOXAPI_OP_RECORD_IQ || c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         if (isDiskOp(c, lt)) { settleDiskJobs(a); }
         return r;
     }
     static FoxCommandResult apply(AppWindow& a, const cmd::QueuedCommand& q) {
         const FoxCommandResult r = rd(a, [&] { return th::engine(a).applyCommand(q.c, q.longText); });
+        if (q.c.op == FOXAPI_OP_TX_OPEN) { settleTransmitOpen(a); }
         if (q.c.op == FOXAPI_OP_RECORD_IQ || q.c.op == FOXAPI_OP_RECORD_AUDIO) { settleRecordStarts(a); }
         if (isDiskOp(q.c, q.longText)) { settleDiskJobs(a); }
         return r;
@@ -3725,9 +3741,11 @@ void transmitterOps(AppWindow& a) {
     covering(FOXAPI_OP_TX_CLOSE);
     CHECK(ok(A::apply(a, cmd::make(FOXAPI_OP_TX_CLOSE))));
     CHECK(!A::haveTx(a));
-    // An open that finds nothing there says so.
-    CHECK(refused(A::apply(a, text(FOXAPI_OP_TX_OPEN, "uri=ip:127.0.0.1:9")), FOXAPI_FAILED));
+    // An open that finds nothing there says so: since the connect is on a worker the command is ACCEPTED (OK) and the failure is the transmit error
+    // the later pass publishes (the apply helper waits for it).
+    CHECK(ok(A::apply(a, text(FOXAPI_OP_TX_OPEN, "uri=ip:127.0.0.1:9"))));
     CHECK(!A::haveTx(a));
+    CHECK(!A::transmitError(a).empty());
 }
 
 // --- the radios (multi-radio stage 4: the engine's fuller coverage is tests/test_engine_api_multi_radio.cpp) -----------------------------------------------------

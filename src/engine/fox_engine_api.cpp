@@ -2222,10 +2222,18 @@ void ApiHostImpl::apply(const Pending& p) {
         const bool remote = (p.sessionFlags & FOXAPI_SESSION_REMOTE) != 0u;
         const cascade::core::TxKeySender snd{p.sessionId, remote, p.principal, fate == SessionFate::kOpen};
         const bool on = c.ival[0] != 0;
-        const cascade::core::TxKeyAnswer a =
-            c.op == FOXAPI_OP_TX_REMOTE_ARM
-                ? rules_.arm(snd, on, steadyMs())
-                : rules_.key(snd, c.op == FOXAPI_OP_TX_LATCH, on, engine_.transmitter_.haveSink(), steadyMs());
+        // NO KEY WHILE AN OPEN IS PENDING (review of 0e95c7e1, F1): the board that is installed is about to be replaced, so a key given to it now would be a key given to
+        // the transmitter that is being opened. A key DOWN request is refused as busy; PTT 0 / LATCH 0 (the safer direction) and the consent switch go through as ever.
+        const bool keyDownWhileOpening = on && c.op != FOXAPI_OP_TX_REMOTE_ARM && engine_.txOpenPending_;
+        cascade::core::TxKeyAnswer a;
+        if (keyDownWhileOpening) {
+            a.status = FOXAPI_BUSY;
+            a.message = "the transmitter is still opening";
+        } else {
+            a = c.op == FOXAPI_OP_TX_REMOTE_ARM
+                    ? rules_.arm(snd, on, steadyMs())
+                    : rules_.key(snd, c.op == FOXAPI_OP_TX_LATCH, on, engine_.transmitter_.haveSink(), steadyMs());
+        }
         r.status = a.status;
         r.applied[0] = a.applied0;
         copyText(r.message, a.message.c_str());

@@ -6432,13 +6432,94 @@ void Engine::openTransmitRadio() {
         if (txArmRefusal_.load(std::memory_order_seq_cst) == cascade::core::TxArming::Refusal::NoRadio) { txArmRefusal_.store(cascade::core::TxArming::Refusal::None, std::memory_order_seq_cst); }
         return;
     }
-    auto tx = std::make_unique<cascade::source::PlutoTx>();
-    if (!tx->open(transmitArgs_)) {
-        transmitError_ = tx->lastError();
-        cascade::core::diagWarnf("tx: could not open %s - %s", transmitArgs_.c_str(),
+    // THE CONNECT RUNS ON A WORKER (freeze diagnosis P2; stack iiod::connectTcp < PlutoTx::open < Engine::controlLoop). The call is the same
+    // PlutoTx::open with the same address and sends the same bytes; only the thread that waits for the network is not the control thread. The worker
+    // captures nothing of the engine (the address, a flag and a function pointer), so an open that outlives the engine touches no freed state.
+    txOpenPending_ = true;
+    txOpenArgs_ = transmitArgs_;
+    txOpenAbandon_ = std::make_shared<std::atomic<bool>>(false);
+    try {
+    if (txOpenNoThreadForTest_) { throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again)); }   // TESTS ONLY: "std::async could not start a thread"
+    txOpenFuture_ = std::async(std::launch::async,
+        [args = transmitArgs_, abandon = txOpenAbandon_, hook = txOpenForTest_]() -> TransmitOpenResult {
+            TransmitOpenResult out;
+            if (hook != nullptr) {
+                out.sink = hook(args, out.error);
+            } else {
+                auto tx = std::make_unique<cascade::source::PlutoTx>();
+                if (tx->open(args)) {
+                    out.sink = std::move(tx);
+                } else {
+                    out.error = tx->lastError();
+                }
+            }
+            // Nobody wants the answer any more (the transmitter was closed, or the program is leaving): the board is let go here, not on the pass.
+            if (abandon->load()) { out.sink.reset(); }
+            return out;
+        });
+    } catch (...) {
+        // std::async could not start a thread: nothing is pending and nothing will ever answer, so the flag must not stay set (it would refuse every later TX_OPEN as busy until a
+        // TX_CLOSE; review of 0e95c7e1, F10). The failure is published the way an open's own failure is.
+        txOpenPending_ = false;
+        txOpenArgs_.clear();
+        txOpenAbandon_.reset();
+        transmitError_ = "the transmit open could not be started";
+        cascade::core::diagWarnf("tx: could not open %s - %s", transmitArgs_.c_str(), transmitError_.c_str());
+    }
+}
+
+void Engine::pollTransmitOpen() {
+    if (!txOpenPending_ || !txOpenFuture_.valid()) { return; }
+    constexpr auto kNoWait = std::chrono::seconds(0);   // a poll, never a wait
+    if (txOpenFuture_.wait_for(kNoWait) != std::future_status::ready) { return; }
+    TransmitOpenResult r;
+    try {
+        r = txOpenFuture_.get();
+    } catch (...) {
+        r.error = "the transmit open failed unexpectedly";
+    }
+    txOpenPending_ = false;
+    const std::string args = std::move(txOpenArgs_);
+    txOpenArgs_.clear();
+    txOpenAbandon_.reset();
+    finishTransmitOpen(std::move(r), args);
+}
+
+void Engine::abandonTransmitOpen() {
+    if (!txOpenPending_) { return; }
+    if (txOpenAbandon_) { txOpenAbandon_->store(true); }
+    // THE FUTURE OF A std::async TASK BLOCKS IN ITS DESTRUCTOR, so it is moved to a detached reaper that waits for the worker (the connect is bounded by
+    // iiod::kConnectWait and the replies by kReplyWait) and lets the board go. Nothing here waits: close and exit stay inside their budgets.
+    if (txOpenFuture_.valid()) {
+        // THE ABANDONED WORKER IS COUNTED until it has ended: a new TX_OPEN is refused meanwhile (applyCommand), so two connects to the same board never overlap and the late
+        // one's quieten writes (maximum attenuation, oscillator down) can never land on a board a newer open has just installed and keyed (review of 0e95c7e1, F10).
+        // The counter is shared with the reaper, not reached through the engine.
+        txOpenEnding_->fetch_add(1);
+        std::thread([f = std::move(txOpenFuture_), ending = txOpenEnding_]() mutable {
+            try { (void)f.get(); } catch (...) {}
+            ending->fetch_sub(1);
+        }).detach();
+    }
+    txOpenPending_ = false;
+    txOpenArgs_.clear();
+    txOpenAbandon_.reset();
+}
+
+void Engine::finishTransmitOpen(TransmitOpenResult r, const std::string& args) {
+    if (!r.sink) {
+        transmitError_ = r.error;
+        cascade::core::diagWarnf("tx: could not open %s - %s", args.c_str(),
                                  transmitError_.c_str());
         return;
     }
+    auto tx = std::move(r.sink);
+    // A KEY NEVER SURVIVES A TRANSMITTER CHANGE (API 0.2), and the change is HERE, not where the open was accepted: TX_OPEN ended the key then, but a board that was already
+    // installed stayed so until now. Key requests are refused while an open is pending (ApiHostImpl::apply, txPluginArmOp), and this ends whatever still stands - the
+    // rules' hold or latch and the plugin's window - BEFORE the new board is installed, so no key given to the outgoing board is carried to the incoming one (review of
+    // 0e95c7e1, F1: a board nobody keyed would otherwise be keyed one pass after it landed).
+    api_->endKeyFromEngine("the transmitter was changed");
+    // The board that opened is the one at THIS address: the box, the saved config and the facts say what is connected (review F2; SET_TRANSMIT_ARGS is refused meanwhile too).
+    transmitArgs_ = args;
     // THE POWER IS WRITTEN BEFORE THE SINK IS INSTALLED, and it is written
     // through the driver's own clamp - so a config file carrying a number
     // from a board with a different range lands on that board's quiet end
@@ -9834,14 +9915,20 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             if (text.find_first_not_of(" \t") == std::string::npos) {
                 return refuse(FOXAPI_BAD_ARGUMENT, "no transmitter address given");
             }
+            // ONE OPEN AT A TIME: the connect is on a worker, so a second press does not queue a second connect behind the first (freeze diagnosis P2).
+            // Refused before anything is changed, so the pending open's address and the key stay as they were.
+            if (txOpenPending_) { return refuse(FOXAPI_BUSY, "the transmitter is still opening"); }
+            if (txOpenEnding_->load() > 0) { return refuse(FOXAPI_BUSY, "the transmitter's previous open is still ending"); }
             // A KEY NEVER SURVIVES A TRANSMITTER CHANGE (API 0.2).
             api_->endKeyFromEngine("the transmitter was changed");
             transmitArgs_ = text;
             openTransmitRadio();
-            if (!transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
+            // The network open is on its worker: the answer (opened, or the error text) is published by a later pass (pollTransmitOpen).
+            if (!txOpenPending_ && !transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter did not open"); }
             return res;
         case FOXAPI_OP_TX_CLOSE:
             api_->endKeyFromEngine("the transmitter was closed");
+            abandonTransmitOpen();   // a connect still pending is not wanted any more: its answer is dropped
             closeTransmitRadio();
             return res;
         case FOXAPP_OP_SET_TRANSMIT_PAGE_OPEN:
@@ -10131,6 +10218,8 @@ FoxCommandResult Engine::applyCommand(const FoxCommand& c, const std::string& lo
             // nothing opens until TX_OPEN, and a board already open keeps
             // the address it was opened with (the box is disabled then).
             if (transmitter_.haveSink()) { return refuse(FOXAPI_FAILED, "the transmitter is open"); }
+            // NOT UNDER A PENDING OPEN: the open will land on the address it was asked for, and the box, the saved config and the facts must say the same (review F2).
+            if (txOpenPending_) { return refuse(FOXAPI_BUSY, "the transmitter is still opening"); }
             transmitArgs_ = text;
             return res;
         case FOXAPP_OP_SET_CATALOGUE_URL:
@@ -11669,6 +11758,8 @@ void Engine::teardown() {
     // Same problem, no cancel to reach for: a device open may still be inside
     // SoapySDR::Device::make(). See reapPendingDeviceOpen for the semantics.
     forEachReceiver([this] { reapPendingDeviceOpen(); });
+    // A transmit open still inside its connect: handed to a detached reaper without a wait (the worker holds nothing of the engine).
+    abandonTransmitOpen();
     // The sound card's list and open, on the same terms.
     reapSoundCardWorkers();
 
@@ -12062,6 +12153,8 @@ void Engine::pumpWorkers() {
     // ...and the disk's workers: an I/Q file's open, a frequency list's export, the patch Radio's recordings list (stub campaign B19).
     pollDiskJobs();
     pollSourceAsync();
+    // ...and the transmit radio's open, which runs its network connect on a worker (freeze diagnosis P2).
+    pollTransmitOpen();
     // ...and a sound card's list or open, the same way (app_window_soundcard.cpp).
     pollSoundCard();
     // ...and, once per frame, the one automatic reopen a radio whose driver

@@ -377,6 +377,31 @@ int main() {
         CHECK(!r.p.open().valid);
     }
 
+    // ============================= an OPEN UNDER WAY (fact.transmit.opening; the connect is on a worker) =============================
+    {
+        Rig r;
+        r.t.facts["fact.transmit.args"] = "uri=ip:10.0.0.7";
+        r.t.facts["fact.transmit.opening"] = "1";
+        r.read();
+        const Model m = r.p.model();
+        EQ(m.radio_line, std::string("Opening uri=ip:10.0.0.7..."));
+        CHECK(!m.have && !m.open_enabled && !m.address_enabled && !m.close_enabled && !m.key_enabled);   // Open is not offered again, the box is fixed, no key
+        CHECK(!r.p.open().valid);                                    // and a press (or a stale click) sends nothing
+        CHECK(!r.p.addressEdited("uri=ip:10.0.0.8").valid);
+        // the answer lands: the flag drops and the page is the ordinary one again
+        r.t.facts["fact.transmit.opening"] = "0";
+        r.read();
+        const Model idle = r.p.model();
+        CHECK(idle.open_enabled && idle.address_enabled);
+        EQ(idle.radio_line, std::string("No transmitter is open."));
+        // a radio open wins over a stale flag (the page never says "Opening" over a connected board)
+        r.t.facts["fact.transmit.opening"] = "1";
+        r.s = state(true);
+        r.read();
+        CHECK(r.p.model().have);
+        EQ(r.p.model().radio_line, std::string("PlutoSDR (test)"));
+    }
+
     // ============================= the controls' commands =============================
     {
         Rig r;      // NO RADIO: every one of them is nothing
