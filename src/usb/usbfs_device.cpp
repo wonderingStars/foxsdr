@@ -323,6 +323,7 @@ std::vector<UsbDeviceInfo> sysfsUsbNodesToDevices(const std::vector<SysfsUsbNode
 }
 
 std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
+    noteUsbListing();
     if (ids.empty()) { return std::vector<UsbDeviceInfo>(); }
     return sysfsUsbNodesToDevices(readSysfsUsbNodes("/sys/bus/usb/devices"), ids);
 }

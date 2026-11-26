@@ -238,6 +238,13 @@ public:
     // A LIVENESS BEAT: the steady-clock nanoseconds are stored here before every transfer, so a watchdog that reads the beat does not take a long bring-up for a
     // wedged thread. Null (the default) stores nothing.
     void setBeat(std::atomic<std::int64_t>* beat) { beat_ = beat; }
+    // A CONTROL-TRANSFER TRACE (diagnostic only, 2026-11-25): when the last transfer through this object ENDED (steady-clock nanoseconds, 0 = none yet) and how many are
+    // inside the transport right now. Two relaxed atomics around each transfer; the reader's "stream stopped" line reads them. Null (the default) records nothing.
+    struct ControlTrace {
+        std::atomic<std::int64_t> lastEndNs{0};
+        std::atomic<int> inFlight{0};
+    };
+    void setTrace(ControlTrace* trace) { trace_ = trace; }
 
 private:
     bool stopped() const {
@@ -251,6 +258,7 @@ private:
     std::chrono::steady_clock::time_point deadline_{};
     mutable std::atomic<bool> deadlineHit_{false};
     std::atomic<std::int64_t>* beat_ = nullptr;
+    ControlTrace* trace_ = nullptr;
     int ctlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, const std::uint8_t* data, std::size_t len);
     int ctlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, std::uint8_t* data, std::size_t len);
     const std::atomic<bool>* keepGoing_ = nullptr;

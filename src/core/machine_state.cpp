@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +33,7 @@ bool g_testSampleOn = false;                       // test seam (setMachineSampl
 unsigned long g_testNowMhz = 0, g_testMaxMhz = 0;   // the made-up clock, in MHz, only ever turned into a percentage
 int g_testLoad = 0, g_testCommitPct = 0;
 std::atomic<int> g_display{-1};
+std::atomic<int> g_powerWord{0};   // 0 unknown, 1 ac, 2 battery: what the last machine line said (lastKnownPowerWord)
 std::string g_lastLogged;      // the pass thread's (logMachineStateIfChanged)
 std::string g_lastClockKey;    // the clock and the memory load as last said (the second line); "" = not said yet
 
@@ -176,6 +178,11 @@ int systemMemoryLoadPercent() {
 
 void noteDisplayState(int state) { g_display.store(state, std::memory_order_relaxed); }
 
+const char* lastKnownPowerWord() {
+    const int p = g_powerWord.load(std::memory_order_relaxed);
+    return p == 1 ? "ac" : (p == 2 ? "battery" : "unknown");
+}
+
 namespace {
 std::size_t lineBudget() { return g_testBudget != 0 ? g_testBudget : kMachineLineBudget; }
 }  // namespace
@@ -221,6 +228,7 @@ static std::string machineStateTextWith(const std::string& dspPrio, const std::s
 #endif
     const int d = g_display.load(std::memory_order_relaxed);
     const char* display = d == 0 ? "on" : (d == 1 ? "off" : (d == 2 ? "dimmed" : "unknown"));
+    g_powerWord.store(std::strcmp(power, "ac") == 0 ? 1 : (std::strcmp(power, "battery") == 0 ? 2 : 0), std::memory_order_relaxed);
     char aff[16] = "unknown";
     if (affinity != 0) { std::snprintf(aff, sizeof(aff), "%u", affinity); }
     char line[256];

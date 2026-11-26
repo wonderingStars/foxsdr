@@ -129,6 +129,11 @@ enum class RadioLocate { Found, Absent, Ambiguous };
 // Ambiguous when the serial points at one or more devices but is no proof (it was shared at open, or two share it now) and neither path nor location matched;
 // nothing is opened and `foundPath` is set only for Found.
 RadioLocate locateRadio(const std::vector<usb::UsbDeviceInfo>& found, const RadioIdentity& id, std::string& foundPath);
+
+// THE TIMINGS ADDED TO THE "the RTL-SDR stream stopped" LINE (R1/D1, 2026-11-25), as the text appended to it: milliseconds since the last control transfer on this link
+// ended and whether one is inside the transport now, milliseconds since this process last listed or scanned USB devices by any route, milliseconds since this handle was
+// opened, and the power word the last machine line said. A negative time says "never". Times, one yes/no and a fixed power word: no identifier, serial or path.
+std::string streamStopTimings(long long sinceControlMs, bool controlInFlight, long long sinceListingMs, long long openForMs, const char* power);
 // The two lambdas open() arms a source with, over an enumeration and an opener that the caller supplies (the shipped ones are the bus walk and openWinUsb;
 // the tests pass fakes).
 using RadioListFn = std::function<std::vector<usb::UsbDeviceInfo>()>;
@@ -339,6 +344,10 @@ public:
         // reader loop, and 0 while no reader runs. read() - on the pipeline's own thread - compares it with the clock,
         // so a reader that is stuck INSIDE a USB call for good is a fault the pipeline hears (field fault 3, 2026-11-19).
         std::atomic<std::int64_t> readerBeatNs{0};
+        // THE DIAGNOSTIC CLOCKS of the "stream stopped" line (2026-11-25): the control-transfer trace (Rtl2832u::setTrace) and when this handle was opened
+        // (steady-clock nanoseconds, 0 = not yet). Timestamps only; written with relaxed atomics, never under the device lock.
+        Rtl2832u::ControlTrace controlTrace;
+        std::atomic<std::int64_t> openedNs{0};
         // How long of nothing re-arms the stream, and how long a stuck reader is tolerated: the product's numbers, settable so a test need not wait them out.
         std::atomic<int> silenceRearmAfterMs{3000};
         std::atomic<int> readerStuckAfterMs{20000};
