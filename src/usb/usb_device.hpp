@@ -39,6 +39,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -150,6 +151,25 @@ struct UsbId {
     std::uint16_t pid;
 };
 std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids);
+
+// THE LISTING CLOCK (diagnostic only, 2026-11-25): when this process last listed or scanned USB devices by ANY route (the SetupAPI walks, the radio-setup
+// inventory, a SoapySDR scan). Every listing calls noteUsbListing() once; the RTL-SDR reader's "stream stopped" line reads msSinceUsbListing() to say how long
+// before the drop the last scan was. Times only; one relaxed atomic; nothing about what was listed.
+inline std::atomic<std::int64_t>& usbListingClockNs() {
+    static std::atomic<std::int64_t> ns{0};
+    return ns;
+}
+inline void noteUsbListing() {
+    usbListingClockNs().store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 1,
+                              std::memory_order_relaxed);
+}
+// Milliseconds since the last listing, or -1 when this process has never listed.
+inline long long msSinceUsbListing() {
+    const std::int64_t then = usbListingClockNs().load(std::memory_order_relaxed);
+    if (then == 0) { return -1; }
+    const std::int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now > then ? static_cast<long long>((now - then) / 1000000) : 0;
+}
 
 // THE DONGLES THAT ARE PLUGGED IN AND CANNOT BE OPENED, which is a different
 // question from the one above and needs its own answer.

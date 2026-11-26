@@ -25,6 +25,7 @@
 #include "source/icr8600_source.hpp"
 #include "source/msi2500.hpp"
 #include "source/rtlsdr_source.hpp"
+#include "usb/usb_device.hpp"
 
 #if defined(_WIN32)
 // clang-format off
@@ -823,6 +824,7 @@ SdrPlayApi probeSdrPlay() {
 }  // namespace
 
 Inventory collectInventory() {
+    usb::noteUsbListing();   // the listing clock: the RTL-SDR reader's "stream stopped" line says how long before the drop the last scan was
     Inventory inv;
     inv.probed = true;
 

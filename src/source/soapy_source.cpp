@@ -2,6 +2,7 @@
 #include "source/soapy_source.hpp"
 
 #include "core/diag_log.hpp"
+#include "usb/usb_device.hpp"
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "source/soapy_enum_proc.hpp"
@@ -1081,6 +1082,7 @@ std::vector<std::string> SoapySource::driverNames() {
 }
 
 std::vector<SoapyDeviceInfo> SoapySource::enumerateInProcess(const std::string& driver) {
+    cascade::usb::noteUsbListing();   // the listing clock (usb/usb_device.hpp), for the RTL-SDR "stream stopped" line
     std::vector<SoapyDeviceInfo> out;
     if (!runtimeAvailable()) { return out; }  // no runtime: no devices, no crash
 

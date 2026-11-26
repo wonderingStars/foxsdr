@@ -12,6 +12,8 @@
 #include <utility>
 
 #include "core/diag_log.hpp"
+#include "core/machine_state.hpp"
+#include "usb/usb_device.hpp"
 #include "core/radio_events.hpp"
 #include "core/health_events.hpp"
 #include "core/leak_on_purpose.hpp"
@@ -20,6 +22,15 @@
 
 namespace cascade::source {
 namespace rre = ::cascade::core::radioreport;
+
+std::string streamStopTimings(long long sinceControlMs, bool controlInFlight, long long sinceListingMs, long long openForMs, const char* power) {
+    // Only the two real power words are ever passed on: anything else is "unknown".
+    const std::string p = power == nullptr ? std::string() : std::string(power);
+    const char* powerWord = (p == "ac" || p == "battery") ? power : "unknown";
+    auto ago = [](long long ms) { return ms < 0 ? std::string("never") : std::to_string(ms) + " ms ago"; };
+    return "control transfer " + ago(sinceControlMs) + " (in flight: " + (controlInFlight ? "yes" : "no") + "); USB scan " + ago(sinceListingMs) +
+           "; open for " + std::to_string(openForMs < 0 ? 0 : openForMs) + " ms; power " + powerWord;
+}
 
 namespace {
 
@@ -682,6 +693,8 @@ Reopen reopenDevice(RtlSdrSource::Link& link, std::string& why, bool& biasWithhe
     link.demodAgcOn = false;   // a fresh chip
     link.rtl->setKeepGoing(&link.readerRun);   // a stop() now ends the bring-up within the one transfer in flight
     link.rtl->setBeat(&link.readerBeatNs);     // and a long bring-up is a live reader, not a wedged one
+    link.rtl->setTrace(&link.controlTrace);    // the "stream stopped" line says when the last control transfer ended
+    link.openedNs.store(steadyNowNs(), std::memory_order_relaxed);   // a re-open is a fresh handle: its age starts here
     link.rtl->setDeadline(std::chrono::steady_clock::now() + std::chrono::milliseconds(link.reopenBringUpMs.load(std::memory_order_relaxed)));   // and it is bounded as a whole
     auto stopped = [&link] { return !link.readerRun.load(std::memory_order_relaxed); };
     const char* phase = "the chip bring-up";
@@ -869,6 +882,14 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
     // THE DIAGNOSTIC LINE of a recovery's start (R4): which call failed with which Windows error, whether the radio is still listed on the bus (asked by its
     // path, never printed), how long this stream had run and how long it had been silent. No serial number, no path.
     auto sayStopped = [&](const char* what, const std::string& readText, const std::string& account, int restart) {
+        // THE TIMINGS (D1, from R1): read BEFORE this line's own listing check below (it is a USB listing too and would zero the "last listing" time), from atomics only:
+        // no lock, no OS query. The power word is the one the last machine line said.
+        const long long nowNs = steadyNowNs();
+        const long long lastCtlNs = link->controlTrace.lastEndNs.load(std::memory_order_relaxed);
+        const long long openedNs = link->openedNs.load(std::memory_order_relaxed);
+        const std::string timings = streamStopTimings(lastCtlNs == 0 ? -1 : (nowNs > lastCtlNs ? (nowNs - lastCtlNs) / 1000000 : 0), link->controlTrace.inFlight.load(std::memory_order_relaxed) > 0,
+                                                     cascade::usb::msSinceUsbListing(), openedNs == 0 ? 0 : (nowNs > openedNs ? (nowNs - openedNs) / 1000000 : 0),
+                                                     core::lastKnownPowerWord());
         beat(*link);
         const int listed = link->listed ? link->listed() : -1;
         beat(*link);
@@ -877,6 +898,9 @@ void readerLoop(std::shared_ptr<RtlSdrSource::Link> link) {
                         readText.empty() ? "" : ": ", readText.c_str(), account.empty() ? "no account" : account.c_str(), listed < 0 ? "unknown" : (listed > 0 ? "yes" : "no"),
                         static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(now2 - streamStartedAt).count()),
                         static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(now2 - lastSamplesAt).count()), restart, kMaxStreamRearms);
+        // THE SECOND HALF OF THE SAME EVENT, a line of its own because the log's line is 191 characters wide and the first is already at it (diag_log.hpp: a line at the width is CUT
+        // and the upload scrub then masks its numbers). It opens with the same words, so one search finds both; it carries times, one yes/no and a power word, nothing else.
+        core::diagWarnf("source: the RTL-SDR stream stopped, timings: %s", timings.c_str());
     };
     std::string streamAccount;
     while (link->readerRun.load(std::memory_order_relaxed)) {
@@ -1431,6 +1455,8 @@ bool RtlSdrSource::openWithTransport(std::unique_ptr<usb::UsbDevice> transport,
     link_->transport = std::move(transport);
     link_->rtl =
         std::make_unique<Rtl2832u>(*link_->transport, static_cast<unsigned>(kControlTimeout.count()));
+    link_->rtl->setTrace(&link_->controlTrace);   // the "stream stopped" line says when the last control transfer ended
+    link_->openedNs.store(steadyNowNs(), std::memory_order_relaxed);
     link_->demodAgcOn = false;   // a fresh chip
     link_->ring = std::make_unique<dsp::SpscRing<std::complex<float>>>(kRingCapacity);
     {

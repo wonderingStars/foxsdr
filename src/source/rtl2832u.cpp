@@ -56,6 +56,21 @@ std::uint16_t blockIndexWrite(RtlBlock block) {
 
 }  // namespace
 
+namespace {
+// One transfer inside the transport, for the control trace (Rtl2832u::setTrace): counts it in flight, and stamps its end when it returns.
+struct Traced {
+    Rtl2832u::ControlTrace* t;
+    explicit Traced(Rtl2832u::ControlTrace* trace) : t(trace) {
+        if (t != nullptr) { t->inFlight.fetch_add(1, std::memory_order_relaxed); }
+    }
+    ~Traced() {
+        if (t == nullptr) { return; }
+        t->lastEndNs.store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + 1, std::memory_order_relaxed);
+        t->inFlight.fetch_sub(1, std::memory_order_relaxed);
+    }
+};
+}  // namespace
+
 void Rtl2832u::note(const char* what) {
     failed_ = true;
     if (lastError_.empty()) {
@@ -68,12 +83,14 @@ void Rtl2832u::note(const char* what) {
 int Rtl2832u::ctlOut(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, const std::uint8_t* data, std::size_t len) {
     if (stopped()) { return -1; }
     if (beat_ != nullptr) { beat_->store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed); }
+    const Traced traced(trace_);
     return dev_.controlOut(requestType, request, value, index, data, len, controlTimeoutMs_);
 }
 
 int Rtl2832u::ctlIn(std::uint8_t requestType, std::uint8_t request, std::uint16_t value, std::uint16_t index, std::uint8_t* data, std::size_t len) {
     if (stopped()) { return -1; }
     if (beat_ != nullptr) { beat_->store(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed); }
+    const Traced traced(trace_);
     return dev_.controlIn(requestType, request, value, index, data, len, controlTimeoutMs_);
 }
 

@@ -1630,6 +1630,7 @@ std::vector<UsbDeviceInfo> unboundFrom(const std::vector<UsbNode>& nodes) {
 #if defined(_WIN32)
 
 std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
+    noteUsbListing();   // the listing clock (usb_device.hpp): a diagnostic timestamp, nothing about what is listed
     std::vector<UsbDeviceInfo> out;
     if (ids.empty()) { return out; }
 
@@ -1720,6 +1721,7 @@ std::vector<UsbDeviceInfo> enumerateWinUsb(const std::vector<UsbId>& ids) {
 }
 
 std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>& ids) {
+    noteUsbListing();
     // The same walk enumerateWinUsb does, gathered rather than filtered: every
     // devnode carrying one of these hardware ids, with what each one is bound
     // to, handed to unboundFrom() to decide. Nothing is opened (rule 1).
@@ -1772,6 +1774,7 @@ std::vector<UsbDeviceInfo> enumerateUnbound(const std::vector<UsbId>& ids) {
 }
 
 bool presentUsbIds(std::vector<UsbId>& out) {
+    noteUsbListing();
     out.clear();
     // Every PRESENT devnode the USB bus driver enumerated, of every class -
     // the same walk as above, narrowed to the "USB" enumerator, reading one

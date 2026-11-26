@@ -39,6 +39,10 @@ int systemMemoryLoadPercent();
 // For the pass thread only (it keeps the last text without a lock).
 bool logMachineStateIfChanged(const std::string& dspPrio, const std::string& srcPrio, bool force);
 
+// THE POWER WORD THE LAST machine LINE SAID ("ac", "battery" or "unknown"), kept by machineStateText() so a diagnostic elsewhere (the RTL-SDR reader's "stream
+// stopped" line) can name the power state WITHOUT a query of its own on its thread. "unknown" until the first machine line has been made. One relaxed load.
+const char* lastKnownPowerWord();
+
 // TEST SEAM: forget the last logged text.
 void resetMachineStateLogForTest();
 // TEST SEAMS: replace what the machine says. setMachineSampleForTest(nowMhz, maxMhz, memLoadPercent, commitPercent) makes the processor clock (in MHz, which

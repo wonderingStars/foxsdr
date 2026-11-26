@@ -5,6 +5,7 @@
 #include "source/soapy_enum_proc.hpp"
 
 #include "core/crash_handler.hpp"
+#include "usb/usb_device.hpp"
 #include "core/diag_log.hpp"
 #include "core/diag_report.hpp"
 #include "core/health_events.hpp"
@@ -1833,6 +1834,7 @@ EnumResult enumerateIsolatedBody(const EnumOptions& options) {
 }  // namespace
 
 EnumResult enumerateIsolated(const EnumOptions& options) {
+    cascade::usb::noteUsbListing();   // the listing clock (usb/usb_device.hpp), for the RTL-SDR "stream stopped" line
     const std::vector<std::string> granted = options.userRefresh ? beginRefreshGrant() : std::vector<std::string>();
     EnumResult r = enumerateIsolatedBody(options);
     finishRefreshGrant(granted, r);
